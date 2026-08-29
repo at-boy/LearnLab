@@ -82,8 +82,16 @@ class StateStore:
         connection = self._connect()
         try:
             connection.execute("PRAGMA journal_mode = WAL")
-            with connection:
-                connection.executescript(_SCHEMA)
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                for statement in _SCHEMA.split(";"):
+                    if statement.strip():
+                        connection.execute(statement)
+            except BaseException:
+                connection.rollback()
+                raise
+            else:
+                connection.commit()
         finally:
             connection.close()
 
@@ -184,8 +192,8 @@ class StateStore:
         now = _utc_timestamp()
         stored = replace(
             environment,
-            created_at=environment.created_at or now,
-            updated_at=environment.updated_at or now,
+            created_at=now,
+            updated_at=now,
         )
         connection = self._connect()
         try:
@@ -299,7 +307,8 @@ class StateStore:
         where_clause, parameters = _scope_clause(collection_id, course_id)
         connection = self._connect()
         try:
-            with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
                 existing = connection.execute(
                     f"SELECT 1 FROM environments WHERE {where_clause} LIMIT 1", parameters
                 ).fetchone()
@@ -309,6 +318,11 @@ class StateStore:
                     )
                 connection.execute(f"DELETE FROM progress WHERE {where_clause}", parameters)
                 connection.execute(f"DELETE FROM attempts WHERE {where_clause}", parameters)
+            except BaseException:
+                connection.rollback()
+                raise
+            else:
+                connection.commit()
         finally:
             connection.close()
 
@@ -316,7 +330,8 @@ class StateStore:
         """Clear attempts and optionally retain only completed progress records."""
         connection = self._connect()
         try:
-            with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
                 existing = connection.execute(
                     "SELECT 1 FROM environments LIMIT 1"
                 ).fetchone()
@@ -332,6 +347,11 @@ class StateStore:
                     )
                 else:
                     connection.execute("DELETE FROM progress")
+            except BaseException:
+                connection.rollback()
+                raise
+            else:
+                connection.commit()
         finally:
             connection.close()
 
