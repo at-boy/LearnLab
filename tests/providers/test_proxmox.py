@@ -201,6 +201,31 @@ def test_wait_for_task_rejects_success_after_a_short_deadline(
     assert len(fake_server.requests.all()) == 1
 
 
+def test_wait_for_task_rejects_success_returned_after_the_deadline(
+    profile: ProxmoxProfile,
+) -> None:
+    clock = FakeClock()
+
+    class SlowSuccessClient:
+        def request(self, *args: object, **kwargs: object) -> httpx.Response:
+            clock.sleep(2)
+            return httpx.Response(
+                200,
+                json={"data": {"status": "stopped", "exitstatus": "OK"}},
+            )
+
+    provider = ProxmoxProvider(
+        profile,
+        "private-value",
+        client=cast(httpx.Client, SlowSuccessClient()),
+        clock=clock.now,
+        sleep=clock.sleep,
+    )
+
+    with pytest.raises(ProviderTimeoutError):
+        provider.wait_for_task("pve02", "UPID:pve02:slow:", timeout=1)
+
+
 def test_wait_for_ipv4_ignores_loopback_and_invalid_addresses(
     fake_server: FakeProxmoxServer, provider: ProxmoxProvider
 ) -> None:
@@ -310,6 +335,48 @@ def test_wait_for_ipv4_rejects_late_network_address(
 
     assert clock.value == 1
     assert [request.method for request in fake_server.requests.all()] == ["POST", "GET"]
+
+
+def test_wait_for_ipv4_rejects_address_returned_after_the_deadline(
+    profile: ProxmoxProfile,
+) -> None:
+    clock = FakeClock()
+
+    class SlowNetworkClient:
+        def request(
+            self, method: str, *args: object, **kwargs: object
+        ) -> httpx.Response:
+            if method == "GET":
+                clock.sleep(2)
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "result": [
+                                {
+                                    "ip-addresses": [
+                                        {
+                                            "ip-address": "192.0.2.10",
+                                            "ip-address-type": "ipv4",
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    },
+                )
+            return httpx.Response(200, json={"data": {}})
+
+    provider = ProxmoxProvider(
+        profile,
+        "private-value",
+        client=cast(httpx.Client, SlowNetworkClient()),
+        clock=clock.now,
+        sleep=clock.sleep,
+    )
+
+    with pytest.raises(ProviderTimeoutError, match="VM 102"):
+        provider.wait_for_ipv4(102, "pve02", timeout=1)
 
 
 def test_health_check_uses_read_only_requests_and_reports_each_prerequisite(

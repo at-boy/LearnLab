@@ -191,6 +191,9 @@ class ProxmoxProvider:
                 deadline, f"Timed out waiting for Proxmox task {upid}"
             )
             result = self._request("GET", path)
+            self._raise_if_deadline_reached(
+                deadline, f"Timed out waiting for Proxmox task {upid}"
+            )
             if not isinstance(result, Mapping):
                 raise ProviderOperationError(
                     "Proxmox task status returned an invalid value"
@@ -236,6 +239,7 @@ class ProxmoxProvider:
             self._raise_if_deadline_reached(deadline, timeout_message)
             try:
                 self._request("POST", ping_path)
+                self._raise_if_deadline_reached(deadline, timeout_message)
                 break
             except ProviderOperationError:
                 self._sleep_until_deadline(deadline, timeout_message)
@@ -243,6 +247,7 @@ class ProxmoxProvider:
             self._raise_if_deadline_reached(deadline, timeout_message)
             try:
                 interfaces = self._request("GET", interfaces_path)
+                self._raise_if_deadline_reached(deadline, timeout_message)
             except ProviderOperationError:
                 self._sleep_until_deadline(deadline, timeout_message)
                 continue
