@@ -1,20 +1,54 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
+from typing import Protocol
 
 import typer
 
-from learnlab.config import Settings, load_settings
-from learnlab.errors import ConfigurationError, LearnLabError
+from learnlab.config import Settings, load_settings, resolve_token_secret, state_dir
+from learnlab.curriculum import Course, CurriculumCatalog, CurriculumError, Lesson
+from learnlab.errors import ConfigurationError, LearnLabError, redact
+from learnlab.lifecycle import LifecycleService, StartRequest
 from learnlab.providers.base import Provider
 from learnlab.providers.registry import build_provider
+from learnlab.state import ProgressStatus, StateConflictError, StateStore
 
 ProviderFactory = Callable[[Settings, str], Provider]
+CatalogFactory = Callable[[], CurriculumCatalog]
+StateStoreFactory = Callable[[], StateStore]
+
+
+class LifecycleFactory(Protocol):
+    def __call__(
+        self,
+        store: StateStore,
+        provider: Provider,
+        state_root: Path,
+        *,
+        secrets: set[str] | None = None,
+    ) -> LifecycleService: ...
 
 app = typer.Typer()
 provider_app = typer.Typer()
+progress_app = typer.Typer()
 app.add_typer(provider_app, name="provider")
+app.add_typer(progress_app, name="progress")
 provider_factory: ProviderFactory = build_provider
+state_root: Callable[[], Path] = state_dir
+lifecycle_factory: LifecycleFactory = LifecycleService
+
+
+def _default_catalog() -> CurriculumCatalog:
+    return CurriculumCatalog(Path(__file__).resolve().parents[2] / "collections")
+
+
+def _default_state_store() -> StateStore:
+    return StateStore(state_root() / "state.db")
+
+
+catalog_factory: CatalogFactory = _default_catalog
+state_store_factory: StateStoreFactory = _default_state_store
 
 
 @provider_app.command("test")
@@ -43,3 +77,127 @@ def provider_test(profile_name: str) -> None:
         raise typer.Exit(code=3)
     if any(check.required and not check.ok for check in health.checks):
         raise typer.Exit(code=1)
+
+
+@app.command("start")
+def start_course(
+    course_path: str,
+    provider_profile: str | None = typer.Option(None, "--provider"),
+) -> None:
+    """Start a selected lesson from an ordered course."""
+    secrets: set[str] = set()
+    try:
+        course = catalog_factory().load_course(course_path)
+        store = state_store_factory()
+        store.initialize()
+        if store.active_environment(course.collection_id, course.id) is not None:
+            raise StateConflictError(
+                "Course already has an environment; run learnlab destroy first"
+            )
+
+        statuses = store.lesson_statuses(course.collection_id, course.id)
+        default_index = _default_lesson_index(course, statuses)
+        _render_lessons(course, statuses, default_index)
+        lesson = _prompt_for_lesson(course, default_index)
+
+        settings = load_settings()
+        profile_name = provider_profile or settings.default_provider
+        profile = settings.provider(profile_name)
+        secret = resolve_token_secret(profile)
+        secrets.add(secret)
+        provider = provider_factory(settings, profile_name)
+        lifecycle = lifecycle_factory(
+            store,
+            provider,
+            state_root(),
+            secrets=secrets,
+        )
+        started = lifecycle.start(
+            StartRequest(
+                course=course,
+                lesson=lesson,
+                profile=profile,
+                provider_type="proxmox",
+            )
+        )
+        store.start_lesson(course.collection_id, course.id, lesson.id)
+    except LearnLabError as error:
+        _exit_with_error(error, secrets)
+
+    typer.echo(f"SSH: {started.ssh_command}")
+    typer.echo(f"Lesson: {lesson.title}")
+    for number, step in enumerate(lesson.steps, start=1):
+        typer.echo(f"{number}. {step.title}")
+        typer.echo(step.content)
+
+
+@progress_app.command("complete")
+def progress_complete(lesson_path: str) -> None:
+    """Explicitly mark one known curriculum lesson completed."""
+    try:
+        collection_id, course_id, lesson_id = _split_lesson_path(lesson_path)
+        course = catalog_factory().load_course(f"{collection_id}/{course_id}")
+        if lesson_id not in {lesson.id for lesson in course.lessons}:
+            raise CurriculumError(f"Unknown lesson: {lesson_id}")
+        store = state_store_factory()
+        store.initialize()
+        store.complete_lesson(collection_id, course_id, lesson_id)
+    except LearnLabError as error:
+        _exit_with_error(error)
+
+    typer.echo(f"Completed: {lesson_path}")
+
+
+def _default_lesson_index(
+    course: Course, statuses: dict[str, ProgressStatus]
+) -> int:
+    for index, lesson in enumerate(course.lessons):
+        if statuses.get(lesson.id) is not ProgressStatus.COMPLETED:
+            return index
+    return 0
+
+
+def _render_lessons(
+    course: Course,
+    statuses: dict[str, ProgressStatus],
+    default_index: int,
+) -> None:
+    typer.echo(f"Course: {course.title}")
+    for index, lesson in enumerate(course.lessons):
+        status = statuses.get(lesson.id)
+        label = ""
+        if status is ProgressStatus.COMPLETED:
+            label = " [completed]"
+        elif status is ProgressStatus.IN_PROGRESS:
+            label = " [in progress]"
+        elif index == default_index:
+            label = " [first incomplete]"
+        typer.echo(f"{index + 1}. {lesson.title}{label}")
+
+
+def _prompt_for_lesson(course: Course, default_index: int) -> Lesson:
+    while True:
+        selection = int(
+            typer.prompt(
+                "Select lesson",
+                default=default_index + 1,
+                type=int,
+            )
+        )
+        if 1 <= selection <= len(course.lessons):
+            return course.lessons[selection - 1]
+        typer.echo(f"Choose a lesson number from 1 to {len(course.lessons)}")
+
+
+def _split_lesson_path(lesson_path: str) -> tuple[str, str, str]:
+    pieces = lesson_path.split("/")
+    if len(pieces) != 3 or not all(pieces):
+        raise CurriculumError("Lesson path must use collection/course/lesson")
+    return pieces[0], pieces[1], pieces[2]
+
+
+def _exit_with_error(error: LearnLabError, secrets: set[str] | None = None) -> None:
+    message = redact(str(error), secrets or set())
+    typer.echo(f"Error: {message}")
+    input_error = isinstance(error, (ConfigurationError, CurriculumError))
+    raise typer.Exit(code=2 if input_error else 3) from None

@@ -111,6 +111,41 @@ class StateStore:
             connection.close()
         return {str(row["lesson_id"]) for row in rows}
 
+    def lesson_statuses(
+        self, collection_id: str, course_id: str
+    ) -> dict[str, ProgressStatus]:
+        """Return every retained lesson status for one course."""
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                """
+                SELECT lesson_id, status
+                FROM progress
+                WHERE collection_id = ? AND course_id = ?
+                """,
+                (collection_id, course_id),
+            ).fetchall()
+        finally:
+            connection.close()
+        return {
+            str(row["lesson_id"]): ProgressStatus(str(row["status"]))
+            for row in rows
+        }
+
+    def start_lesson(
+        self, collection_id: str, course_id: str, lesson_id: str
+    ) -> None:
+        """Mark a lesson in progress after its environment starts."""
+        self.mark_lesson(
+            collection_id, course_id, lesson_id, ProgressStatus.IN_PROGRESS
+        )
+
+    def complete_lesson(
+        self, collection_id: str, course_id: str, lesson_id: str
+    ) -> None:
+        """Mark a lesson completed only after an explicit user action."""
+        self.mark_lesson(collection_id, course_id, lesson_id, ProgressStatus.COMPLETED)
+
     def mark_lesson(
         self,
         collection_id: str,
