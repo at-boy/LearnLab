@@ -443,6 +443,44 @@ def test_health_check_reports_every_prerequisite_when_api_is_unavailable(
         "Network",
     ]
     assert not any(check.ok for check in health.checks)
+    assert health.provider_error is True
+
+
+def test_health_check_classifies_template_identity_mismatch_as_prerequisite_failure(
+    fake_server: FakeProxmoxServer, provider: ProxmoxProvider
+) -> None:
+    fake_server.queue(200, {"data": {"version": "8.3"}})
+    fake_server.queue(200, {"data": [{"node": "pve02", "status": "online"}]})
+    fake_server.queue(
+        200,
+        {
+            "data": [
+                {
+                    "vmid": 9001,
+                    "node": "pve02",
+                    "name": "different-template",
+                    "template": 1,
+                }
+            ]
+        },
+    )
+    fake_server.queue(
+        200,
+        {
+            "data": {
+                "scsi0": "local-lvm:base-9001-disk-0",
+                "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
+            }
+        },
+    )
+
+    health = provider.health_check()
+
+    template = next(
+        check for check in health.checks if check.name == "Template identity"
+    )
+    assert template.ok is False
+    assert health.provider_error is False
 
 
 def test_health_check_requires_an_exact_network_bridge_value(
@@ -477,6 +515,7 @@ def test_health_check_requires_an_exact_network_bridge_value(
 
     network = next(check for check in health.checks if check.name == "Network")
     assert network.ok is False
+    assert health.provider_error is False
 
 
 def test_authentication_error_redacts_token_secret(

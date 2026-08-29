@@ -45,6 +45,7 @@ class ProxmoxProvider:
 
     def health_check(self) -> ProviderHealth:
         checks: list[ProviderCheck] = []
+        provider_error = False
         try:
             version = self._request("GET", "/version")
             version_detail = self._string_value(version, "version") or "reachable"
@@ -55,6 +56,7 @@ class ProxmoxProvider:
             return ProviderHealth(
                 tuple(checks),
                 (self._mutation_permissions_warning(),),
+                provider_error=True,
             )
 
         nodes: object | None = None
@@ -63,6 +65,7 @@ class ProxmoxProvider:
             checks.append(ProviderCheck("Authentication", True, "token accepted"))
         except ProviderError as error:
             checks.append(ProviderCheck("Authentication", False, str(error)))
+            provider_error = True
 
         node_present = any(
             isinstance(item, Mapping) and item.get("node") == self._profile.node
@@ -94,7 +97,9 @@ class ProxmoxProvider:
                 )
             )
             return ProviderHealth(
-                tuple(checks), (self._mutation_permissions_warning(),)
+                tuple(checks),
+                (self._mutation_permissions_warning(),),
+                provider_error=True,
             )
 
         template = next(
@@ -133,7 +138,9 @@ class ProxmoxProvider:
                 )
             )
             return ProviderHealth(
-                tuple(checks), (self._mutation_permissions_warning(),)
+                tuple(checks),
+                (self._mutation_permissions_warning(),),
+                provider_error=True,
             )
 
         config_mapping = config if isinstance(config, Mapping) else {}
@@ -157,7 +164,11 @@ class ProxmoxProvider:
                 ),
             )
         )
-        return ProviderHealth(tuple(checks), (self._mutation_permissions_warning(),))
+        return ProviderHealth(
+            tuple(checks),
+            (self._mutation_permissions_warning(),),
+            provider_error=provider_error,
+        )
 
     def allocate_vmid(self) -> int:
         value = self._request("GET", "/cluster/nextid")

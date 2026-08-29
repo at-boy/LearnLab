@@ -20,6 +20,7 @@ class ProviderHealth:
 
     checks: tuple[ProviderCheck, ...]
     warnings: tuple[str, ...] = ()
+    provider_error: bool = False
 
 
 @dataclass(frozen=True)

@@ -39,5 +39,7 @@ def provider_test(profile_name: str) -> None:
         typer.echo(f"{status} {check.name}: {check.detail}")
     for warning in health.warnings:
         typer.echo(f"WARNING: {warning}")
+    if health.provider_error:
+        raise typer.Exit(code=3)
     if any(check.required and not check.ok for check in health.checks):
         raise typer.Exit(code=1)
