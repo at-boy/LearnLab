@@ -7,9 +7,19 @@ import pytest
 from typer.testing import CliRunner
 
 from learnlab.curriculum import Course, CurriculumError, Lesson, Step
-from learnlab.lifecycle import LifecycleError, StartedEnvironment, StartRequest
+from learnlab.lifecycle import (
+    DestroySummary,
+    LifecycleError,
+    StartedEnvironment,
+    StartRequest,
+)
 from learnlab.providers.base import ProviderCheck, ProviderHealth
-from learnlab.state import ProgressStatus, StateStore
+from learnlab.state import (
+    EnvironmentPhase,
+    EnvironmentRecord,
+    ProgressStatus,
+    StateStore,
+)
 
 CONFIG = '''
 default_provider = "home-proxmox"
@@ -22,6 +32,20 @@ token_secret_env = "LEARNLAB_HOME_SECRET"
 template_vmid = 9001
 template_name = "debian-12-learning"
 node = "pve"
+storage = "local-lvm"
+network = "vmbr0"
+ssh_user = "student"
+ssh_identity_file = "~/.ssh/learning-platform"
+tls_verify = true
+
+[providers.lab-proxmox]
+type = "proxmox"
+api_url = "https://lab-proxmox.example.test:8006/api2/json"
+token_id = "learnlab@pam!automation"
+token_secret_env = "LEARNLAB_HOME_SECRET"
+template_vmid = 9001
+template_name = "debian-12-learning"
+node = "lab-pve"
 storage = "local-lvm"
 network = "vmbr0"
 ssh_user = "student"
@@ -67,8 +91,11 @@ class RequestLog(list[StartRequest]):
 @dataclass
 class RecordingLifecycle:
     state_root: Path
+    store: StateStore
     requests: RequestLog = field(default_factory=RequestLog)
     failure: LifecycleError | None = None
+    destroy_choices: list[bool] = field(default_factory=list)
+    destroy_summary: DestroySummary | None = None
 
     def start(self, request: StartRequest) -> StartedEnvironment:
         self.requests.append(request)
@@ -85,6 +112,16 @@ class RecordingLifecycle:
             ),
         )
 
+    def destroy_all(self, preserve_completed: bool) -> DestroySummary:
+        self.destroy_choices.append(preserve_completed)
+        if self.destroy_summary is not None:
+            return self.destroy_summary
+        destroyed = [environment.id for environment in self.store.list_environments()]
+        for environment_id in destroyed:
+            self.store.delete_environment(environment_id)
+        self.store.erase_all(preserve_completed)
+        return DestroySummary(destroyed=destroyed, failed=[])
+
 
 @dataclass
 class AppHarness:
@@ -100,6 +137,31 @@ class AppHarness:
 
     def complete(self, collection_id: str, course_id: str, lesson_id: str) -> None:
         self.store.complete_lesson(collection_id, course_id, lesson_id)
+
+    def seed_environment(
+        self,
+        *,
+        environment_id: str = "env-1",
+        course_id: str = "proxmox-admin",
+        vmid: int = 102,
+        node: str = "pve02",
+        profile_name: str = "home-proxmox",
+        phase: EnvironmentPhase = EnvironmentPhase.RUNNING,
+    ) -> None:
+        self.store.create_environment(
+            EnvironmentRecord(
+                id=environment_id,
+                collection_id="proxmox",
+                course_id=course_id,
+                lesson_id="api-access",
+                attempt_id=None,
+                profile_name=profile_name,
+                provider_type="proxmox",
+                phase=phase,
+                vmid=vmid,
+                node=node,
+            )
+        )
 
 
 @pytest.fixture
@@ -150,11 +212,10 @@ def app_harness(
     catalog = RecordingCatalog(course)
     store = StateStore(tmp_xdg / "state" / "learnlab" / "state.db")
     store.initialize()
-    lifecycle = RecordingLifecycle(tmp_xdg / "state" / "learnlab")
+    lifecycle = RecordingLifecycle(tmp_xdg / "state" / "learnlab", store)
     provider_profiles: list[str] = []
 
     def provider_factory(settings, profile_name: str):
-        assert catalog.loaded_paths
         assert settings.provider(profile_name).name == profile_name
         provider_profiles.append(profile_name)
         return object()
@@ -443,3 +504,238 @@ def test_progress_complete_rejects_unknown_lesson(app_harness: AppHarness) -> No
     assert result.exit_code == 2
     assert "Unknown lesson: missing" in result.stdout
     assert app_harness.store.completed_lessons("proxmox", "proxmox-admin") == set()
+
+
+def test_destroy_requires_target_confirmation_and_progress_choice(
+    app_harness: AppHarness,
+) -> None:
+    app_harness.seed_environment(vmid=102)
+
+    result = app_harness.invoke(["destroy"], input="y\ny\n")
+
+    assert result.exit_code == 0
+    assert "Profile: home-proxmox" in result.stdout
+    assert "VM 102" in result.stdout
+    assert "Node: pve02" in result.stdout
+    assert "Course: proxmox/proxmox-admin" in result.stdout
+    assert "Phase: running" in result.stdout
+    assert "Preserve completed lessons" in result.stdout
+    assert app_harness.lifecycle.destroy_choices == [True]
+
+
+def test_destroy_cancellation_makes_no_provider_or_lifecycle_call(
+    app_harness: AppHarness,
+) -> None:
+    app_harness.seed_environment(vmid=102)
+
+    result = app_harness.invoke(["destroy"], input="n\n")
+
+    assert result.exit_code == 0
+    assert "VM 102" in result.stdout
+    assert app_harness.provider_profiles == []
+    assert app_harness.lifecycle.destroy_choices == []
+    assert [record.id for record in app_harness.store.list_environments()] == ["env-1"]
+
+
+def test_destroy_yes_still_requires_explicit_progress_policy(
+    app_harness: AppHarness,
+) -> None:
+    result = app_harness.invoke(["destroy", "--yes"])
+
+    assert result.exit_code == 2
+    assert "--preserve-progress or --erase-progress" in result.stdout
+    assert app_harness.provider_profiles == []
+    assert app_harness.lifecycle.destroy_choices == []
+
+
+def test_destroy_rejects_conflicting_progress_flags(
+    app_harness: AppHarness,
+) -> None:
+    result = app_harness.invoke(
+        ["destroy", "--yes", "--preserve-progress", "--erase-progress"]
+    )
+
+    assert result.exit_code == 2
+    assert "exactly one" in result.stdout
+    assert app_harness.provider_profiles == []
+    assert app_harness.lifecycle.destroy_choices == []
+
+
+@pytest.mark.parametrize(
+    ("flag", "expected_choice"),
+    [("--preserve-progress", True), ("--erase-progress", False)],
+)
+def test_destroy_yes_uses_explicit_progress_policy(
+    app_harness: AppHarness, flag: str, expected_choice: bool
+) -> None:
+    app_harness.seed_environment(vmid=102)
+
+    result = app_harness.invoke(["destroy", "--yes", flag])
+
+    assert result.exit_code == 0
+    assert app_harness.lifecycle.destroy_choices == [expected_choice]
+
+
+def test_destroy_partial_failure_exits_nonzero_and_lists_retained_environment(
+    app_harness: AppHarness,
+) -> None:
+    app_harness.seed_environment(environment_id="env-102", vmid=102)
+    app_harness.lifecycle.destroy_summary = DestroySummary(
+        destroyed=[], failed=["env-102"]
+    )
+
+    result = app_harness.invoke(
+        ["destroy", "--yes", "--preserve-progress"]
+    )
+
+    assert result.exit_code == 3
+    assert "Retained environment: env-102" in result.stdout
+    assert "VM 102" in result.stdout
+
+
+def test_destroy_constructs_every_recorded_provider_profile(
+    app_harness: AppHarness,
+) -> None:
+    app_harness.seed_environment(
+        environment_id="env-home",
+        course_id="proxmox-admin",
+        profile_name="home-proxmox",
+        vmid=102,
+    )
+    app_harness.seed_environment(
+        environment_id="env-lab",
+        course_id="linux-basics",
+        profile_name="lab-proxmox",
+        vmid=102,
+    )
+
+    result = app_harness.invoke(
+        ["destroy", "--yes", "--preserve-progress"]
+    )
+
+    assert result.exit_code == 0
+    assert app_harness.provider_profiles == ["home-proxmox", "lab-proxmox"]
+
+
+def test_reset_course_lists_scope_and_counts_before_confirmation(
+    app_harness: AppHarness,
+) -> None:
+    seed_progress(
+        app_harness.store,
+        "proxmox",
+        "proxmox-admin",
+        ("api-access", "api-tokens"),
+    )
+
+    result = app_harness.invoke(["reset", "proxmox/proxmox-admin"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "Scope: proxmox/proxmox-admin" in result.stdout
+    assert "Affected courses: 1" in result.stdout
+    assert "Affected lessons: 2" in result.stdout
+    assert result.stdout.index("Affected lessons: 2") < result.stdout.index("Continue?")
+    assert app_harness.store.lesson_statuses("proxmox", "proxmox-admin") == {}
+    assert app_harness.store.list_attempts() == []
+
+
+def test_reset_collection_removes_only_matching_collection(
+    app_harness: AppHarness,
+) -> None:
+    seed_progress(
+        app_harness.store,
+        "proxmox",
+        "proxmox-admin",
+        ("api-access", "api-tokens"),
+    )
+    seed_progress(app_harness.store, "proxmox", "linux-basics", ("shell",))
+    seed_progress(app_harness.store, "cloud", "cloud-basics", ("identity",))
+
+    result = app_harness.invoke(["reset", "proxmox"], input="y\n")
+
+    assert result.exit_code == 0
+    assert "Scope: proxmox" in result.stdout
+    assert "Affected courses: 2" in result.stdout
+    assert "Affected lessons: 3" in result.stdout
+    assert app_harness.store.lesson_statuses("proxmox", "proxmox-admin") == {}
+    assert app_harness.store.lesson_statuses("proxmox", "linux-basics") == {}
+    assert app_harness.store.completed_lessons("cloud", "cloud-basics") == {
+        "identity"
+    }
+    assert {
+        (attempt.collection_id, attempt.course_id)
+        for attempt in app_harness.store.list_attempts()
+    } == {("cloud", "cloud-basics")}
+
+
+def test_reset_refuses_matching_environment_without_mutating_progress(
+    app_harness: AppHarness,
+) -> None:
+    seed_progress(app_harness.store, "proxmox", "proxmox-admin", ("api-access",))
+    app_harness.seed_environment(vmid=102)
+
+    result = app_harness.invoke(
+        ["reset", "proxmox/proxmox-admin", "--yes"]
+    )
+
+    assert result.exit_code == 3
+    assert "learnlab destroy" in result.stdout
+    assert app_harness.store.completed_lessons("proxmox", "proxmox-admin") == {
+        "api-access"
+    }
+    assert app_harness.store.get_environment("env-1") is not None
+
+
+def test_reset_cancellation_makes_no_state_mutation(
+    app_harness: AppHarness,
+) -> None:
+    seed_progress(app_harness.store, "proxmox", "proxmox-admin", ("api-access",))
+
+    result = app_harness.invoke(
+        ["reset", "proxmox/proxmox-admin"], input="n\n"
+    )
+
+    assert result.exit_code == 0
+    assert "Cancelled." in result.stdout
+    assert app_harness.store.completed_lessons("proxmox", "proxmox-admin") == {
+        "api-access"
+    }
+    assert len(app_harness.store.list_attempts()) == 1
+
+
+def test_reset_yes_skips_confirmation(app_harness: AppHarness) -> None:
+    seed_progress(app_harness.store, "proxmox", "proxmox-admin", ("api-access",))
+
+    result = app_harness.invoke(
+        ["reset", "proxmox/proxmox-admin", "--yes"]
+    )
+
+    assert result.exit_code == 0
+    assert "Continue?" not in result.stdout
+    assert app_harness.store.lesson_statuses("proxmox", "proxmox-admin") == {}
+
+
+def test_reset_rejects_three_segment_scope_without_mutation(
+    app_harness: AppHarness,
+) -> None:
+    seed_progress(app_harness.store, "proxmox", "proxmox-admin", ("api-access",))
+
+    result = app_harness.invoke(
+        ["reset", "proxmox/proxmox-admin/api-access", "--yes"]
+    )
+
+    assert result.exit_code == 2
+    assert "collection or collection/course" in result.stdout
+    assert app_harness.store.completed_lessons("proxmox", "proxmox-admin") == {
+        "api-access"
+    }
+
+
+def seed_progress(
+    store: StateStore,
+    collection_id: str,
+    course_id: str,
+    lesson_ids: tuple[str, ...],
+) -> None:
+    for lesson_id in lesson_ids:
+        store.complete_lesson(collection_id, course_id, lesson_id)
+        store.create_attempt(collection_id, course_id, lesson_id)

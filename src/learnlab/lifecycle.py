@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+import shutil
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -64,13 +66,21 @@ class StartedEnvironment:
     ssh_command: str
 
 
+@dataclass(frozen=True)
+class DestroySummary:
+    """Environment IDs removed locally or retained after cleanup failures."""
+
+    destroyed: list[str]
+    failed: list[str]
+
+
 class LifecycleService:
     """Coordinate provider calls with immediately durable local state."""
 
     def __init__(
         self,
         store: StateStore,
-        provider: Provider,
+        provider: Provider | Mapping[str, Provider],
         state_root: Path,
         *,
         secrets: set[str] | None = None,
@@ -108,12 +118,13 @@ class LifecycleService:
             )
         )
 
+        provider = self._provider_for_profile(request.profile.name)
         try:
-            vmid = self._provider.allocate_vmid()
+            vmid = provider.allocate_vmid()
             self._store.transition_environment(
                 environment_id, EnvironmentPhase.ALLOCATING, vmid=vmid
             )
-            clone_upid = self._provider.clone(
+            clone_upid = provider.clone(
                 vmid, _vm_name(request.course.id, vmid)
             )
             self._store.transition_environment(
@@ -122,27 +133,27 @@ class LifecycleService:
                 vmid=vmid,
                 upid=clone_upid,
             )
-            self._provider.wait_for_task(
+            provider.wait_for_task(
                 request.profile.node, clone_upid, _TASK_TIMEOUT_SECONDS
             )
-            location = self._provider.locate_vm(vmid)
+            location = provider.locate_vm(vmid)
             if location is None:
                 raise LifecycleError(f"Provider could not locate cloned VM {vmid}")
             self._store.transition_environment(
                 environment_id, EnvironmentPhase.STOPPED, node=location.node
             )
 
-            start_upid = self._provider.start(vmid, location.node)
+            start_upid = provider.start(vmid, location.node)
             self._store.transition_environment(
                 environment_id, EnvironmentPhase.STARTING, upid=start_upid
             )
-            self._provider.wait_for_task(
+            provider.wait_for_task(
                 location.node, start_upid, _TASK_TIMEOUT_SECONDS
             )
             self._store.transition_environment(
                 environment_id, EnvironmentPhase.RUNNING
             )
-            ip_address = self._provider.wait_for_ipv4(
+            ip_address = provider.wait_for_ipv4(
                 vmid, location.node, _GUEST_TIMEOUT_SECONDS
             )
             self._store.transition_environment(
@@ -159,11 +170,7 @@ class LifecycleService:
                 ),
             )
         except Exception as error:
-            summary = redact(str(error), self._secrets)
-            if not summary:
-                summary = type(error).__name__
-            if len(summary) > _ERROR_SUMMARY_LIMIT:
-                summary = f"{summary[: _ERROR_SUMMARY_LIMIT - 3]}..."
+            summary = _safe_error_summary(error, self._secrets)
             self._store.transition_environment(
                 environment_id,
                 EnvironmentPhase.FAILED,
@@ -174,6 +181,97 @@ class LifecycleService:
                 "Run learnlab destroy to clean it up."
             ) from None
 
+    def destroy_all(self, preserve_completed: bool) -> DestroySummary:
+        """Destroy every recorded environment and then clear transient state."""
+        destroyed: list[str] = []
+        failed: list[str] = []
+
+        for environment in self._store.list_environments():
+            try:
+                self._destroy_environment(environment)
+            except Exception as error:
+                self._store.transition_environment(
+                    environment.id,
+                    EnvironmentPhase.FAILED,
+                    error_summary=_safe_error_summary(error, self._secrets),
+                )
+                failed.append(environment.id)
+            else:
+                destroyed.append(environment.id)
+
+        if not self._store.list_environments():
+            self._store.erase_all(preserve_completed)
+        return DestroySummary(destroyed=destroyed, failed=failed)
+
+    def _destroy_environment(self, environment: EnvironmentRecord) -> None:
+        if environment.vmid is None:
+            self._remove_local_environment(environment.id)
+            return
+
+        provider = self._provider_for_profile(environment.profile_name)
+        location = provider.locate_vm(environment.vmid)
+        if location is None:
+            self._remove_local_environment(environment.id)
+            return
+
+        if location.status == "running":
+            self._store.transition_environment(
+                environment.id,
+                EnvironmentPhase.STOPPING,
+                node=location.node,
+            )
+            stop_upid = provider.stop(environment.vmid, location.node)
+            self._store.transition_environment(
+                environment.id,
+                EnvironmentPhase.STOPPING,
+                upid=stop_upid,
+            )
+            provider.wait_for_task(
+                location.node, stop_upid, _TASK_TIMEOUT_SECONDS
+            )
+
+        self._store.transition_environment(
+            environment.id,
+            EnvironmentPhase.DELETING,
+            node=location.node,
+        )
+        delete_upid = provider.delete(environment.vmid, location.node)
+        self._store.transition_environment(
+            environment.id,
+            EnvironmentPhase.DELETING,
+            upid=delete_upid,
+        )
+        provider.wait_for_task(
+            location.node, delete_upid, _TASK_TIMEOUT_SECONDS
+        )
+        if provider.locate_vm(environment.vmid) is not None:
+            raise LifecycleError(
+                f"Provider still reports VM {environment.vmid} after deletion"
+            )
+        self._remove_local_environment(environment.id)
+
+    def _remove_local_environment(self, environment_id: str) -> None:
+        if (
+            not environment_id
+            or Path(environment_id).name != environment_id
+            or environment_id in {".", ".."}
+        ):
+            raise LifecycleError("Unsafe environment identifier in local state")
+        environment_dir = self._state_root / "environments" / environment_id
+        if environment_dir.exists():
+            shutil.rmtree(environment_dir)
+        self._store.delete_environment(environment_id)
+
+    def _provider_for_profile(self, profile_name: str) -> Provider:
+        if not isinstance(self._provider, Mapping):
+            return self._provider
+        try:
+            return self._provider[profile_name]
+        except KeyError:
+            raise LifecycleError(
+                f"No provider available for recorded profile {profile_name}"
+            ) from None
+
 
 def _vm_name(course_id: str, vmid: int) -> str:
     normalized_course = re.sub(r"[^a-z0-9]+", "-", course_id.lower()).strip("-")
@@ -181,3 +279,12 @@ def _vm_name(course_id: str, vmid: int) -> str:
     available = 63 - len("learnlab-") - len(suffix)
     bounded_course = normalized_course[:available].rstrip("-")
     return f"learnlab-{bounded_course}{suffix}"
+
+
+def _safe_error_summary(error: Exception, secrets: set[str]) -> str:
+    summary = redact(str(error), secrets)
+    if not summary:
+        summary = type(error).__name__
+    if len(summary) > _ERROR_SUMMARY_LIMIT:
+        summary = f"{summary[: _ERROR_SUMMARY_LIMIT - 3]}..."
+    return summary

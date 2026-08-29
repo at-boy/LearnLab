@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Protocol
 
@@ -23,7 +23,7 @@ class LifecycleFactory(Protocol):
     def __call__(
         self,
         store: StateStore,
-        provider: Provider,
+        provider: Provider | Mapping[str, Provider],
         state_root: Path,
         *,
         secrets: set[str] | None = None,
@@ -131,6 +131,136 @@ def start_course(
         typer.echo(step.content)
 
 
+@app.command("destroy")
+def destroy_all(
+    yes: bool = typer.Option(False, "--yes"),
+    preserve_progress: bool = typer.Option(False, "--preserve-progress"),
+    erase_progress: bool = typer.Option(False, "--erase-progress"),
+) -> None:
+    """Destroy every recorded environment for the current user."""
+    if preserve_progress and erase_progress:
+        typer.echo(
+            "Error: choose exactly one of --preserve-progress or --erase-progress"
+        )
+        raise typer.Exit(code=2)
+    if yes and not (preserve_progress or erase_progress):
+        typer.echo(
+            "Error: --yes requires --preserve-progress or --erase-progress"
+        )
+        raise typer.Exit(code=2)
+
+    store = state_store_factory()
+    store.initialize()
+    targets = store.list_environments()
+    typer.echo("Destroy targets:")
+    if not targets:
+        typer.echo("  No recorded environments")
+    for target in targets:
+        vm_label = str(target.vmid) if target.vmid is not None else "unallocated"
+        node_label = target.node or "unknown"
+        typer.echo(
+            f"  Profile: {target.profile_name} | VM {vm_label} | "
+            f"Node: {node_label} | "
+            f"Course: {target.collection_id}/{target.course_id} | "
+            f"Phase: {target.phase.value}"
+        )
+
+    if not yes and not typer.confirm("Destroy all listed environments?"):
+        typer.echo("Cancelled.")
+        return
+
+    if preserve_progress:
+        preserve_completed = True
+    elif erase_progress:
+        preserve_completed = False
+    else:
+        preserve_completed = typer.confirm(
+            "Preserve completed lessons?", default=True
+        )
+
+    secrets: set[str] = set()
+    try:
+        providers: dict[str, Provider] = {}
+        if targets:
+            settings = load_settings()
+            for profile_name in dict.fromkeys(
+                target.profile_name for target in targets
+            ):
+                profile = settings.provider(profile_name)
+                secret = resolve_token_secret(profile)
+                secrets.add(secret)
+                providers[profile_name] = provider_factory(settings, profile_name)
+        lifecycle = lifecycle_factory(
+            store,
+            providers,
+            state_root(),
+            secrets=secrets,
+        )
+        summary = lifecycle.destroy_all(preserve_completed)
+    except LearnLabError as error:
+        _exit_with_error(error, secrets)
+
+    if summary.failed:
+        retained_by_id = {
+            environment.id: environment for environment in store.list_environments()
+        }
+        for environment_id in summary.failed:
+            typer.echo(f"Retained environment: {environment_id}")
+            if retained := retained_by_id.get(environment_id):
+                vm_label = (
+                    str(retained.vmid) if retained.vmid is not None else "unallocated"
+                )
+                typer.echo(
+                    f"  Profile: {retained.profile_name} | VM {vm_label} | "
+                    f"Node: {retained.node or 'unknown'} | "
+                    f"Course: {retained.collection_id}/{retained.course_id} | "
+                    f"Phase: {retained.phase.value}"
+                )
+        raise typer.Exit(code=3)
+
+    typer.echo(f"Destroyed environments: {len(summary.destroyed)}")
+
+
+@app.command("reset")
+def reset_scope(
+    scope: str,
+    yes: bool = typer.Option(False, "--yes"),
+) -> None:
+    """Reset progress and attempt history for one collection or course."""
+    try:
+        collection_id, course_id = _split_reset_scope(scope)
+        store = state_store_factory()
+        store.initialize()
+        affected_courses, affected_lessons = _reset_scope_counts(
+            store, collection_id, course_id
+        )
+        typer.echo(f"Scope: {scope}")
+        typer.echo(f"Affected courses: {affected_courses}")
+        typer.echo(f"Affected lessons: {affected_lessons}")
+
+        matching_environments = [
+            environment
+            for environment in store.list_environments()
+            if environment.collection_id == collection_id
+            and (course_id is None or environment.course_id == course_id)
+        ]
+        if matching_environments:
+            raise StateConflictError(
+                "Run learnlab destroy for matching environments before "
+                "resetting progress"
+            )
+
+        if not yes and not typer.confirm("Continue?"):
+            typer.echo("Cancelled.")
+            return
+
+        store.reset_scope(collection_id, course_id)
+    except LearnLabError as error:
+        _exit_with_error(error)
+
+    typer.echo(f"Reset: {scope}")
+
+
 @progress_app.command("complete")
 def progress_complete(lesson_path: str) -> None:
     """Explicitly mark one known curriculum lesson completed."""
@@ -194,6 +324,53 @@ def _split_lesson_path(lesson_path: str) -> tuple[str, str, str]:
     if len(pieces) != 3 or not all(pieces):
         raise CurriculumError("Lesson path must use collection/course/lesson")
     return pieces[0], pieces[1], pieces[2]
+
+
+def _split_reset_scope(scope: str) -> tuple[str, str | None]:
+    pieces = scope.split("/")
+    if len(pieces) not in {1, 2} or not all(pieces):
+        raise CurriculumError(
+            "Reset scope must use collection or collection/course"
+        )
+    return pieces[0], pieces[1] if len(pieces) == 2 else None
+
+
+def _reset_scope_counts(
+    store: StateStore, collection_id: str, course_id: str | None
+) -> tuple[int, int]:
+    attempts = [
+        attempt
+        for attempt in store.list_attempts()
+        if attempt.collection_id == collection_id
+        and (course_id is None or attempt.course_id == course_id)
+    ]
+    environments = [
+        environment
+        for environment in store.list_environments()
+        if environment.collection_id == collection_id
+        and (course_id is None or environment.course_id == course_id)
+    ]
+    course_ids = {attempt.course_id for attempt in attempts}
+    course_ids.update(environment.course_id for environment in environments)
+    if course_id is not None and store.lesson_statuses(collection_id, course_id):
+        course_ids.add(course_id)
+
+    lessons = {
+        (attempt.course_id, attempt.lesson_id)
+        for attempt in attempts
+    }
+    lessons.update(
+        (environment.course_id, environment.lesson_id)
+        for environment in environments
+    )
+    for retained_course_id in course_ids:
+        lessons.update(
+            (retained_course_id, lesson_id)
+            for lesson_id in store.lesson_statuses(
+                collection_id, retained_course_id
+            )
+        )
+    return len(course_ids), len(lessons)
 
 
 def _exit_with_error(error: LearnLabError, secrets: set[str] | None = None) -> None:

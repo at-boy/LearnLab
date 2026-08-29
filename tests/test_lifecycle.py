@@ -10,12 +10,14 @@ from conftest import RecordingProvider
 
 from learnlab.config import ProxmoxProfile
 from learnlab.curriculum import Course, Lesson, Step
-from learnlab.errors import ProviderTaskFailed
+from learnlab.errors import ProviderError, ProviderTaskFailed
 from learnlab.lifecycle import LifecycleError, LifecycleService, StartRequest
 from learnlab.providers.base import VmLocation
 from learnlab.ssh import create_known_hosts, render_ssh_command
 from learnlab.state import (
     EnvironmentPhase,
+    EnvironmentRecord,
+    ProgressStatus,
     StateConflictError,
     StateStore,
 )
@@ -74,6 +76,50 @@ class StateObservingProvider(RecordingProvider):
     def wait_for_ipv4(self, vmid: int, node: str, timeout: float) -> str:
         self._snapshot("wait_for_ipv4")
         return super().wait_for_ipv4(vmid, node, timeout)
+
+
+class DestroyRecordingProvider(RecordingProvider):
+    """Model VM presence and status while recording destroy boundaries."""
+
+    def __init__(
+        self,
+        locations: dict[int, VmLocation],
+        store: StateStore | None = None,
+    ) -> None:
+        super().__init__()
+        self.locations = locations
+        self.store = store
+        self.failing_vmids: set[int] = set()
+        self.delete_removes_vm = True
+        self.observed_phases: dict[str, EnvironmentPhase] = {}
+
+    def fail_for_vmid(self, vmid: int) -> None:
+        self.failing_vmids.add(vmid)
+
+    def locate_vm(self, vmid: int) -> VmLocation | None:
+        self._record(f"locate:{vmid}")
+        if vmid in self.failing_vmids:
+            raise ProviderError(f"locate failed for {vmid}")
+        return self.locations.get(vmid)
+
+    def stop(self, vmid: int, node: str) -> str:
+        self._observe_phase(f"stop:{vmid}")
+        self._record(f"stop:{vmid}")
+        self.locations[vmid] = VmLocation(node=node, status="stopped")
+        return "stop"
+
+    def delete(self, vmid: int, node: str) -> str:
+        self._observe_phase(f"delete:{vmid}")
+        self._record(f"delete:{vmid}")
+        if self.delete_removes_vm:
+            self.locations.pop(vmid, None)
+        return "delete"
+
+    def _observe_phase(self, operation: str) -> None:
+        if self.store is None:
+            return
+        [record] = self.store.list_environments()
+        self.observed_phases[operation] = record.phase
 
 
 def start_request(profile: ProxmoxProfile) -> StartRequest:
@@ -266,3 +312,263 @@ def test_start_normalizes_and_bounds_vm_name(
     assert recording_provider.clone_names == [
         "learnlab-admin-course-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-102"
     ]
+
+
+def test_destroy_stops_running_vm_then_deletes_and_clears_record(
+    store: StateStore, tmp_path: Path
+) -> None:
+    seed_environment(
+        store,
+        environment_id="env-1",
+        vmid=102,
+        node="pve02",
+        phase=EnvironmentPhase.RUNNING,
+    )
+    provider = DestroyRecordingProvider(
+        {102: VmLocation(node="pve02", status="running")}
+    )
+
+    summary = LifecycleService(store, provider, tmp_path).destroy_all(True)
+
+    assert provider.operations == [
+        "locate:102",
+        "stop:102",
+        "wait:stop",
+        "delete:102",
+        "wait:delete",
+        "locate:102",
+    ]
+    assert summary.destroyed == ["env-1"]
+    assert store.list_environments() == []
+
+
+def test_destroy_absent_vm_clears_local_environment_without_delete(
+    store: StateStore, tmp_path: Path
+) -> None:
+    seed_environment(
+        store,
+        environment_id="env-1",
+        vmid=102,
+        node="pve02",
+        phase=EnvironmentPhase.FAILED,
+    )
+    environment_dir = tmp_path / "environments" / "env-1"
+    environment_dir.mkdir(parents=True)
+    (environment_dir / "known_hosts").write_text("host key\n")
+    provider = DestroyRecordingProvider({})
+
+    summary = LifecycleService(store, provider, tmp_path).destroy_all(True)
+
+    assert provider.operations == ["locate:102"]
+    assert summary.destroyed == ["env-1"]
+    assert store.list_environments() == []
+    assert not environment_dir.exists()
+
+
+def test_destroy_failure_retains_record_and_continues(
+    store: StateStore, tmp_path: Path
+) -> None:
+    seed_environment(store, environment_id="env-102", vmid=102, node="pve02")
+    seed_environment(
+        store,
+        environment_id="env-103",
+        course_id="linux-basics",
+        vmid=103,
+        node="pve03",
+    )
+    provider = DestroyRecordingProvider(
+        {
+            102: VmLocation(node="pve02", status="stopped"),
+            103: VmLocation(node="pve03", status="stopped"),
+        }
+    )
+    provider.fail_for_vmid(102)
+
+    summary = LifecycleService(store, provider, tmp_path).destroy_all(True)
+
+    assert summary.failed == ["env-102"]
+    assert summary.destroyed == ["env-103"]
+    assert store.get_environment("env-102") is not None
+    assert store.get_environment("env-103") is None
+    assert provider.operations == [
+        "locate:102",
+        "locate:103",
+        "delete:103",
+        "wait:delete",
+        "locate:103",
+    ]
+
+
+def test_destroy_rejects_empty_environment_id_without_removing_shared_directory(
+    store: StateStore, tmp_path: Path
+) -> None:
+    seed_environment(store, environment_id="", vmid=102, node="pve02")
+    environments_dir = tmp_path / "environments"
+    environments_dir.mkdir()
+    sentinel = environments_dir / "keep-me"
+    sentinel.write_text("retained\n")
+    provider = DestroyRecordingProvider({})
+
+    summary = LifecycleService(store, provider, tmp_path).destroy_all(True)
+
+    assert summary.failed == [""]
+    assert sentinel.read_text() == "retained\n"
+    assert store.get_environment("") is not None
+
+
+@pytest.mark.parametrize(
+    ("status", "failing_operation", "expected_phase"),
+    [
+        ("running", "stop:102", EnvironmentPhase.STOPPING),
+        ("stopped", "delete:102", EnvironmentPhase.DELETING),
+    ],
+)
+def test_destroy_persists_destructive_phase_before_provider_mutation(
+    store: StateStore,
+    tmp_path: Path,
+    status: str,
+    failing_operation: str,
+    expected_phase: EnvironmentPhase,
+) -> None:
+    seed_environment(store, environment_id="env-1", vmid=102, node="pve02")
+    provider = DestroyRecordingProvider(
+        {102: VmLocation(node="pve02", status=status)}, store
+    )
+    provider.fail_on(failing_operation, ProviderError("provider refused"))
+
+    summary = LifecycleService(store, provider, tmp_path).destroy_all(True)
+
+    retained = store.get_environment("env-1")
+    assert summary.failed == ["env-1"]
+    assert provider.observed_phases[failing_operation] is expected_phase
+    assert retained is not None
+    assert retained.phase is EnvironmentPhase.FAILED
+    assert retained.error_summary == "provider refused"
+
+
+def test_destroy_retains_record_when_vm_remains_after_delete(
+    store: StateStore, tmp_path: Path
+) -> None:
+    seed_environment(store, environment_id="env-1", vmid=102, node="pve02")
+    provider = DestroyRecordingProvider(
+        {102: VmLocation(node="pve02", status="stopped")}
+    )
+    provider.delete_removes_vm = False
+
+    summary = LifecycleService(store, provider, tmp_path).destroy_all(True)
+
+    assert summary.failed == ["env-1"]
+    assert store.get_environment("env-1") is not None
+    assert provider.operations[-1] == "locate:102"
+
+
+def test_destroy_partial_failure_leaves_all_progress_and_attempts_untouched(
+    store: StateStore, tmp_path: Path
+) -> None:
+    store.complete_lesson("proxmox", "proxmox-admin", "api-access")
+    store.start_lesson("proxmox", "proxmox-admin", "api-tokens")
+    store.create_attempt("proxmox", "proxmox-admin", "api-access")
+    seed_environment(store, environment_id="env-1", vmid=102, node="pve02")
+    provider = DestroyRecordingProvider(
+        {102: VmLocation(node="pve02", status="stopped")}
+    )
+    provider.fail_for_vmid(102)
+
+    LifecycleService(store, provider, tmp_path).destroy_all(True)
+
+    assert store.lesson_statuses("proxmox", "proxmox-admin") == {
+        "api-access": ProgressStatus.COMPLETED,
+        "api-tokens": ProgressStatus.IN_PROGRESS,
+    }
+    assert len(store.list_attempts()) == 1
+
+
+def test_destroy_success_preserves_only_completed_progress(
+    store: StateStore, tmp_path: Path
+) -> None:
+    store.complete_lesson("proxmox", "proxmox-admin", "api-access")
+    store.start_lesson("proxmox", "proxmox-admin", "api-tokens")
+    store.create_attempt("proxmox", "proxmox-admin", "api-access")
+    seed_environment(store, environment_id="env-1", vmid=102, node="pve02")
+
+    LifecycleService(store, DestroyRecordingProvider({}), tmp_path).destroy_all(True)
+
+    assert store.lesson_statuses("proxmox", "proxmox-admin") == {
+        "api-access": ProgressStatus.COMPLETED,
+    }
+    assert store.list_attempts() == []
+
+
+def test_destroy_routes_each_environment_to_its_recorded_provider_profile(
+    store: StateStore, tmp_path: Path
+) -> None:
+    seed_environment(
+        store,
+        environment_id="env-home",
+        profile_name="home-proxmox",
+        vmid=102,
+        node="home-node",
+    )
+    seed_environment(
+        store,
+        environment_id="env-lab",
+        profile_name="lab-proxmox",
+        course_id="linux-basics",
+        vmid=102,
+        node="lab-node",
+    )
+    home_provider = DestroyRecordingProvider(
+        {102: VmLocation(node="home-node", status="stopped")}
+    )
+    lab_provider = DestroyRecordingProvider(
+        {102: VmLocation(node="lab-node", status="stopped")}
+    )
+
+    summary = LifecycleService(
+        store,
+        {
+            "home-proxmox": home_provider,
+            "lab-proxmox": lab_provider,
+        },
+        tmp_path,
+    ).destroy_all(True)
+
+    assert summary.destroyed == ["env-home", "env-lab"]
+    assert home_provider.operations == [
+        "locate:102",
+        "delete:102",
+        "wait:delete",
+        "locate:102",
+    ]
+    assert lab_provider.operations == [
+        "locate:102",
+        "delete:102",
+        "wait:delete",
+        "locate:102",
+    ]
+
+
+def seed_environment(
+    store: StateStore,
+    *,
+    environment_id: str,
+    vmid: int,
+    node: str,
+    course_id: str = "proxmox-admin",
+    profile_name: str = "home-proxmox",
+    phase: EnvironmentPhase = EnvironmentPhase.STOPPED,
+) -> None:
+    store.create_environment(
+        EnvironmentRecord(
+            id=environment_id,
+            collection_id="proxmox",
+            course_id=course_id,
+            lesson_id="api-access",
+            attempt_id=None,
+            profile_name=profile_name,
+            provider_type="proxmox",
+            phase=phase,
+            vmid=vmid,
+            node=node,
+        )
+    )
