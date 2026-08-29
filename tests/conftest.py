@@ -1,10 +1,83 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
 from learnlab.config import ProxmoxProfile
+from learnlab.errors import ProviderError
+from learnlab.providers.base import ProviderHealth, VmLocation
+from learnlab.state import StateStore
+
+
+class RecordingProvider:
+    """Behavioral provider fake that records completed boundary calls."""
+
+    def __init__(self) -> None:
+        self.operations: list[str] = []
+        self.clone_names: list[str] = []
+        self._failures: dict[str, ProviderError] = {}
+
+    def fail_on(self, operation: str, error: ProviderError) -> None:
+        self._failures[operation] = error
+
+    def _record(self, operation: str) -> None:
+        self.operations.append(operation)
+        if error := self._failures.get(operation):
+            raise error
+
+    def health_check(self) -> ProviderHealth:
+        return ProviderHealth(())
+
+    def allocate_vmid(self) -> int:
+        self._record("allocate_vmid")
+        return 102
+
+    def clone(self, vmid: int, name: str) -> str:
+        self._record(f"clone:{vmid}")
+        self.clone_names.append(name)
+        return "clone"
+
+    def wait_for_task(self, node: str, upid: str, timeout: float) -> None:
+        self._record(f"wait:{upid}")
+
+    def locate_vm(self, vmid: int) -> VmLocation | None:
+        self._record(f"locate:{vmid}")
+        return VmLocation(node="pve02", status="stopped")
+
+    def start(self, vmid: int, node: str) -> str:
+        self._record(f"start:{vmid}")
+        return "start"
+
+    def stop(self, vmid: int, node: str) -> str:
+        self._record(f"stop:{vmid}")
+        return "stop"
+
+    def wait_for_ipv4(self, vmid: int, node: str, timeout: float) -> str:
+        self._record(f"wait_for_ipv4:{vmid}")
+        return "192.0.2.10"
+
+    def delete(self, vmid: int, node: str) -> str:
+        self._record(f"delete:{vmid}")
+        return "delete"
+
+
+@pytest.fixture
+def store(tmp_path: Path) -> StateStore:
+    state_store = StateStore(tmp_path / "learnlab.db")
+    state_store.initialize()
+    return state_store
+
+
+@pytest.fixture
+def recording_provider() -> RecordingProvider:
+    return RecordingProvider()
+
+
+@pytest.fixture
+def failing_provider() -> RecordingProvider:
+    return RecordingProvider()
 
 
 @pytest.fixture
