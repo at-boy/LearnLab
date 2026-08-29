@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from typing import cast
 from urllib.parse import parse_qs
 
 import httpx
@@ -9,6 +10,7 @@ import pytest
 from learnlab.config import ProxmoxProfile
 from learnlab.errors import (
     ProviderAuthenticationError,
+    ProviderOperationError,
     ProviderTaskFailed,
     ProviderTimeoutError,
 )
@@ -54,6 +56,20 @@ def provider_for(
         clock=clock.now,
         sleep=clock.sleep,
     )
+
+
+def provider_with_clock(
+    fake_server: FakeProxmoxServer, profile: ProxmoxProfile
+) -> tuple[ProxmoxProvider, FakeClock]:
+    clock = FakeClock()
+    provider = ProxmoxProvider(
+        profile,
+        "private-value",
+        client=httpx.Client(base_url=f"{fake_server.url}/api2/json", timeout=10.0),
+        clock=clock.now,
+        sleep=clock.sleep,
+    )
+    return provider, clock
 
 
 @pytest.fixture
@@ -171,6 +187,20 @@ def test_wait_for_task_times_out_with_operation_context(
         provider.wait_for_task("pve02", "UPID:pve02:slow:", timeout=2)
 
 
+def test_wait_for_task_rejects_success_after_a_short_deadline(
+    fake_server: FakeProxmoxServer, profile: ProxmoxProfile
+) -> None:
+    fake_server.queue(200, {"data": {"status": "running"}})
+    fake_server.queue(200, {"data": {"status": "stopped", "exitstatus": "OK"}})
+    provider, clock = provider_with_clock(fake_server, profile)
+
+    with pytest.raises(ProviderTimeoutError):
+        provider.wait_for_task("pve02", "UPID:pve02:slow:", timeout=1)
+
+    assert clock.value == 1
+    assert len(fake_server.requests.all()) == 1
+
+
 def test_wait_for_ipv4_ignores_loopback_and_invalid_addresses(
     fake_server: FakeProxmoxServer, provider: ProxmoxProvider
 ) -> None:
@@ -218,6 +248,68 @@ def test_wait_for_ipv4_ignores_loopback_and_invalid_addresses(
         "POST",
         "GET",
     ]
+
+
+def test_wait_for_ipv4_rejects_agent_readiness_after_a_short_deadline(
+    fake_server: FakeProxmoxServer, profile: ProxmoxProfile
+) -> None:
+    fake_server.queue(500, {"errors": "guest agent unavailable"})
+    fake_server.queue(200, {"data": {}})
+    fake_server.queue(
+        200,
+        {
+            "data": {
+                "result": [
+                    {
+                        "ip-addresses": [
+                            {
+                                "ip-address": "192.0.2.10",
+                                "ip-address-type": "ipv4",
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+    )
+    provider, clock = provider_with_clock(fake_server, profile)
+
+    with pytest.raises(ProviderTimeoutError, match="VM 102"):
+        provider.wait_for_ipv4(102, "pve02", timeout=1)
+
+    assert clock.value == 1
+    assert len(fake_server.requests.all()) == 1
+
+
+def test_wait_for_ipv4_rejects_late_network_address(
+    fake_server: FakeProxmoxServer, profile: ProxmoxProfile
+) -> None:
+    fake_server.queue(200, {"data": {}})
+    fake_server.queue(200, {"data": {"result": []}})
+    fake_server.queue(
+        200,
+        {
+            "data": {
+                "result": [
+                    {
+                        "ip-addresses": [
+                            {
+                                "ip-address": "192.0.2.10",
+                                "ip-address-type": "ipv4",
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+    )
+    provider, clock = provider_with_clock(fake_server, profile)
+
+    with pytest.raises(ProviderTimeoutError, match="VM 102"):
+        provider.wait_for_ipv4(102, "pve02", timeout=1)
+
+    assert clock.value == 1
+    assert [request.method for request in fake_server.requests.all()] == ["POST", "GET"]
 
 
 def test_health_check_uses_read_only_requests_and_reports_each_prerequisite(
@@ -286,6 +378,40 @@ def test_health_check_reports_every_prerequisite_when_api_is_unavailable(
     assert not any(check.ok for check in health.checks)
 
 
+def test_health_check_requires_an_exact_network_bridge_value(
+    fake_server: FakeProxmoxServer, provider: ProxmoxProvider
+) -> None:
+    fake_server.queue(200, {"data": {"version": "8.3"}})
+    fake_server.queue(200, {"data": [{"node": "pve02", "status": "online"}]})
+    fake_server.queue(
+        200,
+        {
+            "data": [
+                {
+                    "vmid": 9001,
+                    "node": "pve02",
+                    "name": "nixos-26.05-base-v2",
+                    "template": 1,
+                }
+            ]
+        },
+    )
+    fake_server.queue(
+        200,
+        {
+            "data": {
+                "scsi0": "local-lvm:base-9001-disk-0",
+                "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr01",
+            }
+        },
+    )
+
+    health = provider.health_check()
+
+    network = next(check for check in health.checks if check.name == "Network")
+    assert network.ok is False
+
+
 def test_authentication_error_redacts_token_secret(
     fake_server: FakeProxmoxServer, provider: ProxmoxProvider
 ) -> None:
@@ -295,3 +421,50 @@ def test_authentication_error_redacts_token_secret(
         provider.allocate_vmid()
 
     assert "private-value" not in str(caught.value)
+
+
+def test_transport_error_does_not_retain_request_headers(
+    profile: ProxmoxProfile,
+) -> None:
+    authorization = "PVEAPIToken=learnlab@pam!automation=private-value"
+    request = httpx.Request(
+        "GET",
+        "https://proxmox.example.test",
+        headers={"Authorization": authorization},
+    )
+
+    class FailingClient:
+        def request(self, *args: object, **kwargs: object) -> httpx.Response:
+            raise httpx.RequestError("connection dropped", request=request)
+
+    provider = ProxmoxProvider(
+        profile,
+        "private-value",
+        client=cast(httpx.Client, FailingClient()),
+    )
+
+    with pytest.raises(ProviderOperationError) as caught:
+        provider.allocate_vmid()
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert "private-value" not in repr(caught.value)
+    assert authorization not in repr(caught.value)
+
+
+def test_error_body_is_redacted_before_being_bounded(
+    fake_server: FakeProxmoxServer, profile: ProxmoxProfile
+) -> None:
+    fake_server.queue(500, {"errors": "x" * 2000})
+    provider = ProxmoxProvider(
+        profile,
+        "x",
+        client=httpx.Client(base_url=f"{fake_server.url}/api2/json", timeout=10.0),
+    )
+
+    with pytest.raises(ProviderOperationError) as caught:
+        provider.allocate_vmid()
+
+    detail = str(caught.value).split("HTTP 500: ", maxsplit=1)[1]
+    assert len(detail) == 2000
+    assert "x" not in detail

@@ -187,6 +187,9 @@ class ProxmoxProvider:
         deadline = self._clock() + timeout
         path = f"/nodes/{node}/tasks/{quote(upid, safe='')}/status"
         while True:
+            self._raise_if_deadline_reached(
+                deadline, f"Timed out waiting for Proxmox task {upid}"
+            )
             result = self._request("GET", path)
             if not isinstance(result, Mapping):
                 raise ProviderOperationError(
@@ -199,9 +202,9 @@ class ProxmoxProvider:
                 raise ProviderTaskFailed(
                     f"Proxmox task {upid} stopped with exit status {exitstatus!s}"
                 )
-            if self._clock() >= deadline:
-                raise ProviderTimeoutError(f"Timed out waiting for Proxmox task {upid}")
-            self._sleep(2.0)
+            self._sleep_until_deadline(
+                deadline, f"Timed out waiting for Proxmox task {upid}"
+            )
 
     def locate_vm(self, vmid: int) -> VmLocation | None:
         resources = self._request("GET", "/cluster/resources?type=vm")
@@ -228,22 +231,25 @@ class ProxmoxProvider:
         deadline = self._clock() + timeout
         ping_path = f"/nodes/{node}/qemu/{vmid}/agent/ping"
         interfaces_path = f"/nodes/{node}/qemu/{vmid}/agent/network-get-interfaces"
+        timeout_message = f"Timed out waiting for guest IPv4 for VM {vmid}"
         while True:
+            self._raise_if_deadline_reached(deadline, timeout_message)
             try:
                 self._request("POST", ping_path)
                 break
             except ProviderOperationError:
-                self._sleep_until_deadline(deadline, vmid)
+                self._sleep_until_deadline(deadline, timeout_message)
         while True:
+            self._raise_if_deadline_reached(deadline, timeout_message)
             try:
                 interfaces = self._request("GET", interfaces_path)
             except ProviderOperationError:
-                self._sleep_until_deadline(deadline, vmid)
+                self._sleep_until_deadline(deadline, timeout_message)
                 continue
             address = self._first_ipv4(interfaces)
             if address is not None:
                 return address
-            self._sleep_until_deadline(deadline, vmid)
+            self._sleep_until_deadline(deadline, timeout_message)
 
     def delete(self, vmid: int, node: str) -> str:
         return self._task_id(
@@ -258,15 +264,20 @@ class ProxmoxProvider:
                 f"PVEAPIToken={self._profile.token_id}={self._token_secret}"
             )
         }
+        transport_error: str | None = None
+        response: httpx.Response | None = None
         try:
             response = self._client.request(method, path, data=data, headers=headers)
         except httpx.HTTPError as error:
-            raise ProviderOperationError(
-                self._safe_error(f"Proxmox {method} {path} request failed: {error}")
-            ) from error
+            transport_error = self._safe_error(
+                f"Proxmox {method} {path} request failed: {error}"
+            )[:2000]
+        if transport_error is not None:
+            raise ProviderOperationError(transport_error)
+        if response is None:
+            raise ProviderOperationError(f"Proxmox {method} {path} did not respond")
         if not response.is_success:
-            detail = response.text[:2000]
-            safe_detail = self._safe_error(detail)
+            safe_detail = self._safe_error(response.text)[:2000]
             message = f"Proxmox {method} {path} failed with HTTP {response.status_code}"
             if safe_detail:
                 message = f"{message}: {safe_detail}"
@@ -287,15 +298,18 @@ class ProxmoxProvider:
             )
         return payload["data"]
 
-    def _sleep_until_deadline(self, deadline: float, vmid: int) -> None:
+    def _sleep_until_deadline(self, deadline: float, timeout_message: str) -> None:
+        remaining = deadline - self._clock()
+        if remaining <= 0:
+            raise ProviderTimeoutError(timeout_message)
+        self._sleep(min(2.0, remaining))
+
+    def _raise_if_deadline_reached(self, deadline: float, timeout_message: str) -> None:
         if self._clock() >= deadline:
-            raise ProviderTimeoutError(
-                f"Timed out waiting for guest IPv4 for VM {vmid}"
-            )
-        self._sleep(2.0)
+            raise ProviderTimeoutError(timeout_message)
 
     def _safe_error(self, text: str) -> str:
-        return redact(text[:2000], {self._token_secret})
+        return redact(text, {self._token_secret})
 
     @staticmethod
     def _as_list(value: object | None) -> list[object]:
@@ -321,10 +335,18 @@ class ProxmoxProvider:
         )
 
     def _has_network(self, config: Mapping[object, object]) -> bool:
-        return any(
-            isinstance(value, str) and f"bridge={self._profile.network}" in value
-            for value in config.values()
-        )
+        for value in config.values():
+            if not isinstance(value, str):
+                continue
+            for option in value.split(","):
+                key, separator, option_value = option.partition("=")
+                if (
+                    separator
+                    and key == "bridge"
+                    and option_value == self._profile.network
+                ):
+                    return True
+        return False
 
     @staticmethod
     def _task_id(value: object, operation: str) -> str:
