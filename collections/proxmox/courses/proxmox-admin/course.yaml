@@ -1,0 +1,5 @@
+id: proxmox-admin
+title: Proxmox Administration Foundations
+lessons:
+  - api-access
+  - api-tokens

@@ -1,0 +1,15 @@
+id: api-access
+title: Understand API Access
+steps:
+  - id: understand-api
+    title: Understand the API boundary
+    content: >-
+      An API lets a program request information or actions through a defined
+      interface. Treat it as a deliberate boundary with its own permissions,
+      audit trail, and documentation.
+  - id: locate-endpoint
+    title: Locate the documented interface
+    content: >-
+      Before automating, identify the API interface from your administrator's
+      documentation and confirm which actions your learning exercise is meant
+      to discuss. Do not copy connection details into course notes.
