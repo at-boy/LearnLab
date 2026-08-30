@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -234,6 +235,119 @@ def test_initialize_migrates_pre_ownership_environment_schema(tmp_path: Path) ->
     assert record.provider_fingerprint == ""
     assert record.expected_vm_name == ""
     assert record.clone_uncertain is False
+
+
+def test_default_migration_fences_open_writer_and_retires_legacy_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    environment_fixture: Callable[..., EnvironmentRecord],
+) -> None:
+    root = tmp_path / "state"
+    legacy_path = root / "state.db"
+    current_path = root / "learnlab.db"
+    backup_path = root / "state.db.migrated"
+    legacy = StateStore(legacy_path)
+    legacy.initialize()
+    legacy.create_environment(
+        environment_fixture(
+            id="existing-env",
+            attempt_id=None,
+            phase=EnvironmentPhase.RUNNING,
+            vmid=102,
+            provider_endpoint="https://proxmox.example.test:8006",
+            provider_fingerprint="sha256:existing",
+            expected_vm_name="learnlab-proxmox-admin-102",
+        )
+    )
+    open_writer = sqlite3.connect(legacy_path, timeout=5.0, check_same_thread=False)
+    install_reached = threading.Event()
+    allow_install = threading.Event()
+    writer_finished = threading.Event()
+    migration_errors: list[BaseException] = []
+    writer_outcome: list[str] = []
+    real_link = state_module.os.link
+
+    def controlled_link(source: Path, destination: Path) -> None:
+        if Path(destination) == current_path:
+            install_reached.set()
+            if not allow_install.wait(timeout=5.0):
+                raise TimeoutError("test did not release migration install")
+        real_link(source, destination)
+
+    def migrate() -> None:
+        try:
+            state_module.resolve_default_state_db(root)
+        except BaseException as error:
+            migration_errors.append(error)
+
+    def write_late_environment() -> None:
+        try:
+            open_writer.execute(
+                """
+                INSERT INTO environments (
+                    id, collection_id, course_id, lesson_id, attempt_id,
+                    profile_name, provider_type, vmid, node, ip_address,
+                    phase, upid, error_summary, created_at, updated_at,
+                    provider_endpoint, provider_fingerprint,
+                    expected_vm_name, clone_uncertain
+                ) VALUES (
+                    'late-env', 'proxmox', 'late-course', 'late-lesson', NULL,
+                    'home-proxmox', 'proxmox', 103, 'pve02', NULL,
+                    'running', NULL, NULL,
+                    '2026-08-30T00:00:00Z', '2026-08-30T00:00:00Z',
+                    'https://proxmox.example.test:8006', 'sha256:late',
+                    'learnlab-late-course-103', 0
+                )
+                """
+            )
+            open_writer.commit()
+            writer_outcome.append("committed")
+        except sqlite3.Error as error:
+            open_writer.rollback()
+            writer_outcome.append(str(error))
+        finally:
+            open_writer.close()
+            writer_finished.set()
+
+    monkeypatch.setattr(state_module.os, "link", controlled_link)
+    migration_thread = threading.Thread(target=migrate)
+    writer_thread = threading.Thread(target=write_late_environment)
+    migration_thread.start()
+    assert install_reached.wait(timeout=5.0)
+    writer_thread.start()
+    writer_was_blocked = not writer_finished.wait(timeout=0.2)
+    allow_install.set()
+    migration_thread.join(timeout=5.0)
+    writer_thread.join(timeout=5.0)
+
+    assert not migration_thread.is_alive()
+    assert not writer_thread.is_alive()
+    assert migration_errors == []
+    assert writer_was_blocked is True
+    assert writer_outcome == ["legacy database migrated; reopen LearnLab"]
+    assert [record.id for record in StateStore(current_path).list_environments()] == [
+        "existing-env"
+    ]
+    with sqlite3.connect(current_path) as connection:
+        current_triggers = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+        ).fetchall()
+    assert current_triggers == []
+    with sqlite3.connect(backup_path) as connection:
+        assert connection.execute("SELECT id FROM environments").fetchall() == [
+            ("existing-env",)
+        ]
+        backup_triggers = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name"
+        ).fetchall()
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="legacy database migrated; reopen LearnLab",
+        ):
+            connection.execute(
+                "UPDATE environments SET node = 'late-node' WHERE id = 'existing-env'"
+            )
+    assert len(backup_triggers) == 9
 
 
 class InterleavingStateStore(StateStore):

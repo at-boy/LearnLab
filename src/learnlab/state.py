@@ -627,19 +627,34 @@ def _migrate_legacy_default_db(
     backup: Path,
     temporary: Path,
 ) -> None:
+    migration_lock: sqlite3.Connection | None = None
     try:
+        migration_lock = sqlite3.connect(legacy)
+        migration_lock.execute("BEGIN IMMEDIATE")
+        try:
+            _install_legacy_retirement_triggers(migration_lock)
+        except BaseException:
+            migration_lock.rollback()
+            raise
+        else:
+            migration_lock.commit()
+
+        # The committed triggers retire writers that raced between these two
+        # transactions. This second writer lock fences the snapshot through the
+        # durable installation of the new authoritative database.
+        migration_lock.execute("BEGIN IMMEDIATE")
         temporary.open("xb").close()
-        source = sqlite3.connect(legacy)
+        snapshot_source = sqlite3.connect(legacy)
         try:
             destination = sqlite3.connect(temporary)
             try:
-                source.backup(destination)
+                snapshot_source.backup(destination)
+                _remove_legacy_retirement_triggers(destination)
                 destination.commit()
             finally:
                 destination.close()
-            _require_complete_checkpoint(source, legacy)
         finally:
-            source.close()
+            snapshot_source.close()
 
         StateStore(temporary).initialize()
         migrated = sqlite3.connect(temporary)
@@ -657,17 +672,36 @@ def _migrate_legacy_default_db(
         temporary.unlink()
         _sync_directory(current.parent)
 
+        migration_lock.commit()
+        _require_complete_checkpoint(migration_lock, legacy)
+        migration_lock.close()
+        migration_lock = None
+
         os.link(legacy, backup)
         _sync_directory(current.parent)
         legacy.unlink()
         _sync_directory(current.parent)
     except (OSError, sqlite3.Error) as error:
+        if migration_lock is not None:
+            if migration_lock.in_transaction:
+                migration_lock.rollback()
+            migration_lock.close()
         raise StateConflictError(
             "State database migration stopped safely and requires manual recovery. "
             f"Preserve {legacy}, {current}, {backup}, and {temporary}; inspect which "
             "files exist, then leave exactly one authoritative database at "
             f"{current} before retrying."
         ) from error
+
+
+def _install_legacy_retirement_triggers(connection: sqlite3.Connection) -> None:
+    for statement in _LEGACY_RETIREMENT_TRIGGER_SQL:
+        connection.execute(statement)
+
+
+def _remove_legacy_retirement_triggers(connection: sqlite3.Connection) -> None:
+    for statement in _LEGACY_RETIREMENT_TRIGGER_DROP_SQL:
+        connection.execute(statement)
 
 
 def _require_complete_checkpoint(
@@ -741,6 +775,85 @@ def _migrate_environment_columns(connection: sqlite3.Connection) -> None:
             "ALTER TABLE environments "
             "ADD COLUMN clone_uncertain INTEGER NOT NULL DEFAULT 0"
         )
+
+
+_LEGACY_RETIREMENT_TRIGGER_SQL = (
+    """
+    CREATE TRIGGER IF NOT EXISTS learnlab_retired_progress_insert
+    BEFORE INSERT ON progress
+    BEGIN
+        SELECT RAISE(ABORT, 'legacy database migrated; reopen LearnLab');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS learnlab_retired_progress_update
+    BEFORE UPDATE ON progress
+    BEGIN
+        SELECT RAISE(ABORT, 'legacy database migrated; reopen LearnLab');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS learnlab_retired_progress_delete
+    BEFORE DELETE ON progress
+    BEGIN
+        SELECT RAISE(ABORT, 'legacy database migrated; reopen LearnLab');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS learnlab_retired_attempts_insert
+    BEFORE INSERT ON attempts
+    BEGIN
+        SELECT RAISE(ABORT, 'legacy database migrated; reopen LearnLab');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS learnlab_retired_attempts_update
+    BEFORE UPDATE ON attempts
+    BEGIN
+        SELECT RAISE(ABORT, 'legacy database migrated; reopen LearnLab');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS learnlab_retired_attempts_delete
+    BEFORE DELETE ON attempts
+    BEGIN
+        SELECT RAISE(ABORT, 'legacy database migrated; reopen LearnLab');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS learnlab_retired_environments_insert
+    BEFORE INSERT ON environments
+    BEGIN
+        SELECT RAISE(ABORT, 'legacy database migrated; reopen LearnLab');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS learnlab_retired_environments_update
+    BEFORE UPDATE ON environments
+    BEGIN
+        SELECT RAISE(ABORT, 'legacy database migrated; reopen LearnLab');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS learnlab_retired_environments_delete
+    BEFORE DELETE ON environments
+    BEGIN
+        SELECT RAISE(ABORT, 'legacy database migrated; reopen LearnLab');
+    END
+    """,
+)
+
+_LEGACY_RETIREMENT_TRIGGER_DROP_SQL = (
+    "DROP TRIGGER IF EXISTS learnlab_retired_progress_insert",
+    "DROP TRIGGER IF EXISTS learnlab_retired_progress_update",
+    "DROP TRIGGER IF EXISTS learnlab_retired_progress_delete",
+    "DROP TRIGGER IF EXISTS learnlab_retired_attempts_insert",
+    "DROP TRIGGER IF EXISTS learnlab_retired_attempts_update",
+    "DROP TRIGGER IF EXISTS learnlab_retired_attempts_delete",
+    "DROP TRIGGER IF EXISTS learnlab_retired_environments_insert",
+    "DROP TRIGGER IF EXISTS learnlab_retired_environments_update",
+    "DROP TRIGGER IF EXISTS learnlab_retired_environments_delete",
+)
 
 
 _PROGRESS_VALUES = ", ".join(f"'{status.value}'" for status in ProgressStatus)

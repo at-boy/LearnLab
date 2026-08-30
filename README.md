@@ -128,7 +128,15 @@ The current state database is `learnlab.db`. If LearnLab finds only the former
 default `state.db`, the next state command makes a WAL-aware SQLite backup,
 updates the copied schema, atomically installs `learnlab.db`, and preserves the
 original as `state.db.migrated`. Keep that backup until the migrated progress,
-attempts, and environments have been reviewed.
+attempts, and environments have been reviewed. Migration fences legacy writers
+while it takes and installs the snapshot. Commands that already had `state.db`
+open may then fail with `legacy database migrated; reopen LearnLab`; rerun the
+interrupted command so it opens `learnlab.db`.
+
+The preserved `state.db.migrated` rejects inserts, updates, and deletes to its
+progress, attempt, and environment rows. Treat it as a read-only recovery copy;
+the retirement guards prevent an old process from silently writing ownership
+state that is absent from the new authoritative database.
 
 LearnLab stops without changing state when both `state.db` and `learnlab.db`
 exist, or when it finds unfinished migration artifacts. Preserve every file,
