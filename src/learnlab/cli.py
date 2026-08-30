@@ -23,7 +23,7 @@ class LifecycleFactory(Protocol):
     def __call__(
         self,
         store: StateStore,
-        provider: Provider | Mapping[str, Provider],
+        provider: Provider | Mapping[str, Provider | Exception],
         state_root: Path,
         *,
         secrets: set[str] | None = None,
@@ -143,6 +143,12 @@ def destroy_all(
             "Error: choose exactly one of --preserve-progress or --erase-progress"
         )
         raise typer.Exit(code=2)
+    if not yes and preserve_progress:
+        typer.echo("Error: --preserve-progress requires --yes")
+        raise typer.Exit(code=2)
+    if not yes and erase_progress:
+        typer.echo("Error: --erase-progress requires --yes")
+        raise typer.Exit(code=2)
     if yes and not (preserve_progress or erase_progress):
         typer.echo(
             "Error: --yes requires --preserve-progress or --erase-progress"
@@ -150,8 +156,8 @@ def destroy_all(
         raise typer.Exit(code=2)
 
     store = state_store_factory()
-    store.initialize()
-    targets = store.list_environments()
+    state_exists = store.db_path.exists()
+    targets = tuple(store.list_environments()) if state_exists else ()
     typer.echo("Destroy targets:")
     if not targets:
         typer.echo("  No recorded environments")
@@ -178,25 +184,42 @@ def destroy_all(
             "Preserve completed lessons?", default=True
         )
 
+    if not state_exists:
+        typer.echo("Destroyed environments: 0")
+        return
+
     secrets: set[str] = set()
-    try:
-        providers: dict[str, Provider] = {}
-        if targets:
+    providers: dict[str, Provider | Exception] = {}
+    if targets:
+        profile_names = tuple(
+            dict.fromkeys(target.profile_name for target in targets)
+        )
+        try:
             settings = load_settings()
-            for profile_name in dict.fromkeys(
-                target.profile_name for target in targets
-            ):
-                profile = settings.provider(profile_name)
-                secret = resolve_token_secret(profile)
-                secrets.add(secret)
-                providers[profile_name] = provider_factory(settings, profile_name)
+        except LearnLabError as error:
+            providers.update(
+                (profile_name, error) for profile_name in profile_names
+            )
+        else:
+            for profile_name in profile_names:
+                try:
+                    profile = settings.provider(profile_name)
+                    secret = resolve_token_secret(profile)
+                    secrets.add(secret)
+                    providers[profile_name] = provider_factory(
+                        settings, profile_name
+                    )
+                except LearnLabError as error:
+                    providers[profile_name] = error
+
+    try:
         lifecycle = lifecycle_factory(
             store,
             providers,
             state_root(),
             secrets=secrets,
         )
-        summary = lifecycle.destroy_all(preserve_completed)
+        summary = lifecycle.destroy_all(preserve_completed, targets)
     except LearnLabError as error:
         _exit_with_error(error, secrets)
 

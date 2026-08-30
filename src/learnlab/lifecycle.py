@@ -80,7 +80,7 @@ class LifecycleService:
     def __init__(
         self,
         store: StateStore,
-        provider: Provider | Mapping[str, Provider],
+        provider: Provider | Mapping[str, Provider | Exception],
         state_root: Path,
         *,
         secrets: set[str] | None = None,
@@ -181,12 +181,16 @@ class LifecycleService:
                 "Run learnlab destroy to clean it up."
             ) from None
 
-    def destroy_all(self, preserve_completed: bool) -> DestroySummary:
-        """Destroy every recorded environment and then clear transient state."""
+    def destroy_all(
+        self,
+        preserve_completed: bool,
+        confirmed_environments: tuple[EnvironmentRecord, ...],
+    ) -> DestroySummary:
+        """Destroy the confirmed environment snapshot, then clear transient state."""
         destroyed: list[str] = []
         failed: list[str] = []
 
-        for environment in self._store.list_environments():
+        for environment in confirmed_environments:
             try:
                 self._destroy_environment(environment)
             except Exception as error:
@@ -266,11 +270,14 @@ class LifecycleService:
         if not isinstance(self._provider, Mapping):
             return self._provider
         try:
-            return self._provider[profile_name]
+            provider = self._provider[profile_name]
         except KeyError:
             raise LifecycleError(
                 f"No provider available for recorded profile {profile_name}"
             ) from None
+        if isinstance(provider, Exception):
+            raise provider
+        return provider
 
 
 def _vm_name(course_id: str, vmid: int) -> str:

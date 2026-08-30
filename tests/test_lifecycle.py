@@ -10,7 +10,7 @@ from conftest import RecordingProvider
 
 from learnlab.config import ProxmoxProfile
 from learnlab.curriculum import Course, Lesson, Step
-from learnlab.errors import ProviderError, ProviderTaskFailed
+from learnlab.errors import ConfigurationError, ProviderError, ProviderTaskFailed
 from learnlab.lifecycle import LifecycleError, LifecycleService, StartRequest
 from learnlab.providers.base import VmLocation
 from learnlab.ssh import create_known_hosts, render_ssh_command
@@ -328,7 +328,9 @@ def test_destroy_stops_running_vm_then_deletes_and_clears_record(
         {102: VmLocation(node="pve02", status="running")}
     )
 
-    summary = LifecycleService(store, provider, tmp_path).destroy_all(True)
+    summary = LifecycleService(store, provider, tmp_path).destroy_all(
+        True, tuple(store.list_environments())
+    )
 
     assert provider.operations == [
         "locate:102",
@@ -357,7 +359,9 @@ def test_destroy_absent_vm_clears_local_environment_without_delete(
     (environment_dir / "known_hosts").write_text("host key\n")
     provider = DestroyRecordingProvider({})
 
-    summary = LifecycleService(store, provider, tmp_path).destroy_all(True)
+    summary = LifecycleService(store, provider, tmp_path).destroy_all(
+        True, tuple(store.list_environments())
+    )
 
     assert provider.operations == ["locate:102"]
     assert summary.destroyed == ["env-1"]
@@ -384,7 +388,9 @@ def test_destroy_failure_retains_record_and_continues(
     )
     provider.fail_for_vmid(102)
 
-    summary = LifecycleService(store, provider, tmp_path).destroy_all(True)
+    summary = LifecycleService(store, provider, tmp_path).destroy_all(
+        True, tuple(store.list_environments())
+    )
 
     assert summary.failed == ["env-102"]
     assert summary.destroyed == ["env-103"]
@@ -409,7 +415,9 @@ def test_destroy_rejects_empty_environment_id_without_removing_shared_directory(
     sentinel.write_text("retained\n")
     provider = DestroyRecordingProvider({})
 
-    summary = LifecycleService(store, provider, tmp_path).destroy_all(True)
+    summary = LifecycleService(store, provider, tmp_path).destroy_all(
+        True, tuple(store.list_environments())
+    )
 
     assert summary.failed == [""]
     assert sentinel.read_text() == "retained\n"
@@ -436,7 +444,9 @@ def test_destroy_persists_destructive_phase_before_provider_mutation(
     )
     provider.fail_on(failing_operation, ProviderError("provider refused"))
 
-    summary = LifecycleService(store, provider, tmp_path).destroy_all(True)
+    summary = LifecycleService(store, provider, tmp_path).destroy_all(
+        True, tuple(store.list_environments())
+    )
 
     retained = store.get_environment("env-1")
     assert summary.failed == ["env-1"]
@@ -455,7 +465,9 @@ def test_destroy_retains_record_when_vm_remains_after_delete(
     )
     provider.delete_removes_vm = False
 
-    summary = LifecycleService(store, provider, tmp_path).destroy_all(True)
+    summary = LifecycleService(store, provider, tmp_path).destroy_all(
+        True, tuple(store.list_environments())
+    )
 
     assert summary.failed == ["env-1"]
     assert store.get_environment("env-1") is not None
@@ -474,7 +486,9 @@ def test_destroy_partial_failure_leaves_all_progress_and_attempts_untouched(
     )
     provider.fail_for_vmid(102)
 
-    LifecycleService(store, provider, tmp_path).destroy_all(True)
+    LifecycleService(store, provider, tmp_path).destroy_all(
+        True, tuple(store.list_environments())
+    )
 
     assert store.lesson_statuses("proxmox", "proxmox-admin") == {
         "api-access": ProgressStatus.COMPLETED,
@@ -491,7 +505,9 @@ def test_destroy_success_preserves_only_completed_progress(
     store.create_attempt("proxmox", "proxmox-admin", "api-access")
     seed_environment(store, environment_id="env-1", vmid=102, node="pve02")
 
-    LifecycleService(store, DestroyRecordingProvider({}), tmp_path).destroy_all(True)
+    LifecycleService(store, DestroyRecordingProvider({}), tmp_path).destroy_all(
+        True, tuple(store.list_environments())
+    )
 
     assert store.lesson_statuses("proxmox", "proxmox-admin") == {
         "api-access": ProgressStatus.COMPLETED,
@@ -531,7 +547,7 @@ def test_destroy_routes_each_environment_to_its_recorded_provider_profile(
             "lab-proxmox": lab_provider,
         },
         tmp_path,
-    ).destroy_all(True)
+    ).destroy_all(True, tuple(store.list_environments()))
 
     assert summary.destroyed == ["env-home", "env-lab"]
     assert home_provider.operations == [
@@ -546,6 +562,85 @@ def test_destroy_routes_each_environment_to_its_recorded_provider_profile(
         "wait:delete",
         "locate:102",
     ]
+
+
+def test_destroy_touches_only_the_immutable_confirmed_snapshot(
+    store: StateStore, tmp_path: Path
+) -> None:
+    seed_environment(store, environment_id="env-confirmed", vmid=102, node="pve02")
+    confirmed = tuple(store.list_environments())
+    seed_environment(
+        store,
+        environment_id="env-later",
+        course_id="linux-basics",
+        vmid=103,
+        node="pve03",
+    )
+    provider = DestroyRecordingProvider(
+        {
+            102: VmLocation(node="pve02", status="stopped"),
+            103: VmLocation(node="pve03", status="stopped"),
+        }
+    )
+
+    summary = LifecycleService(store, provider, tmp_path).destroy_all(
+        True, confirmed
+    )
+
+    assert summary.destroyed == ["env-confirmed"]
+    assert summary.failed == []
+    assert provider.operations == [
+        "locate:102",
+        "delete:102",
+        "wait:delete",
+        "locate:102",
+    ]
+    assert store.get_environment("env-confirmed") is None
+    assert store.get_environment("env-later") is not None
+
+
+def test_destroy_provider_resolution_failure_retains_target_and_continues(
+    store: StateStore, tmp_path: Path
+) -> None:
+    seed_environment(
+        store,
+        environment_id="env-invalid",
+        profile_name="missing-secret",
+        vmid=102,
+        node="pve02",
+    )
+    seed_environment(
+        store,
+        environment_id="env-valid",
+        profile_name="home-proxmox",
+        course_id="linux-basics",
+        vmid=103,
+        node="pve03",
+    )
+    confirmed = tuple(store.list_environments())
+    valid_provider = DestroyRecordingProvider(
+        {103: VmLocation(node="pve03", status="stopped")}
+    )
+
+    summary = LifecycleService(
+        store,
+        {
+            "missing-secret": ConfigurationError(
+                "secret-value is unavailable"
+            ),
+            "home-proxmox": valid_provider,
+        },
+        tmp_path,
+        secrets={"secret-value"},
+    ).destroy_all(True, confirmed)
+
+    retained = store.get_environment("env-invalid")
+    assert summary.failed == ["env-invalid"]
+    assert summary.destroyed == ["env-valid"]
+    assert retained is not None
+    assert retained.phase is EnvironmentPhase.FAILED
+    assert retained.error_summary == "[REDACTED] is unavailable"
+    assert store.get_environment("env-valid") is None
 
 
 def seed_environment(

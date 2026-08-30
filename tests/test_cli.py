@@ -51,6 +51,20 @@ network = "vmbr0"
 ssh_user = "student"
 ssh_identity_file = "~/.ssh/learning-platform"
 tls_verify = true
+
+[providers.missing-secret]
+type = "proxmox"
+api_url = "https://missing-secret.example.test:8006/api2/json"
+token_id = "learnlab@pam!automation"
+token_secret_env = "LEARNLAB_MISSING_SECRET"
+template_vmid = 9001
+template_name = "debian-12-learning"
+node = "missing-pve"
+storage = "local-lvm"
+network = "vmbr0"
+ssh_user = "student"
+ssh_identity_file = "~/.ssh/learning-platform"
+tls_verify = true
 '''
 
 
@@ -68,6 +82,32 @@ class FailedHealthProvider:
 
     def health_check(self) -> ProviderHealth:
         return self._health
+
+
+class CliDestroyProvider:
+    """Behavioral destroy provider used by CLI/lifecycle integration tests."""
+
+    def __init__(self, vmid: int, node: str) -> None:
+        self.vmid = vmid
+        self.node = node
+        self.present = True
+        self.operations: list[str] = []
+
+    def locate_vm(self, vmid: int):
+        from learnlab.providers.base import VmLocation
+
+        self.operations.append(f"locate:{vmid}")
+        if not self.present:
+            return None
+        return VmLocation(node=self.node, status="stopped")
+
+    def delete(self, vmid: int, node: str) -> str:
+        self.operations.append(f"delete:{vmid}")
+        self.present = False
+        return "delete"
+
+    def wait_for_task(self, node: str, upid: str, timeout: float) -> None:
+        self.operations.append(f"wait:{upid}")
 
 
 class RecordingCatalog:
@@ -95,6 +135,7 @@ class RecordingLifecycle:
     requests: RequestLog = field(default_factory=RequestLog)
     failure: LifecycleError | None = None
     destroy_choices: list[bool] = field(default_factory=list)
+    destroy_targets: list[tuple[str, ...]] = field(default_factory=list)
     destroy_summary: DestroySummary | None = None
 
     def start(self, request: StartRequest) -> StartedEnvironment:
@@ -112,14 +153,22 @@ class RecordingLifecycle:
             ),
         )
 
-    def destroy_all(self, preserve_completed: bool) -> DestroySummary:
+    def destroy_all(
+        self,
+        preserve_completed: bool,
+        confirmed_environments: tuple[EnvironmentRecord, ...],
+    ) -> DestroySummary:
         self.destroy_choices.append(preserve_completed)
+        self.destroy_targets.append(
+            tuple(environment.id for environment in confirmed_environments)
+        )
         if self.destroy_summary is not None:
             return self.destroy_summary
-        destroyed = [environment.id for environment in self.store.list_environments()]
+        destroyed = [environment.id for environment in confirmed_environments]
         for environment_id in destroyed:
             self.store.delete_environment(environment_id)
-        self.store.erase_all(preserve_completed)
+        if not self.store.list_environments():
+            self.store.erase_all(preserve_completed)
         return DestroySummary(destroyed=destroyed, failed=[])
 
 
@@ -608,6 +657,12 @@ def test_destroy_constructs_every_recorded_provider_profile(
         profile_name="lab-proxmox",
         vmid=102,
     )
+    app_harness.seed_environment(
+        environment_id="env-home-two",
+        course_id="networking-basics",
+        profile_name="home-proxmox",
+        vmid=104,
+    )
 
     result = app_harness.invoke(
         ["destroy", "--yes", "--preserve-progress"]
@@ -615,6 +670,147 @@ def test_destroy_constructs_every_recorded_provider_profile(
 
     assert result.exit_code == 0
     assert app_harness.provider_profiles == ["home-proxmox", "lab-proxmox"]
+
+
+def test_destroy_passes_only_the_pre_confirmation_snapshot(
+    app_harness: AppHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from learnlab import cli
+
+    app_harness.seed_environment(
+        environment_id="env-confirmed",
+        course_id="proxmox-admin",
+        vmid=102,
+    )
+
+    def inserting_provider_factory(settings, profile_name: str):
+        app_harness.seed_environment(
+            environment_id="env-later",
+            course_id="linux-basics",
+            vmid=103,
+        )
+        return object()
+
+    monkeypatch.setattr(cli, "provider_factory", inserting_provider_factory)
+
+    result = app_harness.invoke(
+        ["destroy", "--yes", "--preserve-progress"]
+    )
+
+    assert result.exit_code == 0
+    assert app_harness.lifecycle.destroy_targets == [("env-confirmed",)]
+    assert app_harness.store.get_environment("env-confirmed") is None
+    assert app_harness.store.get_environment("env-later") is not None
+
+
+def test_destroy_missing_secret_profile_does_not_block_valid_target(
+    app_harness: AppHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from learnlab import cli
+    from learnlab.lifecycle import LifecycleService
+
+    app_harness.seed_environment(
+        environment_id="env-invalid",
+        profile_name="missing-secret",
+        course_id="proxmox-admin",
+        vmid=102,
+    )
+    app_harness.seed_environment(
+        environment_id="env-valid",
+        profile_name="home-proxmox",
+        course_id="linux-basics",
+        vmid=103,
+        node="pve03",
+    )
+    valid_provider = CliDestroyProvider(103, "pve03")
+    constructed_profiles: list[str] = []
+
+    def provider_factory(settings, profile_name: str):
+        constructed_profiles.append(profile_name)
+        assert profile_name == "home-proxmox"
+        return valid_provider
+
+    monkeypatch.setattr(cli, "provider_factory", provider_factory)
+    monkeypatch.setattr(cli, "lifecycle_factory", LifecycleService)
+
+    result = app_harness.invoke(
+        ["destroy", "--yes", "--preserve-progress"]
+    )
+
+    retained = app_harness.store.get_environment("env-invalid")
+    assert result.exit_code == 3
+    assert constructed_profiles == ["home-proxmox"]
+    assert valid_provider.operations == [
+        "locate:103",
+        "delete:103",
+        "wait:delete",
+        "locate:103",
+    ]
+    assert retained is not None
+    assert retained.phase is EnvironmentPhase.FAILED
+    assert "LEARNLAB_MISSING_SECRET" in (retained.error_summary or "")
+    assert app_harness.store.get_environment("env-valid") is None
+    assert "Retained environment: env-invalid" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("arguments", "user_input", "expects_progress_prompt"),
+    [
+        (["destroy"], "n\n", False),
+        (["destroy"], "y\n\n", True),
+        (["destroy", "--yes", "--preserve-progress"], None, False),
+    ],
+)
+def test_destroy_fresh_state_does_not_create_database(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+    arguments: list[str],
+    user_input: str | None,
+    expects_progress_prompt: bool,
+) -> None:
+    from learnlab import cli
+
+    fresh_state_root = tmp_xdg / "fresh-state" / "learnlab"
+    monkeypatch.setattr(cli, "state_root", lambda: fresh_state_root)
+    monkeypatch.setattr(
+        cli,
+        "state_store_factory",
+        lambda: StateStore(fresh_state_root / "state.db"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "provider_factory",
+        lambda *args, **kwargs: pytest.fail("provider must not be constructed"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "lifecycle_factory",
+        lambda *args, **kwargs: pytest.fail("lifecycle must not be constructed"),
+    )
+
+    result = CliRunner().invoke(cli.app, arguments, input=user_input)
+
+    assert result.exit_code == 0
+    assert ("Preserve completed lessons" in result.stdout) is expects_progress_prompt
+    assert not fresh_state_root.exists()
+
+
+@pytest.mark.parametrize("policy_flag", ["--preserve-progress", "--erase-progress"])
+def test_destroy_interactive_policy_flags_are_rejected_without_yes(
+    app_harness: AppHarness,
+    policy_flag: str,
+) -> None:
+    app_harness.seed_environment(vmid=102)
+
+    result = app_harness.invoke(["destroy", policy_flag], input="y\ny\n")
+
+    assert result.exit_code == 2
+    assert f"{policy_flag} requires --yes" in result.stdout
+    assert app_harness.lifecycle.destroy_choices == []
+    assert app_harness.provider_profiles == []
+    assert app_harness.store.get_environment("env-1") is not None
 
 
 def test_reset_course_lists_scope_and_counts_before_confirmation(
