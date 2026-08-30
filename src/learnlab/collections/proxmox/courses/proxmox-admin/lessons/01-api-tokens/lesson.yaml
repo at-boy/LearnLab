@@ -3,13 +3,22 @@ title: Use Dedicated API Identities
 steps:
   - id: understand-token-identity
     title: Understand dedicated identities
-    content: >-
+    instructions: >-
       A dedicated automation identity separates program activity from a human
       administrator account. This makes permissions and audit records easier
       to review.
+    verifications:
+      - id: understand-token-boundary
+        type: text-evidence
+        prompt: Why use a dedicated automation identity?
+        matches: '(?i)separat|audit|permission'
   - id: apply-least-privilege
     title: Apply least privilege
-    content: >-
+    instructions: >-
       Grant an automation identity only the permissions required for its
       assigned learning task. Review those permissions regularly and revoke
       access when the task ends.
+    verifications:
+      - id: reviewed-least-privilege
+        type: manual-confirmation
+        prompt: Confirm that you reviewed the least-privilege guidance.

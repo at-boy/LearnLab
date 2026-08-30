@@ -1,5 +1,8 @@
 id: proxmox-admin
 title: Proxmox Administration Foundations
+environment:
+  scope: course
+  provider_capability: proxmox.vm
 requirements:
   - proxmox.api
 lessons:

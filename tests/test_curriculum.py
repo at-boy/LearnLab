@@ -1,11 +1,108 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
 
-from learnlab.curriculum import CurriculumCatalog, CurriculumError
+from learnlab.curriculum import (
+    MAX_EVIDENCE_BYTES,
+    CurriculumCatalog,
+    CurriculumError,
+    EnvironmentScope,
+    VerificationType,
+)
+
+REMOTE_A = {
+    "id": "check-release",
+    "type": "remote-command",
+    "command": "test -f /etc/os-release",
+}
+REMOTE_B = {
+    "id": "check-ssh",
+    "type": "remote-command",
+    "command": "systemctl is-active --quiet sshd",
+}
+TEXT_EVIDENCE = {
+    "id": "explain-result",
+    "type": "text-evidence",
+    "prompt": "What does the operating system ID identify?",
+    "matches": "(?i)linux",
+}
+
+
+class CurriculumBuilder:
+    """Build a complete, small on-disk curriculum for loader tests."""
+
+    def __init__(self, collections_dir: Path) -> None:
+        self.collections_dir = collections_dir
+        self.course_data: dict[str, Any] = {
+            "id": "admin",
+            "title": "Administration",
+            "environment": {"scope": "course", "provider_capability": "proxmox.vm"},
+            "lessons": ["first"],
+        }
+        self.lesson_data: dict[str, Any] = {
+            "id": "first",
+            "title": "First lesson",
+            "steps": [
+                {
+                    "id": "inspect",
+                    "title": "Inspect",
+                    "instructions": "Inspect the system.",
+                    "verifications": [REMOTE_A, REMOTE_B, TEXT_EVIDENCE],
+                }
+            ],
+        }
+
+    def course_environment(self, environment: dict[str, Any]) -> CurriculumBuilder:
+        self.course_data["environment"] = environment
+        return self
+
+    def scope(self, scope: str) -> CurriculumBuilder:
+        environment: dict[str, Any] = {"scope": scope}
+        if scope != "none":
+            environment["provider_capability"] = "proxmox.vm"
+        return self.course_environment(environment)
+
+    def lesson_environment(self, environment: dict[str, Any]) -> CurriculumBuilder:
+        self.lesson_data["environment"] = environment
+        return self
+
+    def verifications(self, verifications: list[dict[str, Any]]) -> CurriculumBuilder:
+        self.lesson_data["steps"][0]["verifications"] = verifications
+        return self
+
+    def load(self):
+        collection_dir = self.collections_dir / "demo"
+        course_dir = collection_dir / "courses" / "admin"
+        lesson_dir = course_dir / "lessons" / "00-first"
+        lesson_dir.mkdir(parents=True)
+        (collection_dir / "collection.yaml").write_text(
+            yaml.safe_dump({"id": "demo", "title": "Demo"}, sort_keys=False),
+            encoding="utf-8",
+        )
+        (course_dir / "course.yaml").write_text(
+            yaml.safe_dump(self.course_data, sort_keys=False), encoding="utf-8"
+        )
+        (lesson_dir / "lesson.yaml").write_text(
+            yaml.safe_dump(self.lesson_data, sort_keys=False), encoding="utf-8"
+        )
+        return CurriculumCatalog(self.collections_dir).load_course("demo/admin")
+
+
+@pytest.fixture
+def curriculum_builder(tmp_path: Path) -> CurriculumBuilder:
+    return CurriculumBuilder(tmp_path / "collections")
+
+
+@pytest.fixture
+def tmp_curriculum(curriculum_builder: CurriculumBuilder):
+    curriculum_builder.lesson_environment({"scope": "none"}).verifications(
+        [TEXT_EVIDENCE]
+    )
+    return curriculum_builder
 
 
 @pytest.fixture
@@ -40,6 +137,208 @@ def test_first_incomplete_returns_first_lesson_when_all_are_completed(course):
 
 def test_course_loads_abstract_capability_requirements(course):
     assert course.requirements == ("proxmox.api",)
+
+
+def test_lesson_environment_override_wins_over_course(tmp_curriculum):
+    loaded = tmp_curriculum.load()
+    assert loaded.environment.scope is EnvironmentScope.COURSE
+    assert (
+        loaded.effective_environment(loaded.lessons[0]).scope
+        is EnvironmentScope.NONE
+    )
+
+
+@pytest.mark.parametrize("scope", ["course", "lesson"])
+def test_vm_scope_requires_provider_capability(
+    scope: str, curriculum_builder: CurriculumBuilder
+) -> None:
+    curriculum_builder.course_environment({"scope": scope})
+
+    with pytest.raises(CurriculumError, match="provider_capability"):
+        curriculum_builder.load()
+
+
+def test_none_scope_forbids_provider_capability(
+    curriculum_builder: CurriculumBuilder,
+) -> None:
+    curriculum_builder.course_environment(
+        {"scope": "none", "provider_capability": "proxmox.vm"}
+    )
+
+    with pytest.raises(CurriculumError, match="forbidden"):
+        curriculum_builder.load()
+
+
+def test_step_accepts_repeated_validator_types_in_order(course):
+    checks = course.lessons[0].steps[0].verifications
+    assert [item.type for item in checks] == [
+        VerificationType.REMOTE_COMMAND,
+        VerificationType.REMOTE_COMMAND,
+        VerificationType.TEXT_EVIDENCE,
+    ]
+
+
+def test_duplicate_verification_ids_are_rejected(
+    curriculum_builder: CurriculumBuilder,
+) -> None:
+    curriculum_builder.verifications([REMOTE_A, REMOTE_A])
+
+    with pytest.raises(CurriculumError, match="duplicate verification id"):
+        curriculum_builder.load()
+
+
+def test_remote_command_is_rejected_for_effective_none_scope(
+    curriculum_builder: CurriculumBuilder,
+) -> None:
+    curriculum_builder.scope("none").verifications([REMOTE_A])
+
+    with pytest.raises(CurriculumError, match="requires an environment"):
+        curriculum_builder.load()
+
+
+@pytest.mark.parametrize(
+    ("verification", "message"),
+    [
+        ({"id": "check", "type": "remote-command"}, "command"),
+        (
+            {**REMOTE_A, "prompt": "Explain"},
+            "forbidden",
+        ),
+        (
+            {
+                "id": "evidence",
+                "type": "text-evidence",
+                "prompt": "Explain",
+            },
+            "exactly one",
+        ),
+        (
+            {**TEXT_EVIDENCE, "command": "hostname"},
+            "forbidden",
+        ),
+        ({"id": "confirm", "type": "manual-confirmation"}, "prompt"),
+        (
+            {
+                "id": "confirm",
+                "type": "manual-confirmation",
+                "prompt": "Review it",
+                "check": "guest-agent-ready",
+            },
+            "forbidden",
+        ),
+        ({"id": "provider", "type": "provider-check"}, "check"),
+        (
+            {
+                "id": "provider",
+                "type": "provider-check",
+                "check": "guest-agent-ready",
+                "timeout_seconds": 10,
+            },
+            "forbidden",
+        ),
+    ],
+)
+def test_verification_type_schemas_require_and_forbid_fields(
+    verification: dict[str, Any], message: str, curriculum_builder: CurriculumBuilder
+) -> None:
+    curriculum_builder.verifications([verification])
+
+    with pytest.raises(CurriculumError, match=message):
+        curriculum_builder.load()
+
+
+@pytest.mark.parametrize(
+    "verification",
+    [
+        {**TEXT_EVIDENCE, "equals": "linux"},
+        {
+            "id": "evidence",
+            "type": "text-evidence",
+            "prompt": "Explain",
+            "equals": "linux",
+            "matches": "linux",
+        },
+    ],
+)
+def test_text_evidence_requires_exactly_one_match_rule(
+    verification: dict[str, Any], curriculum_builder: CurriculumBuilder
+) -> None:
+    curriculum_builder.verifications([verification])
+
+    with pytest.raises(CurriculumError, match="exactly one"):
+        curriculum_builder.load()
+
+
+def test_text_evidence_rejects_invalid_regular_expression(
+    curriculum_builder: CurriculumBuilder,
+) -> None:
+    curriculum_builder.verifications([{**TEXT_EVIDENCE, "matches": "("}])
+
+    with pytest.raises(CurriculumError, match="regular expression"):
+        curriculum_builder.load()
+
+
+@pytest.mark.parametrize("timeout_seconds", [0, 301, True])
+def test_remote_command_timeout_must_be_between_one_and_300_seconds(
+    timeout_seconds: object, curriculum_builder: CurriculumBuilder
+) -> None:
+    curriculum_builder.verifications([{**REMOTE_A, "timeout_seconds": timeout_seconds}])
+
+    with pytest.raises(CurriculumError, match="timeout_seconds"):
+        curriculum_builder.load()
+
+
+def test_remote_command_timeout_defaults_to_30_seconds(
+    curriculum_builder: CurriculumBuilder,
+) -> None:
+    verification = curriculum_builder.verifications([REMOTE_A]).load().lessons[0].steps[
+        0
+    ].verifications[0]
+
+    assert verification.timeout_seconds == 30
+
+
+def test_text_evidence_limit_is_eight_kib() -> None:
+    assert MAX_EVIDENCE_BYTES == 8 * 1024
+
+
+@pytest.mark.parametrize(
+    ("verifications", "message"),
+    [
+        ([], "verifications must not be empty"),
+        ([{"id": "unknown", "type": "does-not-exist"}], "type"),
+        ([{**REMOTE_A, "unknown": "value"}], "unknown keys"),
+    ],
+)
+def test_step_rejects_invalid_verification_lists(
+    verifications: list[dict[str, Any]],
+    message: str,
+    curriculum_builder: CurriculumBuilder,
+) -> None:
+    curriculum_builder.verifications(verifications)
+
+    with pytest.raises(CurriculumError, match=message):
+        curriculum_builder.load()
+
+
+def test_content_is_a_loader_only_migration_alias(
+    curriculum_builder: CurriculumBuilder,
+) -> None:
+    step = curriculum_builder.lesson_data["steps"][0]
+    step["content"] = step.pop("instructions")
+
+    loaded = curriculum_builder.load()
+
+    assert loaded.lessons[0].steps[0].instructions == "Inspect the system."
+
+
+def test_step_rejects_both_content_and_instructions(
+    curriculum_builder: CurriculumBuilder,
+) -> None:
+    curriculum_builder.lesson_data["steps"][0]["content"] = "Legacy instructions"
+
+    with pytest.raises(CurriculumError, match="content"):
+        curriculum_builder.load()
 
 
 @pytest.mark.parametrize("invalid_path", ["proxmox", "a/b/c", "/proxmox-admin"])
