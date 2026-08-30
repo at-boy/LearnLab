@@ -35,6 +35,7 @@ class LifecycleFactory(Protocol):
         secrets: set[str] | None = None,
     ) -> LifecycleService: ...
 
+
 app = typer.Typer()
 provider_app = typer.Typer()
 progress_app = typer.Typer()
@@ -156,9 +157,7 @@ def destroy_all(
         typer.echo("Error: --erase-progress requires --yes")
         raise typer.Exit(code=2)
     if yes and not (preserve_progress or erase_progress):
-        typer.echo(
-            "Error: --yes requires --preserve-progress or --erase-progress"
-        )
+        typer.echo("Error: --yes requires --preserve-progress or --erase-progress")
         raise typer.Exit(code=2)
 
     store = state_store_factory()
@@ -186,9 +185,7 @@ def destroy_all(
     elif erase_progress:
         preserve_completed = False
     else:
-        preserve_completed = typer.confirm(
-            "Preserve completed lessons?", default=True
-        )
+        preserve_completed = typer.confirm("Preserve completed lessons?", default=True)
 
     if not state_exists:
         typer.echo("Destroyed environments: 0")
@@ -197,9 +194,7 @@ def destroy_all(
     secrets: set[str] = set()
     providers: dict[str, Provider | Exception] = {}
     if targets:
-        profile_names = tuple(
-            dict.fromkeys(target.profile_name for target in targets)
-        )
+        profile_names = tuple(dict.fromkeys(target.profile_name for target in targets))
         loaded_profiles = load_requested_profiles(profile_names)
         providers.update(loaded_profiles.errors)
         for profile_name in profile_names:
@@ -304,9 +299,7 @@ def progress_complete(lesson_path: str) -> None:
     typer.echo(f"Completed: {lesson_path}")
 
 
-def _default_lesson_index(
-    course: Course, statuses: dict[str, ProgressStatus]
-) -> int:
+def _default_lesson_index(course: Course, statuses: dict[str, ProgressStatus]) -> int:
     for index, lesson in enumerate(course.lessons):
         if statuses.get(lesson.id) is not ProgressStatus.COMPLETED:
             return index
@@ -355,9 +348,7 @@ def _split_lesson_path(lesson_path: str) -> tuple[str, str, str]:
 def _split_reset_scope(scope: str) -> tuple[str, str | None]:
     pieces = scope.split("/")
     if len(pieces) not in {1, 2} or not all(pieces):
-        raise CurriculumError(
-            "Reset scope must use collection or collection/course"
-        )
+        raise CurriculumError("Reset scope must use collection or collection/course")
     return pieces[0], pieces[1] if len(pieces) == 2 else None
 
 
@@ -381,20 +372,14 @@ def _reset_scope_counts(
     if course_id is not None and store.lesson_statuses(collection_id, course_id):
         course_ids.add(course_id)
 
-    lessons = {
-        (attempt.course_id, attempt.lesson_id)
-        for attempt in attempts
-    }
+    lessons = {(attempt.course_id, attempt.lesson_id) for attempt in attempts}
     lessons.update(
-        (environment.course_id, environment.lesson_id)
-        for environment in environments
+        (environment.course_id, environment.lesson_id) for environment in environments
     )
     for retained_course_id in course_ids:
         lessons.update(
             (retained_course_id, lesson_id)
-            for lesson_id in store.lesson_statuses(
-                collection_id, retained_course_id
-            )
+            for lesson_id in store.lesson_statuses(collection_id, retained_course_id)
         )
     return len(course_ids), len(lessons)
 

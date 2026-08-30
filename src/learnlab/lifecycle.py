@@ -92,9 +92,12 @@ class LifecycleService:
 
     def start(self, request: StartRequest) -> StartedEnvironment:
         """Create and start one disposable environment for the selected lesson."""
-        if self._store.active_environment(
-            request.course.collection_id, request.course.id
-        ) is not None:
+        if (
+            self._store.active_environment(
+                request.course.collection_id, request.course.id
+            )
+            is not None
+        ):
             raise StateConflictError(
                 "Course already has an environment; run learnlab destroy first"
             )
@@ -124,9 +127,7 @@ class LifecycleService:
             self._store.transition_environment(
                 environment_id, EnvironmentPhase.ALLOCATING, vmid=vmid
             )
-            clone_upid = provider.clone(
-                vmid, _vm_name(request.course.id, vmid)
-            )
+            clone_upid = provider.clone(vmid, _vm_name(request.course.id, vmid))
             self._store.transition_environment(
                 environment_id,
                 EnvironmentPhase.CLONING,
@@ -147,12 +148,8 @@ class LifecycleService:
             self._store.transition_environment(
                 environment_id, EnvironmentPhase.STARTING, upid=start_upid
             )
-            provider.wait_for_task(
-                location.node, start_upid, _TASK_TIMEOUT_SECONDS
-            )
-            self._store.transition_environment(
-                environment_id, EnvironmentPhase.RUNNING
-            )
+            provider.wait_for_task(location.node, start_upid, _TASK_TIMEOUT_SECONDS)
+            self._store.transition_environment(environment_id, EnvironmentPhase.RUNNING)
             ip_address = provider.wait_for_ipv4(
                 vmid, location.node, _GUEST_TIMEOUT_SECONDS
             )
@@ -230,9 +227,7 @@ class LifecycleService:
                 EnvironmentPhase.STOPPING,
                 upid=stop_upid,
             )
-            provider.wait_for_task(
-                location.node, stop_upid, _TASK_TIMEOUT_SECONDS
-            )
+            provider.wait_for_task(location.node, stop_upid, _TASK_TIMEOUT_SECONDS)
 
         self._store.transition_environment(
             environment.id,
@@ -245,9 +240,7 @@ class LifecycleService:
             EnvironmentPhase.DELETING,
             upid=delete_upid,
         )
-        provider.wait_for_task(
-            location.node, delete_upid, _TASK_TIMEOUT_SECONDS
-        )
+        provider.wait_for_task(location.node, delete_upid, _TASK_TIMEOUT_SECONDS)
         if provider.locate_vm(environment.vmid) is not None:
             raise LifecycleError(
                 f"Provider still reports VM {environment.vmid} after deletion"

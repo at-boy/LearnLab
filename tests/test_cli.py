@@ -21,7 +21,7 @@ from learnlab.state import (
     StateStore,
 )
 
-CONFIG = '''
+CONFIG = """
 default_provider = "home-proxmox"
 
 [providers.home-proxmox]
@@ -65,7 +65,7 @@ network = "vmbr0"
 ssh_user = "student"
 ssh_identity_file = "~/.ssh/learning-platform"
 tls_verify = true
-'''
+"""
 
 
 class FakeHealthProvider:
@@ -214,9 +214,7 @@ class AppHarness:
 
 
 @pytest.fixture
-def app_harness(
-    monkeypatch: pytest.MonkeyPatch, tmp_xdg: Path
-) -> AppHarness:
+def app_harness(monkeypatch: pytest.MonkeyPatch, tmp_xdg: Path) -> AppHarness:
     from learnlab import cli
 
     course = Course(
@@ -480,9 +478,7 @@ def test_start_renders_selected_lesson_steps_in_order(
     assert output.index("Create a dedicated API token.") < output.index(
         "2. Limit the token"
     )
-    assert output.index("2. Limit the token") < output.index(
-        "Apply least privilege."
-    )
+    assert output.index("2. Limit the token") < output.index("Apply least privilege.")
     assert "completed" not in output.split("SSH:", 1)[-1]
 
 
@@ -633,9 +629,7 @@ def test_destroy_partial_failure_exits_nonzero_and_lists_retained_environment(
         destroyed=[], failed=["env-102"]
     )
 
-    result = app_harness.invoke(
-        ["destroy", "--yes", "--preserve-progress"]
-    )
+    result = app_harness.invoke(["destroy", "--yes", "--preserve-progress"])
 
     assert result.exit_code == 3
     assert "Retained environment: env-102" in result.stdout
@@ -664,9 +658,7 @@ def test_destroy_constructs_every_recorded_provider_profile(
         vmid=104,
     )
 
-    result = app_harness.invoke(
-        ["destroy", "--yes", "--preserve-progress"]
-    )
+    result = app_harness.invoke(["destroy", "--yes", "--preserve-progress"])
 
     assert result.exit_code == 0
     assert app_harness.provider_profiles == ["home-proxmox", "lab-proxmox"]
@@ -694,9 +686,7 @@ def test_destroy_passes_only_the_pre_confirmation_snapshot(
 
     monkeypatch.setattr(cli, "provider_factory", inserting_provider_factory)
 
-    result = app_harness.invoke(
-        ["destroy", "--yes", "--preserve-progress"]
-    )
+    result = app_harness.invoke(["destroy", "--yes", "--preserve-progress"])
 
     assert result.exit_code == 0
     assert app_harness.lifecycle.destroy_targets == [("env-confirmed",)]
@@ -735,9 +725,7 @@ def test_destroy_missing_secret_profile_does_not_block_valid_target(
     monkeypatch.setattr(cli, "provider_factory", provider_factory)
     monkeypatch.setattr(cli, "lifecycle_factory", LifecycleService)
 
-    result = app_harness.invoke(
-        ["destroy", "--yes", "--preserve-progress"]
-    )
+    result = app_harness.invoke(["destroy", "--yes", "--preserve-progress"])
 
     retained = app_harness.store.get_environment("env-invalid")
     assert result.exit_code == 3
@@ -792,9 +780,7 @@ def test_destroy_malformed_profile_table_does_not_block_valid_target(
     monkeypatch.setattr(cli, "provider_factory", provider_factory)
     monkeypatch.setattr(cli, "lifecycle_factory", LifecycleService)
 
-    result = app_harness.invoke(
-        ["destroy", "--yes", "--preserve-progress"]
-    )
+    result = app_harness.invoke(["destroy", "--yes", "--preserve-progress"])
 
     retained = app_harness.store.get_environment("env-malformed")
     assert result.exit_code == 3
@@ -807,9 +793,7 @@ def test_destroy_malformed_profile_table_does_not_block_valid_target(
     ]
     assert retained is not None
     assert retained.phase is EnvironmentPhase.FAILED
-    assert "Invalid provider profile lab-proxmox" in (
-        retained.error_summary or ""
-    )
+    assert "Invalid provider profile lab-proxmox" in (retained.error_summary or "")
     assert "missing keys: node" in (retained.error_summary or "")
     assert app_harness.store.get_environment("env-valid") is None
     assert "Retained environment: env-malformed" in result.stdout
@@ -914,9 +898,7 @@ def test_reset_collection_removes_only_matching_collection(
     assert "Affected lessons: 3" in result.stdout
     assert app_harness.store.lesson_statuses("proxmox", "proxmox-admin") == {}
     assert app_harness.store.lesson_statuses("proxmox", "linux-basics") == {}
-    assert app_harness.store.completed_lessons("cloud", "cloud-basics") == {
-        "identity"
-    }
+    assert app_harness.store.completed_lessons("cloud", "cloud-basics") == {"identity"}
     assert {
         (attempt.collection_id, attempt.course_id)
         for attempt in app_harness.store.list_attempts()
@@ -929,9 +911,7 @@ def test_reset_refuses_matching_environment_without_mutating_progress(
     seed_progress(app_harness.store, "proxmox", "proxmox-admin", ("api-access",))
     app_harness.seed_environment(vmid=102)
 
-    result = app_harness.invoke(
-        ["reset", "proxmox/proxmox-admin", "--yes"]
-    )
+    result = app_harness.invoke(["reset", "proxmox/proxmox-admin", "--yes"])
 
     assert result.exit_code == 3
     assert "learnlab destroy" in result.stdout
@@ -946,9 +926,7 @@ def test_reset_cancellation_makes_no_state_mutation(
 ) -> None:
     seed_progress(app_harness.store, "proxmox", "proxmox-admin", ("api-access",))
 
-    result = app_harness.invoke(
-        ["reset", "proxmox/proxmox-admin"], input="n\n"
-    )
+    result = app_harness.invoke(["reset", "proxmox/proxmox-admin"], input="n\n")
 
     assert result.exit_code == 0
     assert "Cancelled." in result.stdout
@@ -961,9 +939,7 @@ def test_reset_cancellation_makes_no_state_mutation(
 def test_reset_yes_skips_confirmation(app_harness: AppHarness) -> None:
     seed_progress(app_harness.store, "proxmox", "proxmox-admin", ("api-access",))
 
-    result = app_harness.invoke(
-        ["reset", "proxmox/proxmox-admin", "--yes"]
-    )
+    result = app_harness.invoke(["reset", "proxmox/proxmox-admin", "--yes"])
 
     assert result.exit_code == 0
     assert "Continue?" not in result.stdout
@@ -975,9 +951,7 @@ def test_reset_rejects_three_segment_scope_without_mutation(
 ) -> None:
     seed_progress(app_harness.store, "proxmox", "proxmox-admin", ("api-access",))
 
-    result = app_harness.invoke(
-        ["reset", "proxmox/proxmox-admin/api-access", "--yes"]
-    )
+    result = app_harness.invoke(["reset", "proxmox/proxmox-admin/api-access", "--yes"])
 
     assert result.exit_code == 2
     assert "collection or collection/course" in result.stdout

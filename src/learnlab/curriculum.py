@@ -93,7 +93,9 @@ class CurriculumCatalog:
         if len(pieces) != 2 or not all(pieces):
             raise CurriculumError("Course path must use collection/course")
         collection_id, course_id = pieces
-        if not _STABLE_ID.fullmatch(collection_id) or not _STABLE_ID.fullmatch(course_id):
+        if not _STABLE_ID.fullmatch(collection_id) or not _STABLE_ID.fullmatch(
+            course_id
+        ):
             raise CurriculumError("Course path must use collection/course")
         return collection_id, course_id
 
@@ -139,7 +141,9 @@ def _load_mapping(path: Path) -> dict[str, Any]:
     return value
 
 
-def _require_exact_keys(data: Mapping[str, Any], expected: set[str], path: Path) -> None:
+def _require_exact_keys(
+    data: Mapping[str, Any], expected: set[str], path: Path
+) -> None:
     if set(data) == expected:
         return
     details: list[str] = []

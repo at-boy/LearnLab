@@ -128,13 +128,10 @@ class StateStore:
         finally:
             connection.close()
         return {
-            str(row["lesson_id"]): ProgressStatus(str(row["status"]))
-            for row in rows
+            str(row["lesson_id"]): ProgressStatus(str(row["status"])) for row in rows
         }
 
-    def start_lesson(
-        self, collection_id: str, course_id: str, lesson_id: str
-    ) -> None:
+    def start_lesson(self, collection_id: str, course_id: str, lesson_id: str) -> None:
         """Mark a lesson in progress after its environment starts."""
         self.mark_lesson(
             collection_id, course_id, lesson_id, ProgressStatus.IN_PROGRESS
@@ -161,7 +158,8 @@ class StateStore:
                 connection.execute(
                     """
                     INSERT INTO progress (
-                        collection_id, course_id, lesson_id, status, created_at, updated_at
+                        collection_id, course_id, lesson_id, status,
+                        created_at, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT(collection_id, course_id, lesson_id) DO UPDATE SET
                         status = excluded.status,
@@ -192,7 +190,9 @@ class StateStore:
             with connection:
                 connection.execute(
                     """
-                    INSERT INTO attempts (id, collection_id, course_id, lesson_id, created_at)
+                    INSERT INTO attempts (
+                        id, collection_id, course_id, lesson_id, created_at
+                    )
                     VALUES (?, ?, ?, ?, ?)
                     """,
                     (
@@ -247,7 +247,8 @@ class StateStore:
             except sqlite3.IntegrityError as error:
                 if "environments.collection_id, environments.course_id" in str(error):
                     raise StateConflictError(
-                        "Course already has an active environment; run learnlab destroy first"
+                        "Course already has an active environment; "
+                        "run learnlab destroy first"
                     ) from error
                 raise
         finally:
@@ -264,18 +265,28 @@ class StateStore:
             unknown = ", ".join(sorted(unknown_fields))
             raise ValueError(f"Unsupported environment transition fields: {unknown}")
 
-        assignments = ["phase = ?", "updated_at = ?"]
         values: list[object] = [phase.value, _utc_timestamp()]
-        for field in sorted(fields):
-            assignments.append(f"{field} = ?")
-            values.append(fields[field])
+        for field in ("vmid", "node", "ip_address", "upid", "error_summary"):
+            values.extend((field in fields, fields.get(field)))
         values.append(environment_id)
 
         connection = self._connect()
         try:
             with connection:
                 cursor = connection.execute(
-                    f"UPDATE environments SET {', '.join(assignments)} WHERE id = ?",
+                    """
+                    UPDATE environments SET
+                        phase = ?,
+                        updated_at = ?,
+                        vmid = CASE WHEN ? THEN ? ELSE vmid END,
+                        node = CASE WHEN ? THEN ? ELSE node END,
+                        ip_address = CASE WHEN ? THEN ? ELSE ip_address END,
+                        upid = CASE WHEN ? THEN ? ELSE upid END,
+                        error_summary = CASE
+                            WHEN ? THEN ? ELSE error_summary
+                        END
+                    WHERE id = ?
+                    """,
                     values,
                 )
                 if cursor.rowcount != 1:
@@ -333,26 +344,46 @@ class StateStore:
         connection = self._connect()
         try:
             with connection:
-                connection.execute("DELETE FROM environments WHERE id = ?", (environment_id,))
+                connection.execute(
+                    "DELETE FROM environments WHERE id = ?", (environment_id,)
+                )
         finally:
             connection.close()
 
     def reset_scope(self, collection_id: str, course_id: str | None = None) -> None:
         """Delete progress and attempts only when the scope has no environments."""
-        where_clause, parameters = _scope_clause(collection_id, course_id)
+        parameters: tuple[str, ...]
+        if course_id is None:
+            environment_query = (
+                "SELECT 1 FROM environments WHERE collection_id = ? LIMIT 1"
+            )
+            progress_query = "DELETE FROM progress WHERE collection_id = ?"
+            attempts_query = "DELETE FROM attempts WHERE collection_id = ?"
+            parameters = (collection_id,)
+        else:
+            environment_query = (
+                "SELECT 1 FROM environments "
+                "WHERE collection_id = ? AND course_id = ? LIMIT 1"
+            )
+            progress_query = (
+                "DELETE FROM progress WHERE collection_id = ? AND course_id = ?"
+            )
+            attempts_query = (
+                "DELETE FROM attempts WHERE collection_id = ? AND course_id = ?"
+            )
+            parameters = (collection_id, course_id)
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
             try:
-                existing = connection.execute(
-                    f"SELECT 1 FROM environments WHERE {where_clause} LIMIT 1", parameters
-                ).fetchone()
+                existing = connection.execute(environment_query, parameters).fetchone()
                 if existing is not None:
                     raise StateConflictError(
-                        "Run learnlab destroy for matching environments before resetting progress"
+                        "Run learnlab destroy for matching environments before "
+                        "resetting progress"
                     )
-                connection.execute(f"DELETE FROM progress WHERE {where_clause}", parameters)
-                connection.execute(f"DELETE FROM attempts WHERE {where_clause}", parameters)
+                connection.execute(progress_query, parameters)
+                connection.execute(attempts_query, parameters)
             except BaseException:
                 connection.rollback()
                 raise
@@ -453,14 +484,6 @@ def _row_to_environment(row: sqlite3.Row) -> EnvironmentRecord:
 
 def _optional_string(value: object) -> str | None:
     return str(value) if value is not None else None
-
-
-def _scope_clause(
-    collection_id: str, course_id: str | None
-) -> tuple[str, tuple[str, ...]]:
-    if course_id is None:
-        return "collection_id = ?", (collection_id,)
-    return "collection_id = ? AND course_id = ?", (collection_id, course_id)
 
 
 _PROGRESS_VALUES = ", ".join(f"'{status.value}'" for status in ProgressStatus)

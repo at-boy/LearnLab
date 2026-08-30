@@ -583,9 +583,7 @@ def test_destroy_touches_only_the_immutable_confirmed_snapshot(
         }
     )
 
-    summary = LifecycleService(store, provider, tmp_path).destroy_all(
-        True, confirmed
-    )
+    summary = LifecycleService(store, provider, tmp_path).destroy_all(True, confirmed)
 
     assert summary.destroyed == ["env-confirmed"]
     assert summary.failed == []
@@ -625,9 +623,7 @@ def test_destroy_provider_resolution_failure_retains_target_and_continues(
     summary = LifecycleService(
         store,
         {
-            "missing-secret": ConfigurationError(
-                "secret-value is unavailable"
-            ),
+            "missing-secret": ConfigurationError("secret-value is unavailable"),
             "home-proxmox": valid_provider,
         },
         tmp_path,

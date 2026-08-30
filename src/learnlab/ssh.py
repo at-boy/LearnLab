@@ -34,9 +34,7 @@ def create_known_hosts(state_root: Path, environment_id: str) -> Path:
     return known_hosts
 
 
-def render_ssh_command(
-    profile: SshProfile, ip: str, known_hosts: Path
-) -> str:
+def render_ssh_command(profile: SshProfile, ip: str, known_hosts: Path) -> str:
     """Render a shell-safe SSH command using only the isolated host-key file."""
     return shlex.join(
         [

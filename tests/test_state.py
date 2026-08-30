@@ -185,7 +185,10 @@ def test_environment_creation_generates_utc_timestamps_internally(
         "2000-01-01T00:00:00+05:00",
     }
     assert persisted.created_at is not None
-    assert datetime.fromisoformat(persisted.created_at.replace("Z", "+00:00")).tzinfo is UTC
+    assert (
+        datetime.fromisoformat(persisted.created_at.replace("Z", "+00:00")).tzinfo
+        is UTC
+    )
 
 
 class InterleavingStateStore(StateStore):
