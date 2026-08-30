@@ -14,6 +14,7 @@ from learnlab.errors import (
     ProviderAuthorizationError,
     ProviderCloneOutcomeUnknown,
     ProviderError,
+    ProviderMutationUncertain,
     ProviderOperationError,
     ProviderTaskFailed,
     ProviderTimeoutError,
@@ -334,6 +335,10 @@ class ProxmoxProvider:
             message = f"Proxmox {method} {path} failed with HTTP {response.status_code}"
             if safe_detail:
                 message = f"{message}: {safe_detail}"
+            if clone_outcome_can_be_uncertain and response.status_code >= 500:
+                raise ProviderMutationUncertain(
+                    f"Proxmox clone outcome is uncertain: {message}"
+                )
             if response.status_code == 401:
                 raise ProviderAuthenticationError(message)
             if response.status_code == 403:

@@ -11,7 +11,12 @@ from pathlib import Path
 from typing import Protocol
 
 from learnlab.curriculum import Course, Lesson
-from learnlab.errors import LearnLabError, ProviderCloneOutcomeUnknown, redact
+from learnlab.errors import (
+    LearnLabError,
+    ProviderError,
+    ProviderMutationUncertain,
+    redact,
+)
 from learnlab.providers.base import Provider
 from learnlab.ssh import create_known_hosts, render_ssh_command
 from learnlab.state import (
@@ -128,12 +133,21 @@ class LifecycleService:
             vmid = provider.allocate_vmid()
             expected_vm_name = _vm_name(request.course.id, vmid)
             self._store.record_clone_intent(environment_id, vmid, expected_vm_name)
-            clone_upid = provider.clone(vmid, expected_vm_name)
+            try:
+                clone_upid = provider.clone(vmid, expected_vm_name)
+            except ProviderMutationUncertain:
+                raise
+            except ProviderError:
+                self._store.transition_environment(
+                    environment_id,
+                    EnvironmentPhase.CLONING,
+                    clone_uncertain=False,
+                )
+                raise
             self._store.transition_environment(
                 environment_id,
                 EnvironmentPhase.CLONING,
                 upid=clone_upid,
-                clone_uncertain=False,
             )
             provider.wait_for_task(
                 request.profile.node, clone_upid, _TASK_TIMEOUT_SECONDS
@@ -146,7 +160,10 @@ class LifecycleService:
                     f"Cloned VM {vmid} name does not match expected ownership"
                 )
             self._store.transition_environment(
-                environment_id, EnvironmentPhase.STOPPED, node=location.node
+                environment_id,
+                EnvironmentPhase.STOPPED,
+                node=location.node,
+                clone_uncertain=False,
             )
 
             start_upid = provider.start(vmid, location.node)
@@ -171,22 +188,12 @@ class LifecycleService:
                     request.profile, ip_address, known_hosts
                 ),
             )
-        except ProviderCloneOutcomeUnknown as error:
-            summary = _safe_error_summary(error, self._secrets)
-            self._store.transition_environment(
-                environment_id,
-                EnvironmentPhase.FAILED,
-                error_summary=summary,
-                clone_uncertain=True,
-            )
-            raise _startup_error(summary) from None
         except Exception as error:
             summary = _safe_error_summary(error, self._secrets)
             self._store.transition_environment(
                 environment_id,
                 EnvironmentPhase.FAILED,
                 error_summary=summary,
-                clone_uncertain=False,
             )
             raise _startup_error(summary) from None
 

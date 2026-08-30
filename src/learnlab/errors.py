@@ -25,8 +25,12 @@ class ProviderOperationError(ProviderError):
     """Raised when a provider operation cannot be completed."""
 
 
-class ProviderCloneOutcomeUnknown(ProviderOperationError):
-    """Raised when clone transport failed after the request may have been sent."""
+class ProviderMutationUncertain(ProviderOperationError):
+    """Raised when a mutation may have reached the provider without proof."""
+
+
+class ProviderCloneOutcomeUnknown(ProviderMutationUncertain):
+    """Clone-specific compatibility type for an uncertain mutation outcome."""
 
 
 class ProviderTaskFailed(ProviderError):

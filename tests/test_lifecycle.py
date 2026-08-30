@@ -15,6 +15,7 @@ from learnlab.errors import (
     ProviderCloneOutcomeUnknown,
     ProviderError,
     ProviderTaskFailed,
+    ProviderTimeoutError,
 )
 from learnlab.lifecycle import LifecycleError, LifecycleService, StartRequest
 from learnlab.providers.base import VmLocation
@@ -231,7 +232,7 @@ def test_start_persists_state_before_each_next_remote_boundary(
             None,
             "test-provider-fingerprint",
             "learnlab-proxmox-admin-102",
-            False,
+            True,
         ),
         (
             "locate",
@@ -242,7 +243,7 @@ def test_start_persists_state_before_each_next_remote_boundary(
             None,
             "test-provider-fingerprint",
             "learnlab-proxmox-admin-102",
-            False,
+            True,
         ),
         (
             "start",
@@ -278,6 +279,24 @@ def test_start_persists_state_before_each_next_remote_boundary(
             False,
         ),
     ]
+
+
+def test_clone_upid_stays_uncertain_until_successful_named_vm_reconciliation(
+    store: StateStore,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+) -> None:
+    provider = StateObservingProvider(store)
+
+    LifecycleService(store, provider, tmp_path).start(
+        start_request(profile_fixture(node="pve02"))
+    )
+
+    snapshots = {snapshot[0]: snapshot for snapshot in provider.snapshots}
+    assert snapshots["wait:clone"][8] is True
+    assert snapshots["locate"][8] is True
+    assert snapshots["start"][1] is EnvironmentPhase.STOPPED
+    assert snapshots["start"][8] is False
 
 
 def test_destroy_refuses_repointed_provider_before_remote_mutation(
@@ -384,6 +403,70 @@ def test_later_destroy_reconciles_previously_absent_uncertain_clone(
         "wait:delete",
         "locate:102",
     ]
+
+
+def test_clone_poll_timeout_retains_record_until_later_destroy_reconciliation(
+    store: StateStore,
+    failing_provider: RecordingProvider,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+) -> None:
+    failing_provider.fail_on(
+        "wait:clone", ProviderTimeoutError("clone task polling timed out")
+    )
+
+    with pytest.raises(LifecycleError, match="clone task polling timed out"):
+        LifecycleService(store, failing_provider, tmp_path).start(
+            start_request(profile_fixture(node="pve02"))
+        )
+
+    [failed_start] = store.list_environments()
+    assert failed_start.upid == "clone"
+    assert failed_start.clone_uncertain is True
+
+    destroy_provider = DestroyRecordingProvider({})
+    destroy_service = LifecycleService(store, destroy_provider, tmp_path)
+    first_destroy = destroy_service.destroy_all(True, tuple(store.list_environments()))
+
+    retained = store.get_environment(failed_start.id)
+    assert first_destroy.failed == [failed_start.id]
+    assert retained is not None
+    assert retained.clone_uncertain is True
+
+    destroy_provider.locations[102] = VmLocation(
+        node="pve02",
+        status="stopped",
+        name="learnlab-proxmox-admin-102",
+    )
+    second_destroy = destroy_service.destroy_all(True, tuple(store.list_environments()))
+
+    assert second_destroy.destroyed == [failed_start.id]
+    assert store.list_environments() == []
+    assert destroy_provider.operations == [
+        "locate:102",
+        "locate:102",
+        "delete:102",
+        "wait:delete",
+        "locate:102",
+    ]
+
+
+def test_non_conclusive_clone_poll_failure_keeps_uncertainty(
+    store: StateStore,
+    failing_provider: RecordingProvider,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+) -> None:
+    failing_provider.fail_on("wait:clone", ProviderError("poll response unavailable"))
+
+    with pytest.raises(LifecycleError, match="poll response unavailable"):
+        LifecycleService(store, failing_provider, tmp_path).start(
+            start_request(profile_fixture(node="pve02"))
+        )
+
+    [record] = store.list_environments()
+    assert record.upid == "clone"
+    assert record.clone_uncertain is True
 
 
 def test_start_failure_retains_redacted_partial_environment(

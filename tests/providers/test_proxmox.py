@@ -11,6 +11,7 @@ from learnlab.config import ProxmoxProfile
 from learnlab.errors import (
     ProviderAuthenticationError,
     ProviderCloneOutcomeUnknown,
+    ProviderMutationUncertain,
     ProviderOperationError,
     ProviderTaskFailed,
     ProviderTimeoutError,
@@ -127,7 +128,19 @@ def test_clone_http_rejection_is_definitive(
     with pytest.raises(ProviderOperationError) as caught:
         provider_for(fake_server, profile).clone(102, "learnlab-proxmox-admin-102")
 
-    assert not isinstance(caught.value, ProviderCloneOutcomeUnknown)
+    assert not isinstance(caught.value, ProviderMutationUncertain)
+
+
+def test_clone_gateway_failure_reports_mutation_uncertain_without_secret(
+    fake_server: FakeProxmoxServer, profile: ProxmoxProfile
+) -> None:
+    fake_server.queue(503, {"errors": "private-value gateway lost response"})
+
+    with pytest.raises(ProviderMutationUncertain) as caught:
+        provider_for(fake_server, profile).clone(102, "learnlab-proxmox-admin-102")
+
+    assert "private-value" not in str(caught.value)
+    assert "[REDACTED]" in str(caught.value)
 
 
 def test_clone_success_with_missing_task_id_reports_uncertain_outcome(
