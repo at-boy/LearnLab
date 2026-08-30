@@ -13,7 +13,7 @@ default_provider = "home-proxmox"
 
 [providers.home-proxmox]
 type = "proxmox"
-api_url = "https://proxmox.example.test:8006/api2/json"
+api_url = "https://PROXMOX.example.test:8006/"
 token_id = "learnlab@pam!automation"
 token_secret_env = "LEARNLAB_TEST_SECRET"
 template_vmid = 9001
@@ -36,6 +36,7 @@ def test_loads_named_proxmox_profile(tmp_path):
 
     assert settings.default_provider == "home-proxmox"
     assert profile.template_vmid == 9001
+    assert profile.api_url == "https://proxmox.example.test:8006"
     assert profile.tls_verify is True
     assert profile.ssh_identity_file.name == "learning-platform"
 
@@ -117,7 +118,7 @@ api_url = "https://malformed.example.test"
 @pytest.mark.parametrize(
     ("replacement", "message"),
     [
-        ('api_url = "http://proxmox.example.test"', "https://"),
+        ('api_url = "http://proxmox.example.test"', "HTTPS origin"),
         ("template_vmid = 0", "positive"),
     ],
 )
@@ -126,7 +127,7 @@ def test_rejects_invalid_profile_values(tmp_path, replacement, message):
     source = CONFIG
     if replacement.startswith("api_url"):
         source = source.replace(
-            'api_url = "https://proxmox.example.test:8006/api2/json"', replacement
+            'api_url = "https://PROXMOX.example.test:8006/"', replacement
         )
     else:
         source = source.replace("template_vmid = 9001", replacement)
@@ -134,3 +135,49 @@ def test_rejects_invalid_profile_values(tmp_path, replacement, message):
 
     with pytest.raises(ConfigurationError, match=message):
         load_settings(config)
+
+
+@pytest.mark.parametrize(
+    "api_url",
+    [
+        "https://user:password@proxmox.example.test:8006",
+        "https://proxmox.example.test:8006?debug=true",
+        "https://proxmox.example.test:8006?",
+        "https://proxmox.example.test:8006#fragment",
+        "https://proxmox.example.test:8006#",
+        "https://proxmox.example.test:8006/api2/json",
+        "https://proxmox.example.test:8006/other",
+        "https://proxmox.example.test:not-a-port",
+        "https:///missing-host",
+        "https://bad_host.example.test",
+    ],
+)
+def test_api_url_rejects_anything_other_than_an_https_origin(
+    tmp_path, api_url: str
+) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(
+        CONFIG.replace(
+            'api_url = "https://PROXMOX.example.test:8006/"',
+            f'api_url = "{api_url}"',
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigurationError, match="HTTPS origin"):
+        load_settings(config)
+
+
+def test_provider_fingerprint_is_stable_and_contains_no_secret(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(CONFIG, encoding="utf-8")
+    monkeypatch.setenv("LEARNLAB_TEST_SECRET", "private-value")
+
+    first = load_settings(config).provider("home-proxmox")
+    second = load_settings(config).provider("home-proxmox")
+
+    assert first.fingerprint == second.fingerprint
+    assert first.fingerprint.startswith("sha256:")
+    assert "private-value" not in first.fingerprint

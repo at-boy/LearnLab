@@ -29,10 +29,17 @@ class VmLocation:
 
     node: str
     status: str
+    name: str
 
 
 class Provider(Protocol):
     """The provider operations required by LearnLab lifecycle services."""
+
+    @property
+    def api_origin(self) -> str: ...
+
+    @property
+    def profile_fingerprint(self) -> str: ...
 
     def health_check(self) -> ProviderHealth: ...
 

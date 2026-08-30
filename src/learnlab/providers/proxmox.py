@@ -8,10 +8,11 @@ from urllib.parse import quote
 
 import httpx
 
-from learnlab.config import ProxmoxProfile
+from learnlab.config import ProxmoxProfile, provider_fingerprint
 from learnlab.errors import (
     ProviderAuthenticationError,
     ProviderAuthorizationError,
+    ProviderCloneOutcomeUnknown,
     ProviderError,
     ProviderOperationError,
     ProviderTaskFailed,
@@ -42,6 +43,14 @@ class ProxmoxProvider:
         )
         self._clock = clock
         self._sleep = sleep
+
+    @property
+    def api_origin(self) -> str:
+        return self._profile.api_url
+
+    @property
+    def profile_fingerprint(self) -> str:
+        return provider_fingerprint(self._profile)
 
     def health_check(self) -> ProviderHealth:
         checks: list[ProviderCheck] = []
@@ -180,19 +189,23 @@ class ProxmoxProvider:
             ) from error
 
     def clone(self, vmid: int, name: str) -> str:
-        return self._task_id(
-            self._request(
-                "POST",
-                f"/nodes/{self._profile.node}/qemu/{self._profile.template_vmid}/clone",
-                data={
-                    "newid": str(vmid),
-                    "name": name,
-                    "full": "1",
-                    "storage": self._profile.storage,
-                },
-            ),
-            "clone",
+        response = self._request(
+            "POST",
+            f"/nodes/{self._profile.node}/qemu/{self._profile.template_vmid}/clone",
+            data={
+                "newid": str(vmid),
+                "name": name,
+                "full": "1",
+                "storage": self._profile.storage,
+            },
+            clone_outcome_can_be_uncertain=True,
         )
+        try:
+            return self._task_id(response, "clone")
+        except ProviderOperationError as error:
+            raise ProviderCloneOutcomeUnknown(
+                f"Proxmox clone outcome is uncertain: {error}"
+            ) from None
 
     def wait_for_task(self, node: str, upid: str, timeout: float) -> None:
         deadline = self._clock() + timeout
@@ -227,8 +240,17 @@ class ProxmoxProvider:
                 continue
             node = resource.get("node")
             status = resource.get("status")
-            if isinstance(node, str) and isinstance(status, str):
-                return VmLocation(node=node, status=status)
+            name = resource.get("name")
+            if (
+                not isinstance(node, str)
+                or not isinstance(status, str)
+                or not isinstance(name, str)
+                or not name
+            ):
+                raise ProviderOperationError(
+                    f"Proxmox resource for VM {vmid} is malformed"
+                )
+            return VmLocation(node=node, status=status, name=name)
         return None
 
     def start(self, vmid: int, node: str) -> str:
@@ -245,27 +267,28 @@ class ProxmoxProvider:
         deadline = self._clock() + timeout
         ping_path = f"/nodes/{node}/qemu/{vmid}/agent/ping"
         interfaces_path = f"/nodes/{node}/qemu/{vmid}/agent/network-get-interfaces"
-        timeout_message = f"Timed out waiting for guest IPv4 for VM {vmid}"
+        readiness_timeout = f"Timed out waiting for guest agent readiness for VM {vmid}"
+        address_timeout = f"Timed out waiting for guest IPv4 address for VM {vmid}"
         while True:
-            self._raise_if_deadline_reached(deadline, timeout_message)
+            self._raise_if_deadline_reached(deadline, readiness_timeout)
             try:
                 self._request("POST", ping_path)
-                self._raise_if_deadline_reached(deadline, timeout_message)
+                self._raise_if_deadline_reached(deadline, readiness_timeout)
                 break
             except ProviderOperationError:
-                self._sleep_until_deadline(deadline, timeout_message)
+                self._sleep_until_deadline(deadline, readiness_timeout)
         while True:
-            self._raise_if_deadline_reached(deadline, timeout_message)
+            self._raise_if_deadline_reached(deadline, address_timeout)
             try:
                 interfaces = self._request("GET", interfaces_path)
-                self._raise_if_deadline_reached(deadline, timeout_message)
+                self._raise_if_deadline_reached(deadline, address_timeout)
             except ProviderOperationError:
-                self._sleep_until_deadline(deadline, timeout_message)
+                self._sleep_until_deadline(deadline, address_timeout)
                 continue
             address = self._first_ipv4(interfaces)
             if address is not None:
                 return address
-            self._sleep_until_deadline(deadline, timeout_message)
+            self._sleep_until_deadline(deadline, address_timeout)
 
     def delete(self, vmid: int, node: str) -> str:
         return self._task_id(
@@ -273,7 +296,12 @@ class ProxmoxProvider:
         )
 
     def _request(
-        self, method: str, path: str, data: Mapping[str, str] | None = None
+        self,
+        method: str,
+        path: str,
+        data: Mapping[str, str] | None = None,
+        *,
+        clone_outcome_can_be_uncertain: bool = False,
     ) -> object:
         headers = {
             "Authorization": (
@@ -289,9 +317,18 @@ class ProxmoxProvider:
                 f"Proxmox {method} {path} request failed: {error}"
             )[:2000]
         if transport_error is not None:
+            if clone_outcome_can_be_uncertain:
+                raise ProviderCloneOutcomeUnknown(
+                    f"Proxmox clone outcome is uncertain: {transport_error}"
+                )
             raise ProviderOperationError(transport_error)
         if response is None:
-            raise ProviderOperationError(f"Proxmox {method} {path} did not respond")
+            message = f"Proxmox {method} {path} did not respond"
+            if clone_outcome_can_be_uncertain:
+                raise ProviderCloneOutcomeUnknown(
+                    f"Proxmox clone outcome is uncertain: {message}"
+                )
+            raise ProviderOperationError(message)
         if not response.is_success:
             safe_detail = self._safe_error(response.text)[:2000]
             message = f"Proxmox {method} {path} failed with HTTP {response.status_code}"
@@ -305,10 +342,18 @@ class ProxmoxProvider:
         try:
             payload = response.json()
         except ValueError as error:
+            if clone_outcome_can_be_uncertain:
+                raise ProviderCloneOutcomeUnknown(
+                    "Proxmox clone outcome is uncertain: response was invalid JSON"
+                ) from error
             raise ProviderOperationError(
                 f"Proxmox {method} {path} returned invalid JSON"
             ) from error
         if not isinstance(payload, Mapping) or "data" not in payload:
+            if clone_outcome_can_be_uncertain:
+                raise ProviderCloneOutcomeUnknown(
+                    "Proxmox clone outcome is uncertain: invalid response envelope"
+                )
             raise ProviderOperationError(
                 f"Proxmox {method} {path} returned an invalid response envelope"
             )
@@ -345,24 +390,48 @@ class ProxmoxProvider:
         )
 
     def _has_storage(self, config: Mapping[object, object]) -> bool:
-        return any(
-            isinstance(value, str) and value.startswith(f"{self._profile.storage}:")
-            for value in config.values()
-        )
+        disk_key = self._primary_boot_disk(config)
+        value = config.get(disk_key) if disk_key is not None else None
+        return isinstance(value, str) and value.startswith(f"{self._profile.storage}:")
 
     def _has_network(self, config: Mapping[object, object]) -> bool:
-        for value in config.values():
-            if not isinstance(value, str):
-                continue
-            for option in value.split(","):
-                key, separator, option_value = option.partition("=")
-                if (
-                    separator
-                    and key == "bridge"
-                    and option_value == self._profile.network
-                ):
-                    return True
+        value = config.get("net0")
+        if not isinstance(value, str):
+            return False
+        for option in value.split(","):
+            key, separator, option_value = option.partition("=")
+            if separator and key == "bridge" and option_value == self._profile.network:
+                return True
         return False
+
+    @staticmethod
+    def _primary_boot_disk(config: Mapping[object, object]) -> str | None:
+        """Use the first disk in boot order; fall back to scsi0 only if absent."""
+        boot = config.get("boot")
+        if boot is None:
+            return "scsi0"
+        if not isinstance(boot, str):
+            return None
+        order = next(
+            (
+                value
+                for option in boot.split(",")
+                for key, separator, value in (option.partition("="),)
+                if separator and key == "order"
+            ),
+            None,
+        )
+        if order is None:
+            return None
+        return next(
+            (
+                device
+                for device in order.split(";")
+                if device.startswith(("ide", "sata", "scsi", "virtio"))
+                and device[len(device.rstrip("0123456789")) :].isdigit()
+            ),
+            None,
+        )
 
     @staticmethod
     def _task_id(value: object, operation: str) -> str:

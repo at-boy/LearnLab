@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from importlib.resources import files
 from pathlib import Path
 from typing import Protocol
 
 import typer
 
 from learnlab.config import (
+    ProxmoxProfile,
     Settings,
     load_requested_profiles,
     load_settings,
@@ -47,11 +49,11 @@ lifecycle_factory: LifecycleFactory = LifecycleService
 
 
 def _default_catalog() -> CurriculumCatalog:
-    return CurriculumCatalog(Path(__file__).resolve().parents[2] / "collections")
+    return CurriculumCatalog(files("learnlab").joinpath("collections"))
 
 
 def _default_state_store() -> StateStore:
-    return StateStore(state_root() / "state.db")
+    return StateStore(state_root() / "learnlab.db")
 
 
 catalog_factory: CatalogFactory = _default_catalog
@@ -65,8 +67,7 @@ def provider_test(profile_name: str) -> None:
         settings = load_settings()
         profile = settings.provider(profile_name)
         typer.echo(f"Provider profile: {profile_name}")
-        if not profile.tls_verify:
-            typer.echo("WARNING: TLS certificate verification is disabled")
+        _render_tls_warning(profile)
         provider = provider_factory(settings, profile_name)
         health = provider.health_check()
     except LearnLabError as error:
@@ -110,6 +111,7 @@ def start_course(
         settings = load_settings()
         profile_name = provider_profile or settings.default_provider
         profile = settings.provider(profile_name)
+        _render_tls_warning(profile)
         secret = resolve_token_secret(profile)
         secrets.add(secret)
         provider = provider_factory(settings, profile_name)
@@ -162,7 +164,11 @@ def destroy_all(
 
     store = state_store_factory()
     state_exists = store.db_path.exists()
+    if state_exists:
+        store.initialize()
     targets = tuple(store.list_environments()) if state_exists else ()
+    profile_names = tuple(dict.fromkeys(target.profile_name for target in targets))
+    loaded_profiles = load_requested_profiles(profile_names) if targets else None
     typer.echo("Destroy targets:")
     if not targets:
         typer.echo("  No recorded environments")
@@ -175,6 +181,17 @@ def destroy_all(
             f"Course: {target.collection_id}/{target.course_id} | "
             f"Phase: {target.phase.value}"
         )
+        typer.echo(f"    Endpoint: {target.provider_endpoint or 'unknown'}")
+        typer.echo(f"    Fingerprint: {target.provider_fingerprint or 'unknown'}")
+        typer.echo(f"    Expected VM name: {target.expected_vm_name or 'unknown'}")
+        if (
+            loaded_profiles is not None
+            and target.profile_name not in loaded_profiles.errors
+        ):
+            configured = loaded_profiles.settings.provider(target.profile_name)
+            typer.echo(f"    Configured endpoint: {configured.api_url}")
+            typer.echo(f"    Configured fingerprint: {configured.fingerprint}")
+            _render_tls_warning(configured, prefix="    ")
 
     if not yes and not typer.confirm("Destroy all listed environments?"):
         typer.echo("Cancelled.")
@@ -193,9 +210,7 @@ def destroy_all(
 
     secrets: set[str] = set()
     providers: dict[str, Provider | Exception] = {}
-    if targets:
-        profile_names = tuple(dict.fromkeys(target.profile_name for target in targets))
-        loaded_profiles = load_requested_profiles(profile_names)
+    if targets and loaded_profiles is not None:
         providers.update(loaded_profiles.errors)
         for profile_name in profile_names:
             if profile_name in loaded_profiles.errors:
@@ -237,6 +252,8 @@ def destroy_all(
                     f"Course: {retained.collection_id}/{retained.course_id} | "
                     f"Phase: {retained.phase.value}"
                 )
+                if retained.error_summary:
+                    typer.echo(f"  Error: {redact(retained.error_summary, secrets)}")
         raise typer.Exit(code=3)
 
     typer.echo(f"Destroyed environments: {len(summary.destroyed)}")
@@ -367,8 +384,14 @@ def _reset_scope_counts(
         if environment.collection_id == collection_id
         and (course_id is None or environment.course_id == course_id)
     ]
+    progress = [
+        row
+        for row in store.list_progress()
+        if row[0] == collection_id and (course_id is None or row[1] == course_id)
+    ]
     course_ids = {attempt.course_id for attempt in attempts}
     course_ids.update(environment.course_id for environment in environments)
+    course_ids.update(row[1] for row in progress)
     if course_id is not None and store.lesson_statuses(collection_id, course_id):
         course_ids.add(course_id)
 
@@ -376,12 +399,18 @@ def _reset_scope_counts(
     lessons.update(
         (environment.course_id, environment.lesson_id) for environment in environments
     )
+    lessons.update((row[1], row[2]) for row in progress)
     for retained_course_id in course_ids:
         lessons.update(
             (retained_course_id, lesson_id)
             for lesson_id in store.lesson_statuses(collection_id, retained_course_id)
         )
     return len(course_ids), len(lessons)
+
+
+def _render_tls_warning(profile: ProxmoxProfile, *, prefix: str = "") -> None:
+    if not profile.tls_verify:
+        typer.echo(f"{prefix}WARNING: TLS certificate verification is disabled")
 
 
 def _exit_with_error(error: LearnLabError, secrets: set[str] | None = None) -> None:

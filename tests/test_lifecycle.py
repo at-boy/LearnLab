@@ -10,7 +10,12 @@ from conftest import RecordingProvider
 
 from learnlab.config import ProxmoxProfile
 from learnlab.curriculum import Course, Lesson, Step
-from learnlab.errors import ConfigurationError, ProviderError, ProviderTaskFailed
+from learnlab.errors import (
+    ConfigurationError,
+    ProviderCloneOutcomeUnknown,
+    ProviderError,
+    ProviderTaskFailed,
+)
 from learnlab.lifecycle import LifecycleError, LifecycleService, StartRequest
 from learnlab.providers.base import VmLocation
 from learnlab.ssh import create_known_hosts, render_ssh_command
@@ -37,6 +42,9 @@ class StateObservingProvider(RecordingProvider):
                 str | None,
                 str | None,
                 str | None,
+                str,
+                str,
+                bool,
             ]
         ] = []
 
@@ -50,6 +58,9 @@ class StateObservingProvider(RecordingProvider):
                 record.node,
                 record.upid,
                 record.ip_address,
+                record.provider_fingerprint,
+                record.expected_vm_name,
+                record.clone_uncertain,
             )
         )
 
@@ -85,8 +96,11 @@ class DestroyRecordingProvider(RecordingProvider):
         self,
         locations: dict[int, VmLocation],
         store: StateStore | None = None,
+        *,
+        fingerprint: str = "test-provider-fingerprint",
     ) -> None:
         super().__init__()
+        self.profile_fingerprint = fingerprint
         self.locations = locations
         self.store = store
         self.failing_vmids: set[int] = set()
@@ -105,7 +119,12 @@ class DestroyRecordingProvider(RecordingProvider):
     def stop(self, vmid: int, node: str) -> str:
         self._observe_phase(f"stop:{vmid}")
         self._record(f"stop:{vmid}")
-        self.locations[vmid] = VmLocation(node=node, status="stopped")
+        current = self.locations[vmid]
+        self.locations[vmid] = VmLocation(
+            node=node,
+            status="stopped",
+            name=current.name,
+        )
         return "stop"
 
     def delete(self, vmid: int, node: str) -> str:
@@ -181,13 +200,189 @@ def test_start_persists_state_before_each_next_remote_boundary(
     )
 
     assert provider.snapshots == [
-        ("allocate", EnvironmentPhase.ALLOCATING, None, None, None, None),
-        ("clone", EnvironmentPhase.ALLOCATING, 102, None, None, None),
-        ("wait:clone", EnvironmentPhase.CLONING, 102, None, "clone", None),
-        ("locate", EnvironmentPhase.CLONING, 102, None, "clone", None),
-        ("start", EnvironmentPhase.STOPPED, 102, "pve02", "clone", None),
-        ("wait:start", EnvironmentPhase.STARTING, 102, "pve02", "start", None),
-        ("wait_for_ipv4", EnvironmentPhase.RUNNING, 102, "pve02", "start", None),
+        (
+            "allocate",
+            EnvironmentPhase.ALLOCATING,
+            None,
+            None,
+            None,
+            None,
+            "test-provider-fingerprint",
+            "",
+            False,
+        ),
+        (
+            "clone",
+            EnvironmentPhase.CLONING,
+            102,
+            None,
+            None,
+            None,
+            "test-provider-fingerprint",
+            "learnlab-proxmox-admin-102",
+            True,
+        ),
+        (
+            "wait:clone",
+            EnvironmentPhase.CLONING,
+            102,
+            None,
+            "clone",
+            None,
+            "test-provider-fingerprint",
+            "learnlab-proxmox-admin-102",
+            False,
+        ),
+        (
+            "locate",
+            EnvironmentPhase.CLONING,
+            102,
+            None,
+            "clone",
+            None,
+            "test-provider-fingerprint",
+            "learnlab-proxmox-admin-102",
+            False,
+        ),
+        (
+            "start",
+            EnvironmentPhase.STOPPED,
+            102,
+            "pve02",
+            "clone",
+            None,
+            "test-provider-fingerprint",
+            "learnlab-proxmox-admin-102",
+            False,
+        ),
+        (
+            "wait:start",
+            EnvironmentPhase.STARTING,
+            102,
+            "pve02",
+            "start",
+            None,
+            "test-provider-fingerprint",
+            "learnlab-proxmox-admin-102",
+            False,
+        ),
+        (
+            "wait_for_ipv4",
+            EnvironmentPhase.RUNNING,
+            102,
+            "pve02",
+            "start",
+            None,
+            "test-provider-fingerprint",
+            "learnlab-proxmox-admin-102",
+            False,
+        ),
+    ]
+
+
+def test_destroy_refuses_repointed_provider_before_remote_mutation(
+    store: StateStore, tmp_path: Path
+) -> None:
+    seed_environment(store, environment_id="env-1", vmid=102, node="pve02")
+    provider = DestroyRecordingProvider(
+        {
+            102: VmLocation(
+                node="pve02",
+                status="running",
+                name="learnlab-proxmox-admin-102",
+            )
+        },
+        fingerprint="different-provider-fingerprint",
+    )
+
+    summary = LifecycleService(store, provider, tmp_path).destroy_all(
+        True, tuple(store.list_environments())
+    )
+
+    retained = store.get_environment("env-1")
+    assert summary.failed == ["env-1"]
+    assert provider.operations == []
+    assert retained is not None
+    assert retained.phase is EnvironmentPhase.FAILED
+    assert "fingerprint" in (retained.error_summary or "")
+
+
+def test_destroy_refuses_reused_vmid_with_unexpected_name(
+    store: StateStore, tmp_path: Path
+) -> None:
+    seed_environment(store, environment_id="env-1", vmid=102, node="pve02")
+    provider = DestroyRecordingProvider(
+        {102: VmLocation(node="pve02", status="running", name="unrelated-vm")}
+    )
+
+    summary = LifecycleService(store, provider, tmp_path).destroy_all(
+        True, tuple(store.list_environments())
+    )
+
+    retained = store.get_environment("env-1")
+    assert summary.failed == ["env-1"]
+    assert provider.operations == ["locate:102"]
+    assert retained is not None
+    assert retained.phase is EnvironmentPhase.FAILED
+    assert "name" in (retained.error_summary or "")
+
+
+def test_destroy_retains_absent_vm_when_clone_outcome_is_uncertain(
+    store: StateStore, tmp_path: Path
+) -> None:
+    seed_environment(
+        store,
+        environment_id="env-1",
+        vmid=102,
+        node="pve02",
+        phase=EnvironmentPhase.FAILED,
+        clone_uncertain=True,
+    )
+    provider = DestroyRecordingProvider({})
+
+    summary = LifecycleService(store, provider, tmp_path).destroy_all(
+        True, tuple(store.list_environments())
+    )
+
+    retained = store.get_environment("env-1")
+    assert summary.failed == ["env-1"]
+    assert provider.operations == ["locate:102"]
+    assert retained is not None
+    assert retained.clone_uncertain is True
+    assert "uncertain" in (retained.error_summary or "")
+
+
+def test_later_destroy_reconciles_previously_absent_uncertain_clone(
+    store: StateStore, tmp_path: Path
+) -> None:
+    seed_environment(
+        store,
+        environment_id="env-1",
+        vmid=102,
+        node="pve02",
+        phase=EnvironmentPhase.FAILED,
+        clone_uncertain=True,
+    )
+    provider = DestroyRecordingProvider({})
+    service = LifecycleService(store, provider, tmp_path)
+
+    first = service.destroy_all(True, tuple(store.list_environments()))
+    provider.locations[102] = VmLocation(
+        node="pve02",
+        status="stopped",
+        name="learnlab-proxmox-admin-102",
+    )
+    second = service.destroy_all(True, tuple(store.list_environments()))
+
+    assert first.failed == ["env-1"]
+    assert second.destroyed == ["env-1"]
+    assert store.list_environments() == []
+    assert provider.operations == [
+        "locate:102",
+        "locate:102",
+        "delete:102",
+        "wait:delete",
+        "locate:102",
     ]
 
 
@@ -199,7 +394,7 @@ def test_start_failure_retains_redacted_partial_environment(
 ) -> None:
     failing_provider.fail_on("wait:clone", ProviderTaskFailed("secret-value"))
 
-    with pytest.raises(LifecycleError, match="learnlab destroy"):
+    with pytest.raises(LifecycleError, match="learnlab destroy") as caught:
         LifecycleService(
             store,
             failing_provider,
@@ -211,6 +406,8 @@ def test_start_failure_retains_redacted_partial_environment(
     assert record.phase is EnvironmentPhase.FAILED
     assert record.error_summary is not None
     assert "secret-value" not in record.error_summary
+    assert "secret-value" not in str(caught.value)
+    assert "[REDACTED]" in str(caught.value)
     assert not any(
         operation.startswith(("stop:", "delete:"))
         for operation in failing_provider.operations
@@ -225,7 +422,7 @@ def test_start_failure_bounds_retained_error_summary(
 ) -> None:
     failing_provider.fail_on("wait:clone", ProviderTaskFailed("x" * 1_000))
 
-    with pytest.raises(LifecycleError):
+    with pytest.raises(LifecycleError) as caught:
         LifecycleService(store, failing_provider, tmp_path).start(
             start_request(profile_fixture(node="pve02"))
         )
@@ -233,6 +430,53 @@ def test_start_failure_bounds_retained_error_summary(
     [record] = store.list_environments()
     assert record.error_summary is not None
     assert len(record.error_summary) <= 500
+    assert len(str(caught.value)) < 700
+
+
+def test_lost_clone_response_persists_uncertainty_and_expected_name(
+    store: StateStore,
+    failing_provider: RecordingProvider,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+) -> None:
+    failing_provider.fail_on(
+        "clone:102",
+        ProviderCloneOutcomeUnknown("clone response lost with secret-value"),
+    )
+
+    with pytest.raises(LifecycleError) as caught:
+        LifecycleService(
+            store,
+            failing_provider,
+            tmp_path,
+            secrets={"secret-value"},
+        ).start(start_request(profile_fixture(node="pve02")))
+
+    [record] = store.list_environments()
+    assert record.phase is EnvironmentPhase.FAILED
+    assert record.expected_vm_name == "learnlab-proxmox-admin-102"
+    assert record.clone_uncertain is True
+    assert "[REDACTED]" in str(caught.value)
+    assert "secret-value" not in str(caught.value)
+    assert failing_provider.operations == ["allocate_vmid", "clone:102"]
+
+
+def test_definitive_clone_rejection_does_not_mark_outcome_uncertain(
+    store: StateStore,
+    failing_provider: RecordingProvider,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+) -> None:
+    failing_provider.fail_on("clone:102", ProviderError("clone rejected"))
+
+    with pytest.raises(LifecycleError, match="clone rejected"):
+        LifecycleService(store, failing_provider, tmp_path).start(
+            start_request(profile_fixture(node="pve02"))
+        )
+
+    [record] = store.list_environments()
+    assert record.phase is EnvironmentPhase.FAILED
+    assert record.clone_uncertain is False
 
 
 def test_start_refuses_second_environment_for_course(
@@ -325,7 +569,13 @@ def test_destroy_stops_running_vm_then_deletes_and_clears_record(
         phase=EnvironmentPhase.RUNNING,
     )
     provider = DestroyRecordingProvider(
-        {102: VmLocation(node="pve02", status="running")}
+        {
+            102: VmLocation(
+                node="pve02",
+                status="running",
+                name="learnlab-proxmox-admin-102",
+            )
+        }
     )
 
     summary = LifecycleService(store, provider, tmp_path).destroy_all(
@@ -382,8 +632,16 @@ def test_destroy_failure_retains_record_and_continues(
     )
     provider = DestroyRecordingProvider(
         {
-            102: VmLocation(node="pve02", status="stopped"),
-            103: VmLocation(node="pve03", status="stopped"),
+            102: VmLocation(
+                node="pve02",
+                status="stopped",
+                name="learnlab-proxmox-admin-102",
+            ),
+            103: VmLocation(
+                node="pve03",
+                status="stopped",
+                name="learnlab-linux-basics-103",
+            ),
         }
     )
     provider.fail_for_vmid(102)
@@ -440,7 +698,14 @@ def test_destroy_persists_destructive_phase_before_provider_mutation(
 ) -> None:
     seed_environment(store, environment_id="env-1", vmid=102, node="pve02")
     provider = DestroyRecordingProvider(
-        {102: VmLocation(node="pve02", status=status)}, store
+        {
+            102: VmLocation(
+                node="pve02",
+                status=status,
+                name="learnlab-proxmox-admin-102",
+            )
+        },
+        store,
     )
     provider.fail_on(failing_operation, ProviderError("provider refused"))
 
@@ -461,7 +726,13 @@ def test_destroy_retains_record_when_vm_remains_after_delete(
 ) -> None:
     seed_environment(store, environment_id="env-1", vmid=102, node="pve02")
     provider = DestroyRecordingProvider(
-        {102: VmLocation(node="pve02", status="stopped")}
+        {
+            102: VmLocation(
+                node="pve02",
+                status="stopped",
+                name="learnlab-proxmox-admin-102",
+            )
+        }
     )
     provider.delete_removes_vm = False
 
@@ -482,7 +753,13 @@ def test_destroy_partial_failure_leaves_all_progress_and_attempts_untouched(
     store.create_attempt("proxmox", "proxmox-admin", "api-access")
     seed_environment(store, environment_id="env-1", vmid=102, node="pve02")
     provider = DestroyRecordingProvider(
-        {102: VmLocation(node="pve02", status="stopped")}
+        {
+            102: VmLocation(
+                node="pve02",
+                status="stopped",
+                name="learnlab-proxmox-admin-102",
+            )
+        }
     )
     provider.fail_for_vmid(102)
 
@@ -534,10 +811,22 @@ def test_destroy_routes_each_environment_to_its_recorded_provider_profile(
         node="lab-node",
     )
     home_provider = DestroyRecordingProvider(
-        {102: VmLocation(node="home-node", status="stopped")}
+        {
+            102: VmLocation(
+                node="home-node",
+                status="stopped",
+                name="learnlab-proxmox-admin-102",
+            )
+        }
     )
     lab_provider = DestroyRecordingProvider(
-        {102: VmLocation(node="lab-node", status="stopped")}
+        {
+            102: VmLocation(
+                node="lab-node",
+                status="stopped",
+                name="learnlab-linux-basics-102",
+            )
+        }
     )
 
     summary = LifecycleService(
@@ -578,8 +867,16 @@ def test_destroy_touches_only_the_immutable_confirmed_snapshot(
     )
     provider = DestroyRecordingProvider(
         {
-            102: VmLocation(node="pve02", status="stopped"),
-            103: VmLocation(node="pve03", status="stopped"),
+            102: VmLocation(
+                node="pve02",
+                status="stopped",
+                name="learnlab-proxmox-admin-102",
+            ),
+            103: VmLocation(
+                node="pve03",
+                status="stopped",
+                name="learnlab-linux-basics-103",
+            ),
         }
     )
 
@@ -617,7 +914,13 @@ def test_destroy_provider_resolution_failure_retains_target_and_continues(
     )
     confirmed = tuple(store.list_environments())
     valid_provider = DestroyRecordingProvider(
-        {103: VmLocation(node="pve03", status="stopped")}
+        {
+            103: VmLocation(
+                node="pve03",
+                status="stopped",
+                name="learnlab-linux-basics-103",
+            )
+        }
     )
 
     summary = LifecycleService(
@@ -648,6 +951,10 @@ def seed_environment(
     course_id: str = "proxmox-admin",
     profile_name: str = "home-proxmox",
     phase: EnvironmentPhase = EnvironmentPhase.STOPPED,
+    provider_endpoint: str = "https://proxmox.example.test:8006",
+    provider_fingerprint: str = "test-provider-fingerprint",
+    expected_vm_name: str | None = None,
+    clone_uncertain: bool = False,
 ) -> None:
     store.create_environment(
         EnvironmentRecord(
@@ -661,5 +968,9 @@ def seed_environment(
             phase=phase,
             vmid=vmid,
             node=node,
+            provider_endpoint=provider_endpoint,
+            provider_fingerprint=provider_fingerprint,
+            expected_vm_name=(expected_vm_name or f"learnlab-{course_id}-{vmid}"),
+            clone_uncertain=clone_uncertain,
         )
     )

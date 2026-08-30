@@ -25,6 +25,10 @@ class ProviderOperationError(ProviderError):
     """Raised when a provider operation cannot be completed."""
 
 
+class ProviderCloneOutcomeUnknown(ProviderOperationError):
+    """Raised when clone transport failed after the request may have been sent."""
+
+
 class ProviderTaskFailed(ProviderError):
     """Raised when an asynchronous provider task has a non-OK result."""
 

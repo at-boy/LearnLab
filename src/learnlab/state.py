@@ -68,6 +68,10 @@ class EnvironmentRecord:
     error_summary: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
+    provider_endpoint: str = ""
+    provider_fingerprint: str = ""
+    expected_vm_name: str = ""
+    clone_uncertain: bool = False
 
 
 class StateStore:
@@ -87,6 +91,7 @@ class StateStore:
                 for statement in _SCHEMA.split(";"):
                     if statement.strip():
                         connection.execute(statement)
+                _migrate_environment_columns(connection)
             except BaseException:
                 connection.rollback()
                 raise
@@ -130,6 +135,29 @@ class StateStore:
         return {
             str(row["lesson_id"]): ProgressStatus(str(row["status"])) for row in rows
         }
+
+    def list_progress(self) -> list[tuple[str, str, str, ProgressStatus]]:
+        """Return every direct progress row for reset disclosure."""
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                """
+                SELECT collection_id, course_id, lesson_id, status
+                FROM progress
+                ORDER BY collection_id, course_id, lesson_id
+                """
+            ).fetchall()
+        finally:
+            connection.close()
+        return [
+            (
+                str(row["collection_id"]),
+                str(row["course_id"]),
+                str(row["lesson_id"]),
+                ProgressStatus(str(row["status"])),
+            )
+            for row in rows
+        ]
 
     def start_lesson(self, collection_id: str, course_id: str, lesson_id: str) -> None:
         """Mark a lesson in progress after its environment starts."""
@@ -239,8 +267,12 @@ class StateStore:
                         INSERT INTO environments (
                             id, collection_id, course_id, lesson_id, attempt_id,
                             profile_name, provider_type, vmid, node, ip_address,
-                            phase, upid, error_summary, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            phase, upid, error_summary, created_at, updated_at,
+                            provider_endpoint, provider_fingerprint,
+                            expected_vm_name, clone_uncertain
+                        ) VALUES (
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                        )
                         """,
                         _environment_values(stored),
                     )
@@ -259,14 +291,28 @@ class StateStore:
         self, environment_id: str, phase: EnvironmentPhase, **fields: Any
     ) -> EnvironmentRecord:
         """Record one completed remote boundary and any returned safe metadata."""
-        allowed_fields = {"vmid", "node", "ip_address", "upid", "error_summary"}
+        allowed_fields = {
+            "vmid",
+            "node",
+            "ip_address",
+            "upid",
+            "error_summary",
+            "clone_uncertain",
+        }
         unknown_fields = set(fields) - allowed_fields
         if unknown_fields:
             unknown = ", ".join(sorted(unknown_fields))
             raise ValueError(f"Unsupported environment transition fields: {unknown}")
 
         values: list[object] = [phase.value, _utc_timestamp()]
-        for field in ("vmid", "node", "ip_address", "upid", "error_summary"):
+        for field in (
+            "vmid",
+            "node",
+            "ip_address",
+            "upid",
+            "error_summary",
+            "clone_uncertain",
+        ):
             values.extend((field in fields, fields.get(field)))
         values.append(environment_id)
 
@@ -284,6 +330,9 @@ class StateStore:
                         upid = CASE WHEN ? THEN ? ELSE upid END,
                         error_summary = CASE
                             WHEN ? THEN ? ELSE error_summary
+                        END,
+                        clone_uncertain = CASE
+                            WHEN ? THEN ? ELSE clone_uncertain
                         END
                     WHERE id = ?
                     """,
@@ -292,6 +341,39 @@ class StateStore:
                 if cursor.rowcount != 1:
                     raise StateConflictError(
                         f"Environment does not exist: {environment_id}"
+                    )
+        finally:
+            connection.close()
+        record = self.get_environment(environment_id)
+        if record is None:
+            raise StateConflictError(f"Environment does not exist: {environment_id}")
+        return record
+
+    def record_clone_intent(
+        self, environment_id: str, vmid: int, expected_vm_name: str
+    ) -> EnvironmentRecord:
+        """Durably bind one VMID/name before issuing the clone request."""
+        connection = self._connect()
+        try:
+            with connection:
+                cursor = connection.execute(
+                    """
+                    UPDATE environments SET
+                        phase = ?, vmid = ?, expected_vm_name = ?,
+                        clone_uncertain = 1, updated_at = ?
+                    WHERE id = ? AND expected_vm_name = ''
+                    """,
+                    (
+                        EnvironmentPhase.CLONING.value,
+                        vmid,
+                        expected_vm_name,
+                        _utc_timestamp(),
+                        environment_id,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise StateConflictError(
+                        f"Clone intent cannot be changed: {environment_id}"
                     )
         finally:
             connection.close()
@@ -449,6 +531,10 @@ def _environment_values(environment: EnvironmentRecord) -> tuple[object, ...]:
         environment.error_summary,
         environment.created_at,
         environment.updated_at,
+        environment.provider_endpoint,
+        environment.provider_fingerprint,
+        environment.expected_vm_name,
+        int(environment.clone_uncertain),
     )
 
 
@@ -479,11 +565,41 @@ def _row_to_environment(row: sqlite3.Row) -> EnvironmentRecord:
         error_summary=_optional_string(row["error_summary"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+        provider_endpoint=str(row["provider_endpoint"]),
+        provider_fingerprint=str(row["provider_fingerprint"]),
+        expected_vm_name=str(row["expected_vm_name"]),
+        clone_uncertain=bool(row["clone_uncertain"]),
     )
 
 
 def _optional_string(value: object) -> str | None:
     return str(value) if value is not None else None
+
+
+def _migrate_environment_columns(connection: sqlite3.Connection) -> None:
+    columns = {
+        str(row[1]) for row in connection.execute("PRAGMA table_info(environments)")
+    }
+    if "provider_endpoint" not in columns:
+        connection.execute(
+            "ALTER TABLE environments "
+            "ADD COLUMN provider_endpoint TEXT NOT NULL DEFAULT ''"
+        )
+    if "provider_fingerprint" not in columns:
+        connection.execute(
+            "ALTER TABLE environments "
+            "ADD COLUMN provider_fingerprint TEXT NOT NULL DEFAULT ''"
+        )
+    if "expected_vm_name" not in columns:
+        connection.execute(
+            "ALTER TABLE environments "
+            "ADD COLUMN expected_vm_name TEXT NOT NULL DEFAULT ''"
+        )
+    if "clone_uncertain" not in columns:
+        connection.execute(
+            "ALTER TABLE environments "
+            "ADD COLUMN clone_uncertain INTEGER NOT NULL DEFAULT 0"
+        )
 
 
 _PROGRESS_VALUES = ", ".join(f"'{status.value}'" for status in ProgressStatus)
@@ -523,7 +639,11 @@ CREATE TABLE IF NOT EXISTS environments (
     upid TEXT,
     error_summary TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    provider_endpoint TEXT NOT NULL DEFAULT '',
+    provider_fingerprint TEXT NOT NULL DEFAULT '',
+    expected_vm_name TEXT NOT NULL DEFAULT '',
+    clone_uncertain INTEGER NOT NULL DEFAULT 0 CHECK (clone_uncertain IN (0, 1))
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS one_retained_environment_per_course

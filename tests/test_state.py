@@ -191,6 +191,51 @@ def test_environment_creation_generates_utc_timestamps_internally(
     )
 
 
+def test_initialize_migrates_pre_ownership_environment_schema(tmp_path: Path) -> None:
+    path = tmp_path / "legacy.db"
+    connection = sqlite3.connect(path)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE environments (
+                id TEXT PRIMARY KEY,
+                collection_id TEXT NOT NULL,
+                course_id TEXT NOT NULL,
+                lesson_id TEXT NOT NULL,
+                attempt_id TEXT,
+                profile_name TEXT NOT NULL,
+                provider_type TEXT NOT NULL,
+                vmid INTEGER,
+                node TEXT,
+                ip_address TEXT,
+                phase TEXT NOT NULL,
+                upid TEXT,
+                error_summary TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO environments VALUES (
+                'legacy-env', 'proxmox', 'proxmox-admin', 'api-access', NULL,
+                'home-proxmox', 'proxmox', 102, 'pve02', NULL, 'failed', NULL,
+                NULL, '2026-08-29T00:00:00Z', '2026-08-29T00:00:00Z'
+            );
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    store = StateStore(path)
+    store.initialize()
+
+    record = store.get_environment("legacy-env")
+    assert record is not None
+    assert record.provider_endpoint == ""
+    assert record.provider_fingerprint == ""
+    assert record.expected_vm_name == ""
+    assert record.clone_uncertain is False
+
+
 class InterleavingStateStore(StateStore):
     """Runs a real second connection at a selected statement boundary."""
 

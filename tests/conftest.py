@@ -18,6 +18,8 @@ class RecordingProvider:
         self.operations: list[str] = []
         self.clone_names: list[str] = []
         self._failures: dict[str, ProviderError] = {}
+        self.api_origin = "https://proxmox.example.test:8006"
+        self.profile_fingerprint = "test-provider-fingerprint"
 
     def fail_on(self, operation: str, error: ProviderError) -> None:
         self._failures[operation] = error
@@ -44,7 +46,11 @@ class RecordingProvider:
 
     def locate_vm(self, vmid: int) -> VmLocation | None:
         self._record(f"locate:{vmid}")
-        return VmLocation(node="pve02", status="stopped")
+        return VmLocation(
+            node="pve02",
+            status="stopped",
+            name=self.clone_names[-1],
+        )
 
     def start(self, vmid: int, node: str) -> str:
         self._record(f"start:{vmid}")
@@ -85,7 +91,7 @@ def profile_fixture() -> Callable[..., ProxmoxProfile]:
     def build_profile(**overrides: object) -> ProxmoxProfile:
         values: dict[str, object] = {
             "name": "home-proxmox",
-            "api_url": "https://proxmox.example.test:8006/api2/json",
+            "api_url": "https://proxmox.example.test:8006",
             "token_id": "learnlab@pam!automation",
             "token_secret_env": "LEARNLAB_TEST_SECRET",
             "template_vmid": 9001,

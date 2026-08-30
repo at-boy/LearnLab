@@ -10,6 +10,7 @@ import pytest
 from learnlab.config import ProxmoxProfile
 from learnlab.errors import (
     ProviderAuthenticationError,
+    ProviderCloneOutcomeUnknown,
     ProviderOperationError,
     ProviderTaskFailed,
     ProviderTimeoutError,
@@ -99,6 +100,45 @@ def test_clone_uses_post_and_expected_form(
     assert upid == "UPID:pve02:clone:"
 
 
+def test_clone_transport_failure_reports_uncertain_outcome(
+    profile: ProxmoxProfile,
+) -> None:
+    request = httpx.Request("POST", "https://proxmox.example.test/clone")
+
+    class LostResponseClient:
+        def request(self, *args: object, **kwargs: object) -> httpx.Response:
+            raise httpx.ReadError("response lost", request=request)
+
+    provider = ProxmoxProvider(
+        profile,
+        "private-value",
+        client=cast(httpx.Client, LostResponseClient()),
+    )
+
+    with pytest.raises(ProviderCloneOutcomeUnknown, match="outcome is uncertain"):
+        provider.clone(102, "learnlab-proxmox-admin-102")
+
+
+def test_clone_http_rejection_is_definitive(
+    fake_server: FakeProxmoxServer, profile: ProxmoxProfile
+) -> None:
+    fake_server.queue(400, {"errors": "invalid clone request"})
+
+    with pytest.raises(ProviderOperationError) as caught:
+        provider_for(fake_server, profile).clone(102, "learnlab-proxmox-admin-102")
+
+    assert not isinstance(caught.value, ProviderCloneOutcomeUnknown)
+
+
+def test_clone_success_with_missing_task_id_reports_uncertain_outcome(
+    fake_server: FakeProxmoxServer, profile: ProxmoxProfile
+) -> None:
+    fake_server.queue(200, {"data": None})
+
+    with pytest.raises(ProviderCloneOutcomeUnknown, match="outcome is uncertain"):
+        provider_for(fake_server, profile).clone(102, "learnlab-proxmox-admin-102")
+
+
 @pytest.mark.parametrize(
     ("operation", "method", "path"),
     [
@@ -138,7 +178,16 @@ def test_locate_vm_returns_its_node_and_status(
 ) -> None:
     fake_server.queue(
         200,
-        {"data": [{"vmid": 102, "node": "pve03", "status": "stopped"}]},
+        {
+            "data": [
+                {
+                    "vmid": 102,
+                    "node": "pve03",
+                    "status": "stopped",
+                    "name": "learnlab-proxmox-admin-102",
+                }
+            ]
+        },
     )
 
     location = provider.locate_vm(102)
@@ -146,6 +195,7 @@ def test_locate_vm_returns_its_node_and_status(
     assert location is not None
     assert location.node == "pve03"
     assert location.status == "stopped"
+    assert location.name == "learnlab-proxmox-admin-102"
 
 
 def test_locate_vm_returns_none_when_the_vm_is_absent(
@@ -154,6 +204,25 @@ def test_locate_vm_returns_none_when_the_vm_is_absent(
     fake_server.queue(200, {"data": []})
 
     assert provider.locate_vm(102) is None
+
+
+@pytest.mark.parametrize("missing_field", ["node", "status", "name"])
+def test_locate_vm_rejects_malformed_matching_resource(
+    fake_server: FakeProxmoxServer,
+    provider: ProxmoxProvider,
+    missing_field: str,
+) -> None:
+    resource = {
+        "vmid": 102,
+        "node": "pve02",
+        "status": "stopped",
+        "name": "learnlab-proxmox-admin-102",
+    }
+    del resource[missing_field]
+    fake_server.queue(200, {"data": [resource]})
+
+    with pytest.raises(ProviderOperationError, match="malformed"):
+        provider.locate_vm(102)
 
 
 def test_wait_for_task_requires_stopped_and_ok(
@@ -299,7 +368,7 @@ def test_wait_for_ipv4_rejects_agent_readiness_after_a_short_deadline(
     )
     provider, clock = provider_with_clock(fake_server, profile)
 
-    with pytest.raises(ProviderTimeoutError, match="VM 102"):
+    with pytest.raises(ProviderTimeoutError, match="guest agent readiness.*VM 102"):
         provider.wait_for_ipv4(102, "pve02", timeout=1)
 
     assert clock.value == 1
@@ -330,7 +399,7 @@ def test_wait_for_ipv4_rejects_late_network_address(
     )
     provider, clock = provider_with_clock(fake_server, profile)
 
-    with pytest.raises(ProviderTimeoutError, match="VM 102"):
+    with pytest.raises(ProviderTimeoutError, match="IPv4 address.*VM 102"):
         provider.wait_for_ipv4(102, "pve02", timeout=1)
 
     assert clock.value == 1
@@ -375,7 +444,7 @@ def test_wait_for_ipv4_rejects_address_returned_after_the_deadline(
         sleep=clock.sleep,
     )
 
-    with pytest.raises(ProviderTimeoutError, match="VM 102"):
+    with pytest.raises(ProviderTimeoutError, match="IPv4 address.*VM 102"):
         provider.wait_for_ipv4(102, "pve02", timeout=1)
 
 
@@ -403,6 +472,7 @@ def test_health_check_uses_read_only_requests_and_reports_each_prerequisite(
             "data": {
                 "name": "nixos-26.05-base-v2",
                 "template": 1,
+                "boot": "order=scsi0;net0",
                 "scsi0": "local-lvm:base-9001-disk-0",
                 "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
             }
@@ -518,6 +588,65 @@ def test_health_check_requires_an_exact_network_bridge_value(
     assert health.provider_error is False
 
 
+def test_health_check_rejects_configured_storage_on_non_boot_disk(
+    fake_server: FakeProxmoxServer, provider: ProxmoxProvider
+) -> None:
+    _queue_health_identity(fake_server)
+    fake_server.queue(
+        200,
+        {
+            "data": {
+                "boot": "order=scsi0;scsi1;net0",
+                "scsi0": "other-storage:vm-9001-disk-0",
+                "scsi1": "local-lvm:vm-9001-disk-1",
+                "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
+            }
+        },
+    )
+
+    health = provider.health_check()
+
+    storage = next(check for check in health.checks if check.name == "Storage")
+    assert storage.ok is False
+
+
+def test_health_check_rejects_configured_bridge_on_secondary_nic(
+    fake_server: FakeProxmoxServer, provider: ProxmoxProvider
+) -> None:
+    _queue_health_identity(fake_server)
+    fake_server.queue(
+        200,
+        {
+            "data": {
+                "boot": "order=scsi0;net0",
+                "scsi0": "local-lvm:vm-9001-disk-0",
+                "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=isolated0",
+                "net1": "virtio=11:22:33:44:55:66,bridge=vmbr0",
+            }
+        },
+    )
+
+    health = provider.health_check()
+
+    network = next(check for check in health.checks if check.name == "Network")
+    assert network.ok is False
+
+
+def test_default_client_appends_api_path_to_normalized_origin(
+    profile_fixture: Callable[..., ProxmoxProfile],
+) -> None:
+    provider = ProxmoxProvider(
+        profile_fixture(api_url="https://proxmox.example.test:8006"),
+        "private-value",
+    )
+    try:
+        request = provider._client.build_request("GET", "/version")
+    finally:
+        provider._client.close()
+
+    assert str(request.url) == "https://proxmox.example.test:8006/api2/json/version"
+
+
 def test_authentication_error_redacts_token_secret(
     fake_server: FakeProxmoxServer, provider: ProxmoxProvider
 ) -> None:
@@ -574,3 +703,21 @@ def test_error_body_is_redacted_before_being_bounded(
     detail = str(caught.value).split("HTTP 500: ", maxsplit=1)[1]
     assert len(detail) == 2000
     assert "x" not in detail
+
+
+def _queue_health_identity(fake_server: FakeProxmoxServer) -> None:
+    fake_server.queue(200, {"data": {"version": "8.3"}})
+    fake_server.queue(200, {"data": [{"node": "pve02", "status": "online"}]})
+    fake_server.queue(
+        200,
+        {
+            "data": [
+                {
+                    "vmid": 9001,
+                    "node": "pve02",
+                    "name": "nixos-26.05-base-v2",
+                    "template": 1,
+                }
+            ]
+        },
+    )

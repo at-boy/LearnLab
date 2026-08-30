@@ -34,6 +34,14 @@ def test_first_incomplete_follows_course_order(course):
     assert course.first_incomplete({"api-access"}).id == "api-tokens"
 
 
+def test_first_incomplete_returns_first_lesson_when_all_are_completed(course):
+    assert course.first_incomplete({"api-access", "api-tokens"}).id == "api-access"
+
+
+def test_course_loads_abstract_capability_requirements(course):
+    assert course.requirements == ("proxmox.api",)
+
+
 @pytest.mark.parametrize("invalid_path", ["proxmox", "a/b/c", "/proxmox-admin"])
 def test_course_path_requires_collection_slash_course(
     invalid_path: str, collections_dir: Path
@@ -61,3 +69,29 @@ def test_curriculum_contains_no_provider_configuration_or_secret_material(
         parsed = yaml.safe_load(source)
         assert isinstance(parsed, dict)
         assert prohibited_keys.isdisjoint(parsed)
+
+
+@pytest.mark.parametrize(
+    "requirements",
+    [
+        "proxmox.api",
+        ["Proxmox.API"],
+        ["proxmox/api"],
+        ["proxmox.api-"],
+        ["proxmox.api", "proxmox.api"],
+    ],
+)
+def test_course_rejects_invalid_capability_requirements(
+    tmp_path: Path, collections_dir: Path, requirements: object
+) -> None:
+    destination = tmp_path / "collections"
+    import shutil
+
+    shutil.copytree(collections_dir, destination)
+    course_file = destination / "proxmox" / "courses" / "proxmox-admin" / "course.yaml"
+    parsed = yaml.safe_load(course_file.read_text(encoding="utf-8"))
+    parsed["requirements"] = requirements
+    course_file.write_text(yaml.safe_dump(parsed, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(CurriculumError, match="requirements"):
+        CurriculumCatalog(destination).load_course("proxmox/proxmox-admin")

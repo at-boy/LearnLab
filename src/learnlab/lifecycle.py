@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Protocol
 
 from learnlab.curriculum import Course, Lesson
-from learnlab.errors import LearnLabError, redact
+from learnlab.errors import LearnLabError, ProviderCloneOutcomeUnknown, redact
 from learnlab.providers.base import Provider
 from learnlab.ssh import create_known_hosts, render_ssh_command
 from learnlab.state import (
@@ -102,6 +102,7 @@ class LifecycleService:
                 "Course already has an environment; run learnlab destroy first"
             )
 
+        provider = self._provider_for_profile(request.profile.name)
         attempt = self._store.create_attempt(
             request.course.collection_id,
             request.course.id,
@@ -118,21 +119,21 @@ class LifecycleService:
                 profile_name=request.profile.name,
                 provider_type=request.provider_type,
                 phase=EnvironmentPhase.ALLOCATING,
+                provider_endpoint=provider.api_origin,
+                provider_fingerprint=provider.profile_fingerprint,
             )
         )
 
-        provider = self._provider_for_profile(request.profile.name)
         try:
             vmid = provider.allocate_vmid()
-            self._store.transition_environment(
-                environment_id, EnvironmentPhase.ALLOCATING, vmid=vmid
-            )
-            clone_upid = provider.clone(vmid, _vm_name(request.course.id, vmid))
+            expected_vm_name = _vm_name(request.course.id, vmid)
+            self._store.record_clone_intent(environment_id, vmid, expected_vm_name)
+            clone_upid = provider.clone(vmid, expected_vm_name)
             self._store.transition_environment(
                 environment_id,
                 EnvironmentPhase.CLONING,
-                vmid=vmid,
                 upid=clone_upid,
+                clone_uncertain=False,
             )
             provider.wait_for_task(
                 request.profile.node, clone_upid, _TASK_TIMEOUT_SECONDS
@@ -140,6 +141,10 @@ class LifecycleService:
             location = provider.locate_vm(vmid)
             if location is None:
                 raise LifecycleError(f"Provider could not locate cloned VM {vmid}")
+            if location.name != expected_vm_name:
+                raise LifecycleError(
+                    f"Cloned VM {vmid} name does not match expected ownership"
+                )
             self._store.transition_environment(
                 environment_id, EnvironmentPhase.STOPPED, node=location.node
             )
@@ -166,17 +171,24 @@ class LifecycleService:
                     request.profile, ip_address, known_hosts
                 ),
             )
+        except ProviderCloneOutcomeUnknown as error:
+            summary = _safe_error_summary(error, self._secrets)
+            self._store.transition_environment(
+                environment_id,
+                EnvironmentPhase.FAILED,
+                error_summary=summary,
+                clone_uncertain=True,
+            )
+            raise _startup_error(summary) from None
         except Exception as error:
             summary = _safe_error_summary(error, self._secrets)
             self._store.transition_environment(
                 environment_id,
                 EnvironmentPhase.FAILED,
                 error_summary=summary,
+                clone_uncertain=False,
             )
-            raise LifecycleError(
-                "Environment startup failed; retained partial state. "
-                "Run learnlab destroy to clean it up."
-            ) from None
+            raise _startup_error(summary) from None
 
     def destroy_all(
         self,
@@ -210,10 +222,23 @@ class LifecycleService:
             return
 
         provider = self._provider_for_profile(environment.profile_name)
+        if provider.profile_fingerprint != environment.provider_fingerprint:
+            raise LifecycleError(
+                "Configured provider fingerprint does not match recorded ownership"
+            )
         location = provider.locate_vm(environment.vmid)
         if location is None:
+            if environment.clone_uncertain:
+                raise LifecycleError(
+                    "Clone outcome is uncertain and the VM is currently absent; retry "
+                    "destroy later to reconcile it"
+                )
             self._remove_local_environment(environment.id)
             return
+        if location.name != environment.expected_vm_name:
+            raise LifecycleError(
+                f"Located VM {environment.vmid} name does not match recorded ownership"
+            )
 
         if location.status == "running":
             self._store.transition_environment(
@@ -288,3 +313,10 @@ def _safe_error_summary(error: Exception, secrets: set[str]) -> str:
     if len(summary) > _ERROR_SUMMARY_LIMIT:
         summary = f"{summary[: _ERROR_SUMMARY_LIMIT - 3]}..."
     return summary
+
+
+def _startup_error(summary: str) -> LifecycleError:
+    return LifecycleError(
+        "Environment startup failed; retained partial state. "
+        f"Provider reason: {summary}. Run learnlab destroy to clean it up."
+    )

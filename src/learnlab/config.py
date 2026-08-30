@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import hashlib
+import ipaddress
+import json
 import os
+import re
 import tomllib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
+from urllib.parse import urlsplit
 
 from platformdirs import PlatformDirs
 
@@ -26,6 +31,7 @@ _PROFILE_KEYS = {
     "ssh_identity_file",
     "tls_verify",
 }
+_HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 
 
 @dataclass(frozen=True)
@@ -42,6 +48,11 @@ class ProxmoxProfile:
     ssh_user: str
     ssh_identity_file: Path
     tls_verify: bool
+
+    @property
+    def fingerprint(self) -> str:
+        """Return the immutable non-secret identity of this provider target."""
+        return provider_fingerprint(self)
 
 
 @dataclass(frozen=True)
@@ -151,6 +162,19 @@ def resolve_token_secret(profile: ProxmoxProfile) -> str:
     return secret
 
 
+def provider_fingerprint(profile: ProxmoxProfile) -> str:
+    """Hash the canonical non-secret fields that own a disposable VM."""
+    identity = {
+        "api_origin": profile.api_url,
+        "node": profile.node,
+        "template_name": profile.template_name,
+        "template_vmid": profile.template_vmid,
+        "token_id": profile.token_id,
+    }
+    canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()}"
+
+
 def _load_config_data(path: Path | None) -> dict[str, Any]:
     config_file = path if path is not None else config_path()
     try:
@@ -193,11 +217,7 @@ def _parse_proxmox_profile(name: str, data: dict[str, Any]) -> ProxmoxProfile:
             f"Unsupported provider type for {name}: {data['type']}"
         )
 
-    api_url = _required_string(data, "api_url", name)
-    if not api_url.startswith("https://"):
-        raise ConfigurationError(
-            f"Provider profile {name} api_url must start with https://"
-        )
+    api_url = _normalize_api_origin(_required_string(data, "api_url", name), name)
     template_vmid = data["template_vmid"]
     if (
         not isinstance(template_vmid, int)
@@ -238,3 +258,44 @@ def _required_string(data: dict[str, Any], key: str, profile_name: str) -> str:
             f"Provider profile {profile_name} {key} must be a nonempty string"
         )
     return value
+
+
+def _normalize_api_origin(value: str, profile_name: str) -> str:
+    message = (
+        f"Provider profile {profile_name} api_url must be an HTTPS origin "
+        "without credentials, path, query, or fragment"
+    )
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise ConfigurationError(message) from error
+    if (
+        parsed.scheme.lower() != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or "?" in value
+        or "#" in value
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise ConfigurationError(message)
+    host = parsed.hostname.lower()
+    if not _valid_hostname(host) or port == 0:
+        raise ConfigurationError(message)
+    rendered_host = f"[{host}]" if ":" in host else host
+    rendered_port = f":{port}" if port is not None and port != 443 else ""
+    return f"https://{rendered_host}{rendered_port}"
+
+
+def _valid_hostname(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        labels = host.split(".")
+        return len(host) <= 253 and all(
+            _HOST_LABEL.fullmatch(label) for label in labels
+        )
+    return True

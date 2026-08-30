@@ -26,7 +26,7 @@ default_provider = "home-proxmox"
 
 [providers.home-proxmox]
 type = "proxmox"
-api_url = "https://proxmox.example.test:8006/api2/json"
+api_url = "https://proxmox.example.test:8006"
 token_id = "learnlab@pam!automation"
 token_secret_env = "LEARNLAB_HOME_SECRET"
 template_vmid = 9001
@@ -40,7 +40,7 @@ tls_verify = true
 
 [providers.lab-proxmox]
 type = "proxmox"
-api_url = "https://lab-proxmox.example.test:8006/api2/json"
+api_url = "https://lab-proxmox.example.test:8006"
 token_id = "learnlab@pam!automation"
 token_secret_env = "LEARNLAB_HOME_SECRET"
 template_vmid = 9001
@@ -54,7 +54,7 @@ tls_verify = true
 
 [providers.missing-secret]
 type = "proxmox"
-api_url = "https://missing-secret.example.test:8006/api2/json"
+api_url = "https://missing-secret.example.test:8006"
 token_id = "learnlab@pam!automation"
 token_secret_env = "LEARNLAB_MISSING_SECRET"
 template_vmid = 9001
@@ -92,6 +92,8 @@ class CliDestroyProvider:
         self.node = node
         self.present = True
         self.operations: list[str] = []
+        self.api_origin = "https://proxmox.example.test:8006"
+        self.profile_fingerprint = "test-provider-fingerprint"
 
     def locate_vm(self, vmid: int):
         from learnlab.providers.base import VmLocation
@@ -99,7 +101,11 @@ class CliDestroyProvider:
         self.operations.append(f"locate:{vmid}")
         if not self.present:
             return None
-        return VmLocation(node=self.node, status="stopped")
+        return VmLocation(
+            node=self.node,
+            status="stopped",
+            name=f"learnlab-linux-basics-{vmid}",
+        )
 
     def delete(self, vmid: int, node: str) -> str:
         self.operations.append(f"delete:{vmid}")
@@ -209,6 +215,13 @@ class AppHarness:
                 phase=phase,
                 vmid=vmid,
                 node=node,
+                provider_endpoint=(
+                    "https://lab-proxmox.example.test:8006"
+                    if profile_name == "lab-proxmox"
+                    else "https://proxmox.example.test:8006"
+                ),
+                provider_fingerprint="test-provider-fingerprint",
+                expected_vm_name=f"learnlab-{course_id}-{vmid}",
             )
         )
 
@@ -524,6 +537,23 @@ def test_start_uses_default_provider_profile(app_harness: AppHarness) -> None:
     assert app_harness.provider_profiles == ["home-proxmox"]
 
 
+def test_start_warns_when_tls_verification_is_disabled_before_connection_details(
+    app_harness: AppHarness, tmp_xdg: Path
+) -> None:
+    config = tmp_xdg / "config" / "learnlab" / "config.toml"
+    config.write_text(
+        CONFIG.replace("tls_verify = true", "tls_verify = false"),
+        encoding="utf-8",
+    )
+
+    result = app_harness.invoke(["start", "proxmox/proxmox-admin"], input="\n")
+
+    assert result.exit_code == 0
+    warning = "WARNING: TLS certificate verification is disabled"
+    assert warning in result.stdout
+    assert result.stdout.index(warning) < result.stdout.index("SSH:")
+
+
 def test_progress_complete_advances_later_start_default(
     app_harness: AppHarness,
 ) -> None:
@@ -564,6 +594,9 @@ def test_destroy_requires_target_confirmation_and_progress_choice(
     assert "Node: pve02" in result.stdout
     assert "Course: proxmox/proxmox-admin" in result.stdout
     assert "Phase: running" in result.stdout
+    assert "Endpoint: https://proxmox.example.test:8006" in result.stdout
+    assert "Fingerprint: test-provider-fingerprint" in result.stdout
+    assert "Expected VM name: learnlab-proxmox-admin-102" in result.stdout
     assert "Preserve completed lessons" in result.stdout
     assert app_harness.lifecycle.destroy_choices == [True]
 
@@ -580,6 +613,26 @@ def test_destroy_cancellation_makes_no_provider_or_lifecycle_call(
     assert app_harness.provider_profiles == []
     assert app_harness.lifecycle.destroy_choices == []
     assert [record.id for record in app_harness.store.list_environments()] == ["env-1"]
+
+
+def test_destroy_shows_tls_warning_and_endpoint_before_confirmation(
+    app_harness: AppHarness, tmp_xdg: Path
+) -> None:
+    config = tmp_xdg / "config" / "learnlab" / "config.toml"
+    config.write_text(
+        CONFIG.replace("tls_verify = true", "tls_verify = false"),
+        encoding="utf-8",
+    )
+    app_harness.seed_environment(vmid=102)
+
+    result = app_harness.invoke(["destroy"], input="n\n")
+
+    warning = "WARNING: TLS certificate verification is disabled"
+    assert result.exit_code == 0
+    assert "Configured endpoint: https://proxmox.example.test:8006" in result.stdout
+    assert result.stdout.index(warning) < result.stdout.index(
+        "Destroy all listed environments?"
+    )
 
 
 def test_destroy_yes_still_requires_explicit_progress_policy(
@@ -628,12 +681,18 @@ def test_destroy_partial_failure_exits_nonzero_and_lists_retained_environment(
     app_harness.lifecycle.destroy_summary = DestroySummary(
         destroyed=[], failed=["env-102"]
     )
+    app_harness.store.transition_environment(
+        "env-102",
+        EnvironmentPhase.FAILED,
+        error_summary="ownership fingerprint mismatch",
+    )
 
     result = app_harness.invoke(["destroy", "--yes", "--preserve-progress"])
 
     assert result.exit_code == 3
     assert "Retained environment: env-102" in result.stdout
     assert "VM 102" in result.stdout
+    assert "Error: ownership fingerprint mismatch" in result.stdout
 
 
 def test_destroy_constructs_every_recorded_provider_profile(
@@ -903,6 +962,29 @@ def test_reset_collection_removes_only_matching_collection(
         (attempt.collection_id, attempt.course_id)
         for attempt in app_harness.store.list_attempts()
     } == {("cloud", "cloud-basics")}
+
+
+def test_reset_collection_counts_progress_preserved_after_destroy(
+    app_harness: AppHarness,
+) -> None:
+    app_harness.store.complete_lesson("proxmox", "proxmox-admin", "api-access")
+
+    result = app_harness.invoke(["reset", "proxmox"], input="n\n")
+
+    assert result.exit_code == 0
+    assert "Affected courses: 1" in result.stdout
+    assert "Affected lessons: 1" in result.stdout
+    assert "Cancelled." in result.stdout
+
+
+def test_default_database_name_is_learnlab_db(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from learnlab import cli
+
+    monkeypatch.setattr(cli, "state_root", lambda: tmp_path)
+
+    assert cli._default_state_store().db_path == tmp_path / "learnlab.db"
 
 
 def test_reset_refuses_matching_environment_without_mutating_progress(

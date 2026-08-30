@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence, Set
 from dataclasses import dataclass
-from pathlib import Path
+from importlib.resources.abc import Traversable
 from typing import Any
 
 import yaml
@@ -13,6 +13,7 @@ import yaml
 from learnlab.errors import LearnLabError
 
 _STABLE_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+_CAPABILITY_ID = re.compile(r"[a-z][a-z0-9]*(?:[.-][a-z][a-z0-9]*)*\Z")
 
 
 class CurriculumError(LearnLabError):
@@ -39,13 +40,16 @@ class Course:
     id: str
     title: str
     lessons: tuple[Lesson, ...]
+    requirements: tuple[str, ...] = ()
 
     def first_incomplete(self, completed_ids: Set[str]) -> Lesson:
         """Return the first lesson whose ID has not been completed."""
         for lesson in self.lessons:
             if lesson.id not in completed_ids:
                 return lesson
-        raise CurriculumError(f"Course {self.id} has no incomplete lessons")
+        if self.lessons:
+            return self.lessons[0]
+        raise CurriculumError(f"Course {self.id} has no lessons")
 
 
 @dataclass(frozen=True)
@@ -56,7 +60,7 @@ class Collection:
 
 @dataclass(frozen=True)
 class CurriculumCatalog:
-    collections_dir: Path
+    collections_dir: Traversable
 
     def load_course(self, course_path: str) -> Course:
         """Load one collection/course path with its explicitly ordered lessons."""
@@ -71,12 +75,16 @@ class CurriculumCatalog:
         course_dir = collection_dir / "courses" / course_id
         course_file = course_dir / "course.yaml"
         course_data = _load_mapping(course_file)
-        _require_exact_keys(course_data, {"id", "title", "lessons"}, course_file)
+        course_keys = {"id", "title", "lessons"}
+        if "requirements" in course_data:
+            course_keys.add("requirements")
+        _require_exact_keys(course_data, course_keys, course_file)
         parsed_course_id = _required_id(course_data, "id", course_file)
         if parsed_course_id != course_id:
             raise CurriculumError(f"{course_file}: ID does not match directory")
         title = _required_string(course_data, "title", course_file)
         lesson_ids = _required_id_list(course_data, "lessons", course_file)
+        requirements = _optional_capabilities(course_data, course_file)
 
         lessons = tuple(
             self._load_lesson(course_dir, lesson_id) for lesson_id in lesson_ids
@@ -86,6 +94,7 @@ class CurriculumCatalog:
             id=parsed_course_id,
             title=title,
             lessons=lessons,
+            requirements=requirements,
         )
 
     def _split_course_path(self, course_path: str) -> tuple[str, str]:
@@ -99,7 +108,7 @@ class CurriculumCatalog:
             raise CurriculumError("Course path must use collection/course")
         return collection_id, course_id
 
-    def _load_collection(self, path: Path) -> Collection:
+    def _load_collection(self, path: Traversable) -> Collection:
         data = _load_mapping(path)
         _require_exact_keys(data, {"id", "title"}, path)
         return Collection(
@@ -107,9 +116,13 @@ class CurriculumCatalog:
             title=_required_string(data, "title", path),
         )
 
-    def _load_lesson(self, course_dir: Path, lesson_id: str) -> Lesson:
+    def _load_lesson(self, course_dir: Traversable, lesson_id: str) -> Lesson:
         lessons_dir = course_dir / "lessons"
-        lesson_dirs = list(lessons_dir.glob(f"*-{lesson_id}"))
+        lesson_dirs = [
+            child
+            for child in lessons_dir.iterdir()
+            if child.is_dir() and child.name.endswith(f"-{lesson_id}")
+        ]
         if len(lesson_dirs) != 1:
             raise CurriculumError(
                 f"{lessons_dir}: expected one lesson directory for {lesson_id}"
@@ -128,9 +141,9 @@ class CurriculumCatalog:
         return Lesson(id=parsed_lesson_id, title=title, steps=steps)
 
 
-def _load_mapping(path: Path) -> dict[str, Any]:
+def _load_mapping(path: Traversable) -> dict[str, Any]:
     try:
-        with path.open(encoding="utf-8") as file:
+        with path.open("r", encoding="utf-8") as file:
             value = yaml.safe_load(file)
     except (OSError, yaml.YAMLError) as error:
         raise CurriculumError(f"{path}: unable to load curriculum") from error
@@ -142,7 +155,7 @@ def _load_mapping(path: Path) -> dict[str, Any]:
 
 
 def _require_exact_keys(
-    data: Mapping[str, Any], expected: set[str], path: Path
+    data: Mapping[str, Any], expected: set[str], path: Traversable
 ) -> None:
     if set(data) == expected:
         return
@@ -156,21 +169,23 @@ def _require_exact_keys(
     raise CurriculumError(f"{path}: {'; '.join(details)}")
 
 
-def _required_id(data: Mapping[str, Any], key: str, path: Path) -> str:
+def _required_id(data: Mapping[str, Any], key: str, path: Traversable) -> str:
     value = _required_string(data, key, path)
     if not _STABLE_ID.fullmatch(value):
         raise CurriculumError(f"{path}: {key} must be a stable ID")
     return value
 
 
-def _required_string(data: Mapping[str, Any], key: str, path: Path) -> str:
+def _required_string(data: Mapping[str, Any], key: str, path: Traversable) -> str:
     value = data[key]
     if not isinstance(value, str) or not value.strip():
         raise CurriculumError(f"{path}: {key} must be a nonempty string")
     return value
 
 
-def _required_id_list(data: Mapping[str, Any], key: str, path: Path) -> tuple[str, ...]:
+def _required_id_list(
+    data: Mapping[str, Any], key: str, path: Traversable
+) -> tuple[str, ...]:
     value = data[key]
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         raise CurriculumError(f"{path}: {key} must be an explicit list")
@@ -182,7 +197,7 @@ def _required_id_list(data: Mapping[str, Any], key: str, path: Path) -> tuple[st
     return ids
 
 
-def _required_steps(data: Mapping[str, Any], path: Path) -> tuple[Step, ...]:
+def _required_steps(data: Mapping[str, Any], path: Traversable) -> tuple[Step, ...]:
     value = data["steps"]
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         raise CurriculumError(f"{path}: steps must be an explicit list")
@@ -206,7 +221,24 @@ def _required_steps(data: Mapping[str, Any], path: Path) -> tuple[Step, ...]:
     return tuple(steps)
 
 
-def _validate_id(value: object, key: str, path: Path) -> str:
+def _validate_id(value: object, key: str, path: Traversable) -> str:
     if not isinstance(value, str) or not _STABLE_ID.fullmatch(value):
         raise CurriculumError(f"{path}: {key} entries must be stable IDs")
     return value
+
+
+def _optional_capabilities(
+    data: Mapping[str, Any], path: Traversable
+) -> tuple[str, ...]:
+    value = data.get("requirements", ())
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise CurriculumError(f"{path}: requirements must be an explicit list")
+    requirements = tuple(value)
+    if not all(
+        isinstance(requirement, str) and _CAPABILITY_ID.fullmatch(requirement)
+        for requirement in requirements
+    ):
+        raise CurriculumError(f"{path}: requirements entries must be capability IDs")
+    if len(set(requirements)) != len(requirements):
+        raise CurriculumError(f"{path}: duplicate requirements IDs")
+    return requirements
