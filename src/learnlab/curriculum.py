@@ -354,13 +354,13 @@ def _parse_environment(value: object, path: Traversable) -> EnvironmentPolicy:
     except ValueError as error:
         raise CurriculumError(f"{path}: environment scope is invalid") from error
 
-    capability = value.get("provider_capability")
     if scope is EnvironmentScope.NONE:
-        if capability is not None:
+        if "provider_capability" in value:
             raise CurriculumError(
                 f"{path}: provider_capability is forbidden for none environment scope"
             )
         return EnvironmentPolicy(scope=scope)
+    capability = value.get("provider_capability")
     if not isinstance(capability, str) or not _CAPABILITY_ID.fullmatch(capability):
         raise CurriculumError(
             f"{path}: provider_capability must be a capability ID for "

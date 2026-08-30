@@ -169,6 +169,17 @@ def test_none_scope_forbids_provider_capability(
         curriculum_builder.load()
 
 
+def test_none_scope_forbids_null_provider_capability(
+    curriculum_builder: CurriculumBuilder,
+) -> None:
+    curriculum_builder.course_environment(
+        {"scope": "none", "provider_capability": None}
+    )
+
+    with pytest.raises(CurriculumError, match="forbidden"):
+        curriculum_builder.load()
+
+
 def test_step_accepts_repeated_validator_types_in_order(course):
     checks = course.lessons[0].steps[0].verifications
     assert [item.type for item in checks] == [
