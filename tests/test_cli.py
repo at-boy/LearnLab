@@ -755,6 +755,66 @@ def test_destroy_missing_secret_profile_does_not_block_valid_target(
     assert "Retained environment: env-invalid" in result.stdout
 
 
+def test_destroy_malformed_profile_table_does_not_block_valid_target(
+    app_harness: AppHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+) -> None:
+    from learnlab import cli
+    from learnlab.lifecycle import LifecycleService
+
+    config = tmp_xdg / "config" / "learnlab" / "config.toml"
+    config.write_text(
+        CONFIG.replace('node = "lab-pve"\n', ""),
+        encoding="utf-8",
+    )
+    app_harness.seed_environment(
+        environment_id="env-malformed",
+        profile_name="lab-proxmox",
+        course_id="proxmox-admin",
+        vmid=102,
+    )
+    app_harness.seed_environment(
+        environment_id="env-valid",
+        profile_name="home-proxmox",
+        course_id="linux-basics",
+        vmid=103,
+        node="pve03",
+    )
+    valid_provider = CliDestroyProvider(103, "pve03")
+    constructed_profiles: list[str] = []
+
+    def provider_factory(settings, profile_name: str):
+        constructed_profiles.append(profile_name)
+        assert profile_name == "home-proxmox"
+        return valid_provider
+
+    monkeypatch.setattr(cli, "provider_factory", provider_factory)
+    monkeypatch.setattr(cli, "lifecycle_factory", LifecycleService)
+
+    result = app_harness.invoke(
+        ["destroy", "--yes", "--preserve-progress"]
+    )
+
+    retained = app_harness.store.get_environment("env-malformed")
+    assert result.exit_code == 3
+    assert constructed_profiles == ["home-proxmox"]
+    assert valid_provider.operations == [
+        "locate:103",
+        "delete:103",
+        "wait:delete",
+        "locate:103",
+    ]
+    assert retained is not None
+    assert retained.phase is EnvironmentPhase.FAILED
+    assert "Invalid provider profile lab-proxmox" in (
+        retained.error_summary or ""
+    )
+    assert "missing keys: node" in (retained.error_summary or "")
+    assert app_harness.store.get_environment("env-valid") is None
+    assert "Retained environment: env-malformed" in result.stdout
+
+
 @pytest.mark.parametrize(
     ("arguments", "user_input", "expects_progress_prompt"),
     [

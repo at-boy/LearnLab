@@ -6,7 +6,13 @@ from typing import Protocol
 
 import typer
 
-from learnlab.config import Settings, load_settings, resolve_token_secret, state_dir
+from learnlab.config import (
+    Settings,
+    load_requested_profiles,
+    load_settings,
+    resolve_token_secret,
+    state_dir,
+)
 from learnlab.curriculum import Course, CurriculumCatalog, CurriculumError, Lesson
 from learnlab.errors import ConfigurationError, LearnLabError, redact
 from learnlab.lifecycle import LifecycleService, StartRequest
@@ -194,23 +200,20 @@ def destroy_all(
         profile_names = tuple(
             dict.fromkeys(target.profile_name for target in targets)
         )
-        try:
-            settings = load_settings()
-        except LearnLabError as error:
-            providers.update(
-                (profile_name, error) for profile_name in profile_names
-            )
-        else:
-            for profile_name in profile_names:
-                try:
-                    profile = settings.provider(profile_name)
-                    secret = resolve_token_secret(profile)
-                    secrets.add(secret)
-                    providers[profile_name] = provider_factory(
-                        settings, profile_name
-                    )
-                except LearnLabError as error:
-                    providers[profile_name] = error
+        loaded_profiles = load_requested_profiles(profile_names)
+        providers.update(loaded_profiles.errors)
+        for profile_name in profile_names:
+            if profile_name in loaded_profiles.errors:
+                continue
+            try:
+                profile = loaded_profiles.settings.provider(profile_name)
+                secret = resolve_token_secret(profile)
+                secrets.add(secret)
+                providers[profile_name] = provider_factory(
+                    loaded_profiles.settings, profile_name
+                )
+            except LearnLabError as error:
+                providers[profile_name] = error
 
     try:
         lifecycle = lifecycle_factory(

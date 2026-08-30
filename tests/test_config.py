@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 import pytest
 
+import learnlab.config as config_module
 from learnlab.config import ProxmoxProfile, load_settings, resolve_token_secret
 from learnlab.errors import ConfigurationError, redact
 
@@ -86,6 +87,31 @@ def test_invalid_provider_type_is_rejected(tmp_path):
 
     with pytest.raises(ConfigurationError, match="Unsupported provider type"):
         load_settings(config)
+
+
+def test_requested_profile_loading_isolates_malformed_unrelated_table(tmp_path):
+    config = tmp_path / "config.toml"
+    malformed_and_valid = CONFIG.replace(
+        "[providers.home-proxmox]",
+        """[providers.malformed]
+type = "proxmox"
+api_url = "https://malformed.example.test"
+
+[providers.home-proxmox]""",
+    )
+    config.write_text(malformed_and_valid, encoding="utf-8")
+
+    with pytest.raises(ConfigurationError, match="malformed"):
+        load_settings(config)
+
+    loaded = config_module.load_requested_profiles(
+        ("malformed", "home-proxmox"), config
+    )
+
+    assert set(loaded.settings.providers) == {"home-proxmox"}
+    assert loaded.settings.provider("home-proxmox").template_vmid == 9001
+    assert set(loaded.errors) == {"malformed"}
+    assert "missing keys" in str(loaded.errors["malformed"])
 
 
 @pytest.mark.parametrize(

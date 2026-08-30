@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -56,6 +56,14 @@ class Settings:
             raise ConfigurationError(f"Unknown provider profile: {name}") from error
 
 
+@dataclass(frozen=True)
+class RequestedProfiles:
+    """Valid requested profiles and isolated errors for invalid requested names."""
+
+    settings: Settings
+    errors: Mapping[str, ConfigurationError]
+
+
 def config_path() -> Path:
     """Return the default XDG configuration file path."""
     return PlatformDirs("learnlab").user_config_path / "config.toml"
@@ -68,14 +76,7 @@ def state_dir() -> Path:
 
 def load_settings(path: Path | None = None) -> Settings:
     """Load named provider profiles from a TOML file."""
-    config_file = path if path is not None else config_path()
-    try:
-        with config_file.open("rb") as file:
-            data = tomllib.load(file)
-    except (OSError, tomllib.TOMLDecodeError) as error:
-        raise ConfigurationError(
-            f"Unable to load configuration: {config_file}"
-        ) from error
+    data = _load_config_data(path)
 
     default_provider = data.get("default_provider")
     providers = data.get("providers")
@@ -95,6 +96,50 @@ def load_settings(path: Path | None = None) -> Settings:
     )
 
 
+def load_requested_profiles(
+    names: Iterable[str], path: Path | None = None
+) -> RequestedProfiles:
+    """Load requested profiles while isolating validation errors by name."""
+    requested_names = tuple(dict.fromkeys(names))
+    try:
+        data = _load_config_data(path)
+    except ConfigurationError as load_error:
+        return _requested_profile_result(
+            {}, {name: load_error for name in requested_names}
+        )
+
+    providers = data.get("providers")
+    if not isinstance(providers, dict):
+        providers_error = ConfigurationError("Configuration requires providers")
+        return _requested_profile_result(
+            {}, {name: providers_error for name in requested_names}
+        )
+
+    parsed_profiles: dict[str, ProxmoxProfile] = {}
+    errors: dict[str, ConfigurationError] = {}
+    for name in requested_names:
+        profile_data = providers.get(name)
+        if profile_data is None:
+            errors[name] = ConfigurationError(f"Unknown provider profile: {name}")
+            continue
+        if not isinstance(profile_data, dict):
+            errors[name] = ConfigurationError(
+                f"Provider profile {name} must be a named table"
+            )
+            continue
+        try:
+            parsed_profiles[name] = _parse_proxmox_profile(name, profile_data)
+        except ConfigurationError as error:
+            errors[name] = error
+
+    default_provider = data.get("default_provider")
+    return _requested_profile_result(
+        parsed_profiles,
+        errors,
+        default_provider if isinstance(default_provider, str) else "",
+    )
+
+
 def resolve_token_secret(profile: ProxmoxProfile) -> str:
     """Resolve a profile's token secret only from its declared environment variable."""
     secret = os.environ.get(profile.token_secret_env)
@@ -104,6 +149,31 @@ def resolve_token_secret(profile: ProxmoxProfile) -> str:
             f"{profile.token_secret_env}"
         )
     return secret
+
+
+def _load_config_data(path: Path | None) -> dict[str, Any]:
+    config_file = path if path is not None else config_path()
+    try:
+        with config_file.open("rb") as file:
+            return tomllib.load(file)
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise ConfigurationError(
+            f"Unable to load configuration: {config_file}"
+        ) from error
+
+
+def _requested_profile_result(
+    profiles: dict[str, ProxmoxProfile],
+    errors: dict[str, ConfigurationError],
+    default_provider: str = "",
+) -> RequestedProfiles:
+    return RequestedProfiles(
+        settings=Settings(
+            default_provider=default_provider,
+            providers=MappingProxyType(profiles),
+        ),
+        errors=MappingProxyType(errors),
+    )
 
 
 def _parse_proxmox_profile(name: str, data: dict[str, Any]) -> ProxmoxProfile:
