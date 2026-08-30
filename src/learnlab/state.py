@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import uuid
 from dataclasses import dataclass, replace
@@ -574,6 +575,146 @@ def _row_to_environment(row: sqlite3.Row) -> EnvironmentRecord:
 
 def _optional_string(value: object) -> str | None:
     return str(value) if value is not None else None
+
+
+def resolve_default_state_db(state_root: Path) -> Path:
+    """Resolve or safely migrate the CLI's historical default database."""
+    current = state_root / "learnlab.db"
+    legacy = state_root / "state.db"
+    backup = state_root / "state.db.migrated"
+    temporary = state_root / ".learnlab.db.migrating"
+    temporary_artifacts = (
+        temporary,
+        temporary.with_name(f"{temporary.name}-wal"),
+        temporary.with_name(f"{temporary.name}-shm"),
+        temporary.with_name(f"{temporary.name}-journal"),
+    )
+    orphaned_database_sidecars = tuple(
+        sidecar
+        for database in (current, legacy)
+        if not database.exists()
+        for suffix in ("-wal", "-shm", "-journal")
+        if (sidecar := database.with_name(f"{database.name}{suffix}")).exists()
+    )
+
+    if current.exists() and legacy.exists():
+        raise _state_migration_conflict((legacy, current))
+    if any(path.exists() for path in temporary_artifacts):
+        raise _state_migration_conflict(
+            tuple(path for path in temporary_artifacts if path.exists())
+        )
+    if orphaned_database_sidecars:
+        raise _state_migration_conflict(orphaned_database_sidecars)
+    if legacy.exists() and backup.exists():
+        raise _state_migration_conflict((legacy, backup))
+    if not current.exists() and not legacy.exists() and backup.exists():
+        raise _state_migration_conflict((backup,))
+    for path in (current, legacy, backup):
+        if path.exists() and not path.is_file():
+            raise _state_migration_conflict((path,))
+    if current.exists():
+        return current
+    if not legacy.exists():
+        return current
+
+    _migrate_legacy_default_db(legacy, current, backup, temporary)
+    return current
+
+
+def _migrate_legacy_default_db(
+    legacy: Path,
+    current: Path,
+    backup: Path,
+    temporary: Path,
+) -> None:
+    try:
+        temporary.open("xb").close()
+        source = sqlite3.connect(legacy)
+        try:
+            destination = sqlite3.connect(temporary)
+            try:
+                source.backup(destination)
+                destination.commit()
+            finally:
+                destination.close()
+            _require_complete_checkpoint(source, legacy)
+        finally:
+            source.close()
+
+        StateStore(temporary).initialize()
+        migrated = sqlite3.connect(temporary)
+        try:
+            _require_complete_checkpoint(migrated, temporary, truncate=True)
+        finally:
+            migrated.close()
+        _remove_empty_temporary_sidecars(temporary)
+        temporary.chmod(legacy.stat().st_mode & 0o777)
+        with temporary.open("rb") as migrated_file:
+            os.fsync(migrated_file.fileno())
+
+        os.link(temporary, current)
+        _sync_directory(current.parent)
+        temporary.unlink()
+        _sync_directory(current.parent)
+
+        os.link(legacy, backup)
+        _sync_directory(current.parent)
+        legacy.unlink()
+        _sync_directory(current.parent)
+    except (OSError, sqlite3.Error) as error:
+        raise StateConflictError(
+            "State database migration stopped safely and requires manual recovery. "
+            f"Preserve {legacy}, {current}, {backup}, and {temporary}; inspect which "
+            "files exist, then leave exactly one authoritative database at "
+            f"{current} before retrying."
+        ) from error
+
+
+def _require_complete_checkpoint(
+    connection: sqlite3.Connection, path: Path, *, truncate: bool = False
+) -> None:
+    if truncate:
+        result = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    else:
+        result = connection.execute("PRAGMA wal_checkpoint(FULL)").fetchone()
+    if (
+        result is None
+        or len(result) != 3
+        or int(result[0]) != 0
+        or int(result[1]) != int(result[2])
+    ):
+        raise sqlite3.OperationalError(f"Unable to checkpoint state database {path}")
+
+
+def _remove_empty_temporary_sidecars(temporary: Path) -> None:
+    for suffix in ("-wal", "-shm"):
+        sidecar = temporary.with_name(f"{temporary.name}{suffix}")
+        if not sidecar.exists():
+            continue
+        if suffix == "-wal" and sidecar.stat().st_size != 0:
+            raise sqlite3.OperationalError(
+                f"Migration WAL was not empty after checkpoint: {sidecar}"
+            )
+        sidecar.unlink()
+
+
+def _sync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _state_migration_conflict(paths: tuple[Path, ...]) -> StateConflictError:
+    rendered_paths = ", ".join(str(path) for path in paths)
+    return StateConflictError(
+        "State database files require manual recovery; no state was changed. "
+        f"Found: {rendered_paths}. Preserve copies and inspect which database is "
+        "authoritative, then leave exactly one authoritative database at "
+        f"{paths[0].parent / 'learnlab.db'} and move other database or migration "
+        "artifacts outside the state directory before retrying."
+    )
 
 
 def _migrate_environment_columns(connection: sqlite3.Connection) -> None:

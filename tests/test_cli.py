@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shutil
+import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -18,6 +20,7 @@ from learnlab.state import (
     EnvironmentPhase,
     EnvironmentRecord,
     ProgressStatus,
+    StateConflictError,
     StateStore,
 )
 
@@ -987,6 +990,213 @@ def test_default_database_name_is_learnlab_db(
     assert cli._default_state_store().db_path == tmp_path / "learnlab.db"
 
 
+def test_start_migrates_legacy_default_db_and_refuses_active_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from learnlab import cli
+
+    state_root_path = tmp_path / "state" / "learnlab"
+    legacy_path = state_root_path / "state.db"
+    _create_pre_ownership_legacy_db(legacy_path)
+    provider_calls: list[str] = []
+    lifecycle_calls: list[str] = []
+    monkeypatch.setattr(cli, "state_root", lambda: state_root_path)
+    monkeypatch.setattr(
+        cli,
+        "provider_factory",
+        lambda *args, **kwargs: provider_calls.append("provider"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "lifecycle_factory",
+        lambda *args, **kwargs: lifecycle_calls.append("lifecycle"),
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["start", "proxmox/proxmox-admin"],
+        input="\n",
+    )
+
+    current_path = state_root_path / "learnlab.db"
+    backup_path = state_root_path / "state.db.migrated"
+    assert result.exit_code == 3
+    assert "already has an environment" in result.stdout
+    assert provider_calls == []
+    assert lifecycle_calls == []
+    assert current_path.exists()
+    assert not legacy_path.exists()
+    assert backup_path.exists()
+    assert cli._default_state_store().db_path == current_path
+
+    migrated = StateStore(current_path)
+    assert migrated.completed_lessons("proxmox", "proxmox-admin") == {"api-access"}
+    [attempt] = migrated.list_attempts()
+    [environment] = migrated.list_environments()
+    assert attempt.id == "attempt-legacy"
+    assert environment.id == "env-legacy"
+    assert environment.phase is EnvironmentPhase.RUNNING
+    assert environment.provider_endpoint == ""
+    assert environment.provider_fingerprint == ""
+    assert environment.expected_vm_name == ""
+
+    with sqlite3.connect(current_path) as connection:
+        columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(environments)")
+        }
+    assert {
+        "provider_endpoint",
+        "provider_fingerprint",
+        "expected_vm_name",
+        "clone_uncertain",
+    } <= columns
+    with sqlite3.connect(backup_path) as connection:
+        assert connection.execute("SELECT id FROM attempts").fetchall() == [
+            ("attempt-legacy",)
+        ]
+        assert connection.execute("SELECT id FROM environments").fetchall() == [
+            ("env-legacy",)
+        ]
+        backup_columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(environments)")
+        }
+    assert "provider_fingerprint" not in backup_columns
+
+
+@pytest.mark.parametrize(
+    ("arguments", "user_input"),
+    [
+        (["start", "proxmox/proxmox-admin"], "\n"),
+        (["destroy", "--yes", "--preserve-progress"], None),
+        (["reset", "proxmox/proxmox-admin", "--yes"], None),
+        (["progress", "complete", "proxmox/proxmox-admin/api-access"], None),
+    ],
+)
+def test_state_commands_fail_closed_when_both_default_databases_exist(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+    arguments: list[str],
+    user_input: str | None,
+) -> None:
+    from learnlab import cli
+
+    state_root_path = tmp_xdg / "state" / "learnlab"
+    legacy_path = state_root_path / "state.db"
+    current_path = state_root_path / "learnlab.db"
+    legacy = StateStore(legacy_path)
+    current = StateStore(current_path)
+    legacy.initialize()
+    current.initialize()
+    legacy.start_lesson("legacy", "legacy-course", "legacy-lesson")
+    current.complete_lesson("current", "current-course", "current-lesson")
+    external_calls: list[str] = []
+    monkeypatch.setenv("LEARNLAB_HOME_SECRET", "secret")
+    monkeypatch.setattr(cli, "state_root", lambda: state_root_path)
+    monkeypatch.setattr(
+        cli,
+        "provider_factory",
+        lambda *args, **kwargs: external_calls.append("provider"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "lifecycle_factory",
+        lambda *args, **kwargs: external_calls.append("lifecycle"),
+    )
+
+    result = CliRunner().invoke(cli.app, arguments, input=user_input)
+
+    assert result.exit_code == 3
+    assert str(legacy_path) in result.stdout
+    assert str(current_path) in result.stdout
+    assert "manual recovery" in result.stdout
+    assert "leave exactly one" in result.stdout
+    assert external_calls == []
+    assert legacy.lesson_statuses("legacy", "legacy-course") == {
+        "legacy-lesson": ProgressStatus.IN_PROGRESS
+    }
+    assert current.lesson_statuses("current", "current-course") == {
+        "current-lesson": ProgressStatus.COMPLETED
+    }
+
+
+def test_legacy_default_migration_includes_committed_active_wal_data(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from learnlab import cli
+
+    state_root_path = tmp_path / "state" / "learnlab"
+    legacy_path = state_root_path / "state.db"
+    StateStore(legacy_path).initialize()
+    writer = sqlite3.connect(legacy_path)
+    try:
+        writer.execute("PRAGMA wal_autocheckpoint = 0")
+        writer.execute(
+            """
+            INSERT INTO progress (
+                collection_id, course_id, lesson_id, status, created_at, updated_at
+            ) VALUES (
+                'proxmox', 'proxmox-admin', 'api-access', 'completed',
+                '2026-08-29T00:00:00Z', '2026-08-29T00:00:00Z'
+            )
+            """
+        )
+        writer.commit()
+        wal_path = legacy_path.with_name(f"{legacy_path.name}-wal")
+        assert wal_path.exists()
+        assert wal_path.stat().st_size > 0
+        main_only_copy = tmp_path / "main-only.db"
+        shutil.copyfile(legacy_path, main_only_copy)
+        with sqlite3.connect(main_only_copy) as connection:
+            assert connection.execute("SELECT * FROM progress").fetchall() == []
+
+        monkeypatch.setattr(cli, "state_root", lambda: state_root_path)
+        result = CliRunner().invoke(
+            cli.app,
+            ["reset", "proxmox/proxmox-admin"],
+            input="n\n",
+        )
+
+        assert result.exit_code == 0
+        assert "Affected lessons: 1" in result.stdout
+        assert "Cancelled." in result.stdout
+        current = StateStore(state_root_path / "learnlab.db")
+        assert current.completed_lessons("proxmox", "proxmox-admin") == {"api-access"}
+        with sqlite3.connect(state_root_path / "state.db.migrated") as connection:
+            assert connection.execute(
+                "SELECT lesson_id, status FROM progress"
+            ).fetchall() == [("api-access", "completed")]
+    finally:
+        writer.close()
+
+
+@pytest.mark.parametrize(
+    "artifact_names",
+    [
+        (".learnlab.db.migrating",),
+        (".learnlab.db.migrating-wal",),
+        (".learnlab.db.migrating-journal",),
+        ("state.db-wal",),
+        ("state.db.migrated",),
+        ("state.db", "state.db.migrated"),
+    ],
+)
+def test_default_state_store_refuses_ambiguous_migration_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    artifact_names: tuple[str, ...],
+) -> None:
+    from learnlab import cli
+
+    state_root_path = tmp_path / "state" / "learnlab"
+    state_root_path.mkdir(parents=True)
+    for artifact_name in artifact_names:
+        (state_root_path / artifact_name).write_bytes(b"retained for recovery")
+    monkeypatch.setattr(cli, "state_root", lambda: state_root_path)
+
+    with pytest.raises(StateConflictError, match="manual recovery"):
+        cli._default_state_store()
+
+
 def test_reset_refuses_matching_environment_without_mutating_progress(
     app_harness: AppHarness,
 ) -> None:
@@ -1051,3 +1261,59 @@ def seed_progress(
     for lesson_id in lesson_ids:
         store.complete_lesson(collection_id, course_id, lesson_id)
         store.create_attempt(collection_id, course_id, lesson_id)
+
+
+def _create_pre_ownership_legacy_db(path: Path) -> None:
+    path.parent.mkdir(parents=True)
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE progress (
+                collection_id TEXT NOT NULL,
+                course_id TEXT NOT NULL,
+                lesson_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (collection_id, course_id, lesson_id)
+            );
+            CREATE TABLE attempts (
+                id TEXT PRIMARY KEY,
+                collection_id TEXT NOT NULL,
+                course_id TEXT NOT NULL,
+                lesson_id TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE environments (
+                id TEXT PRIMARY KEY,
+                collection_id TEXT NOT NULL,
+                course_id TEXT NOT NULL,
+                lesson_id TEXT NOT NULL,
+                attempt_id TEXT,
+                profile_name TEXT NOT NULL,
+                provider_type TEXT NOT NULL,
+                vmid INTEGER,
+                node TEXT,
+                ip_address TEXT,
+                phase TEXT NOT NULL,
+                upid TEXT,
+                error_summary TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO progress VALUES (
+                'proxmox', 'proxmox-admin', 'api-access', 'completed',
+                '2026-08-29T00:00:00Z', '2026-08-29T00:00:00Z'
+            );
+            INSERT INTO attempts VALUES (
+                'attempt-legacy', 'proxmox', 'proxmox-admin', 'api-access',
+                '2026-08-29T00:00:00Z'
+            );
+            INSERT INTO environments VALUES (
+                'env-legacy', 'proxmox', 'proxmox-admin', 'api-access',
+                'attempt-legacy', 'home-proxmox', 'proxmox', 102, 'pve02',
+                '192.0.2.10', 'running', 'UPID:start', NULL,
+                '2026-08-29T00:00:00Z', '2026-08-29T00:00:00Z'
+            );
+            """
+        )

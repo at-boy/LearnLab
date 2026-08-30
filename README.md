@@ -122,6 +122,27 @@ learnlab destroy --yes --preserve-progress
 learnlab destroy --yes --erase-progress
 ```
 
+## Legacy state database recovery
+
+The current state database is `learnlab.db`. If LearnLab finds only the former
+default `state.db`, the next state command makes a WAL-aware SQLite backup,
+updates the copied schema, atomically installs `learnlab.db`, and preserves the
+original as `state.db.migrated`. Keep that backup until the migrated progress,
+attempts, and environments have been reviewed.
+
+LearnLab stops without changing state when both `state.db` and `learnlab.db`
+exist, or when it finds unfinished migration artifacts. Preserve every file,
+inspect which database is authoritative, move the other database and artifacts
+outside the state directory, and retry only when exactly one authoritative
+`learnlab.db` remains. LearnLab never guesses, merges, or overwrites these files.
+
+Historical environment rows do not contain the provider fingerprint or expected
+VM name now required for destructive ownership checks. Those fields migrate as
+empty, so LearnLab retains the environment and refuses remote stop/delete rather
+than guessing ownership. Reconcile such infrastructure manually against the
+recorded profile, VMID, node, and provider inventory; preserve the databases
+while doing so and never delete a VM solely because its VMID matches.
+
 ## Live Proxmox acceptance test
 
 Normal tests are offline and must not connect to Proxmox:

@@ -20,7 +20,12 @@ from learnlab.errors import ConfigurationError, LearnLabError, redact
 from learnlab.lifecycle import LifecycleService, StartRequest
 from learnlab.providers.base import Provider
 from learnlab.providers.registry import build_provider
-from learnlab.state import ProgressStatus, StateConflictError, StateStore
+from learnlab.state import (
+    ProgressStatus,
+    StateConflictError,
+    StateStore,
+    resolve_default_state_db,
+)
 
 ProviderFactory = Callable[[Settings, str], Provider]
 CatalogFactory = Callable[[], CurriculumCatalog]
@@ -53,7 +58,7 @@ def _default_catalog() -> CurriculumCatalog:
 
 
 def _default_state_store() -> StateStore:
-    return StateStore(state_root() / "learnlab.db")
+    return StateStore(resolve_default_state_db(state_root()))
 
 
 catalog_factory: CatalogFactory = _default_catalog
@@ -162,7 +167,10 @@ def destroy_all(
         typer.echo("Error: --yes requires --preserve-progress or --erase-progress")
         raise typer.Exit(code=2)
 
-    store = state_store_factory()
+    try:
+        store = state_store_factory()
+    except LearnLabError as error:
+        _exit_with_error(error)
     state_exists = store.db_path.exists()
     if state_exists:
         store.initialize()
