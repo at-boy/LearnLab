@@ -76,10 +76,10 @@ class SshExecutor:
         timeout: float,
     ) -> RemoteCommandResult:
         """Run a single remote command without invoking a local shell."""
+        known_hosts = _isolated_known_hosts_path(self._state_root, environment.id)
         if environment.ip_address is None:
             raise ValueError("Remote environment does not have an IP address")
 
-        known_hosts = self._state_root / "environments" / environment.id / "known_hosts"
         argv = [
             "ssh",
             "-i",
@@ -146,6 +146,17 @@ def _partial_redaction_start(text: str) -> int | None:
         if text.endswith(_REDACTION_MARKER[:length]):
             return len(text) - length
     return None
+
+
+def _isolated_known_hosts_path(state_root: Path, environment_id: str) -> Path:
+    """Return the host-key path only for one safe environment path component."""
+    if (
+        not environment_id
+        or Path(environment_id).name != environment_id
+        or environment_id in {".", ".."}
+    ):
+        raise ValueError("Unsafe environment identifier")
+    return state_root / "environments" / environment_id / "known_hosts"
 
 
 def create_known_hosts(state_root: Path, environment_id: str) -> Path:

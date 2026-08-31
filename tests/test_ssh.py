@@ -88,6 +88,27 @@ def test_runs_one_strict_noninteractive_command_with_isolated_host_keys(
     assert captured["argv"][-1] == command
 
 
+def test_rejects_environment_ids_that_escape_isolated_known_hosts_directory(
+    tmp_path: Path, profile_fixture: Callable[..., ProxmoxProfile]
+) -> None:
+    captured: dict[str, Any] = {}
+    state_root = tmp_path / "state"
+    escaping_id = "../../home/.ssh"
+    normal_known_hosts = tmp_path / "home" / ".ssh" / "known_hosts"
+    executor = SshExecutor(
+        state_root,
+        runner=recording_runner(captured, subprocess.CompletedProcess([], 0, b"", b"")),
+    )
+
+    with pytest.raises(ValueError, match="Unsafe environment identifier"):
+        executor.run(
+            profile_fixture(), make_environment(id=escaping_id), "true", timeout=30
+        )
+
+    assert not normal_known_hosts.exists()
+    assert captured == {}
+
+
 def test_preserves_nonzero_exit_status_and_decodes_binary_output(
     tmp_path: Path, profile_fixture: Callable[..., ProxmoxProfile]
 ) -> None:
