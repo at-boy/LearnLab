@@ -11,6 +11,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from learnlab.curriculum import MAX_EVIDENCE_BYTES, VerificationType
 from learnlab.errors import LearnLabError
 
 
@@ -24,6 +25,30 @@ class ProgressStatus(StrEnum):
     NOT_STARTED = "not_started"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
+
+
+class StepStatus(StrEnum):
+    """The persisted state of one stable curriculum step."""
+
+    NOT_STARTED = "not_started"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+
+
+class VerificationStatus(StrEnum):
+    """The persisted result of one stable curriculum verification."""
+
+    NOT_STARTED = "not_started"
+    PASSED = "passed"
+    FAILED = "failed"
+
+
+class CompletionSource(StrEnum):
+    """Why a lesson is recorded as completed."""
+
+    LEGACY = "legacy"
+    VALIDATED = "validated"
+    MANUAL_OVERRIDE = "manual_override"
 
 
 class EnvironmentPhase(StrEnum):
@@ -75,6 +100,37 @@ class EnvironmentRecord:
     clone_uncertain: bool = False
 
 
+@dataclass(frozen=True)
+class SessionCursor:
+    """The durable resume position for one course session."""
+
+    collection_id: str
+    course_id: str
+    lesson_id: str
+    step_id: str | None
+    verification_id: str | None
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class VerificationRecord:
+    """One persisted stable verification result."""
+
+    collection_id: str
+    course_id: str
+    lesson_id: str
+    step_id: str
+    verification_id: str
+    status: VerificationStatus
+    validator_type: VerificationType
+    evidence: str | None
+    self_attested: bool
+    attempt_count: int
+    created_at: str
+    attempted_at: str | None
+    completed_at: str | None
+
+
 class StateStore:
     """SQLite-backed source of truth for progress and lifecycle state."""
 
@@ -93,6 +149,7 @@ class StateStore:
                     if statement.strip():
                         connection.execute(statement)
                 _migrate_environment_columns(connection)
+                _migrate_progress_columns(connection)
             except BaseException:
                 connection.rollback()
                 raise
@@ -167,10 +224,73 @@ class StateStore:
         )
 
     def complete_lesson(
-        self, collection_id: str, course_id: str, lesson_id: str
+        self,
+        collection_id: str,
+        course_id: str,
+        lesson_id: str,
+        source: CompletionSource = CompletionSource.MANUAL_OVERRIDE,
     ) -> None:
-        """Mark a lesson completed only after an explicit user action."""
-        self.mark_lesson(collection_id, course_id, lesson_id, ProgressStatus.COMPLETED)
+        """Mark a lesson completed with explicit provenance."""
+        now = _utc_timestamp()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO progress (
+                        collection_id, course_id, lesson_id, status,
+                        created_at, updated_at, completion_source
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(collection_id, course_id, lesson_id) DO UPDATE SET
+                        status = excluded.status,
+                        updated_at = excluded.updated_at,
+                        completion_source = excluded.completion_source
+                    """,
+                    (
+                        collection_id,
+                        course_id,
+                        lesson_id,
+                        ProgressStatus.COMPLETED.value,
+                        now,
+                        now,
+                        source.value,
+                    ),
+                )
+            except BaseException:
+                connection.rollback()
+                raise
+            else:
+                connection.commit()
+        finally:
+            connection.close()
+
+    def lesson_completion_source(
+        self, lesson_path: tuple[str, str, str]
+    ) -> CompletionSource | None:
+        """Return the provenance of a completed lesson, if retained."""
+        collection_id, course_id, lesson_id = lesson_path
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                """
+                SELECT completion_source
+                FROM progress
+                WHERE collection_id = ? AND course_id = ? AND lesson_id = ?
+                  AND status = ?
+                """,
+                (
+                    collection_id,
+                    course_id,
+                    lesson_id,
+                    ProgressStatus.COMPLETED.value,
+                ),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None or row["completion_source"] is None:
+            return None
+        return CompletionSource(str(row["completion_source"]))
 
     def mark_lesson(
         self,
@@ -181,6 +301,11 @@ class StateStore:
     ) -> None:
         """Persist a lesson's current status as one atomic update."""
         now = _utc_timestamp()
+        completion_source = (
+            CompletionSource.LEGACY.value
+            if status is ProgressStatus.COMPLETED
+            else None
+        )
         connection = self._connect()
         try:
             with connection:
@@ -188,14 +313,396 @@ class StateStore:
                     """
                     INSERT INTO progress (
                         collection_id, course_id, lesson_id, status,
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        created_at, updated_at, completion_source
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(collection_id, course_id, lesson_id) DO UPDATE SET
                         status = excluded.status,
+                        updated_at = excluded.updated_at,
+                        completion_source = excluded.completion_source
+                    """,
+                    (
+                        collection_id,
+                        course_id,
+                        lesson_id,
+                        status.value,
+                        now,
+                        now,
+                        completion_source,
+                    ),
+                )
+        finally:
+            connection.close()
+
+    def session_cursor(self, course_path: tuple[str, str]) -> SessionCursor | None:
+        """Return the persisted resume position for one course."""
+        collection_id, course_id = course_path
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                """
+                SELECT * FROM session_cursors
+                WHERE collection_id = ? AND course_id = ?
+                """,
+                (collection_id, course_id),
+            ).fetchone()
+        finally:
+            connection.close()
+        return _row_to_session_cursor(row) if row is not None else None
+
+    def set_session_cursor(
+        self,
+        course_path: tuple[str, str],
+        lesson_id: str,
+        step_id: str | None = None,
+        verification_id: str | None = None,
+    ) -> SessionCursor:
+        """Persist one course's exact resume position atomically."""
+        collection_id, course_id = course_path
+        now = _utc_timestamp()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO session_cursors (
+                        collection_id, course_id, lesson_id, step_id,
+                        verification_id, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(collection_id, course_id) DO UPDATE SET
+                        lesson_id = excluded.lesson_id,
+                        step_id = excluded.step_id,
+                        verification_id = excluded.verification_id,
                         updated_at = excluded.updated_at
                     """,
-                    (collection_id, course_id, lesson_id, status.value, now, now),
+                    (
+                        collection_id,
+                        course_id,
+                        lesson_id,
+                        step_id,
+                        verification_id,
+                        now,
+                    ),
                 )
+            except BaseException:
+                connection.rollback()
+                raise
+            else:
+                connection.commit()
+        finally:
+            connection.close()
+        return SessionCursor(
+            collection_id=collection_id,
+            course_id=course_id,
+            lesson_id=lesson_id,
+            step_id=step_id,
+            verification_id=verification_id,
+            updated_at=now,
+        )
+
+    def step_statuses(self, lesson_path: tuple[str, str, str]) -> dict[str, StepStatus]:
+        """Return retained step statuses for one stable lesson."""
+        collection_id, course_id, lesson_id = lesson_path
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                """
+                SELECT step_id, status
+                FROM step_progress
+                WHERE collection_id = ? AND course_id = ? AND lesson_id = ?
+                """,
+                (collection_id, course_id, lesson_id),
+            ).fetchall()
+        finally:
+            connection.close()
+        return {str(row["step_id"]): StepStatus(str(row["status"])) for row in rows}
+
+    def start_step(self, step_path: tuple[str, str, str, str]) -> None:
+        """Mark one stable curriculum step in progress atomically."""
+        collection_id, course_id, lesson_id, step_id = step_path
+        now = _utc_timestamp()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO step_progress (
+                        collection_id, course_id, lesson_id, step_id, status,
+                        created_at, updated_at, completed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+                    ON CONFLICT(
+                        collection_id, course_id, lesson_id, step_id
+                    ) DO UPDATE SET
+                        status = CASE
+                            WHEN step_progress.status = ?
+                            THEN step_progress.status
+                            ELSE excluded.status
+                        END,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        collection_id,
+                        course_id,
+                        lesson_id,
+                        step_id,
+                        StepStatus.IN_PROGRESS.value,
+                        now,
+                        now,
+                        StepStatus.COMPLETED.value,
+                    ),
+                )
+            except BaseException:
+                connection.rollback()
+                raise
+            else:
+                connection.commit()
+        finally:
+            connection.close()
+
+    def record_verification_result(
+        self,
+        step_path: tuple[str, str, str, str],
+        verification_id: str,
+        *,
+        passed: bool,
+        evidence: str | None,
+        validator_type: VerificationType = VerificationType.REMOTE_COMMAND,
+        self_attested: bool = False,
+    ) -> VerificationRecord:
+        """Persist one bounded verification attempt atomically."""
+        if evidence is not None and len(evidence.encode("utf-8")) > MAX_EVIDENCE_BYTES:
+            raise ValueError("Verification evidence must not exceed 8192 bytes")
+        collection_id, course_id, lesson_id, step_id = step_path
+        status = VerificationStatus.PASSED if passed else VerificationStatus.FAILED
+        validator_type = VerificationType(validator_type)
+        now = _utc_timestamp()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                step = connection.execute(
+                    """
+                    SELECT status FROM step_progress
+                    WHERE collection_id = ? AND course_id = ? AND lesson_id = ?
+                      AND step_id = ?
+                    """,
+                    step_path,
+                ).fetchone()
+                if step is None:
+                    raise StateConflictError(f"Step has not been started: {step_id}")
+                connection.execute(
+                    """
+                    INSERT INTO verification_progress (
+                        collection_id, course_id, lesson_id, step_id,
+                        verification_id, status, validator_type, evidence,
+                        self_attested, attempt_count, created_at, attempted_at,
+                        completed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+                    ON CONFLICT(
+                        collection_id, course_id, lesson_id, step_id,
+                        verification_id
+                    ) DO UPDATE SET
+                        status = CASE
+                            WHEN verification_progress.status = 'passed'
+                            THEN verification_progress.status
+                            ELSE excluded.status
+                        END,
+                        validator_type = CASE
+                            WHEN verification_progress.status = 'passed'
+                            THEN verification_progress.validator_type
+                            ELSE excluded.validator_type
+                        END,
+                        evidence = CASE
+                            WHEN verification_progress.status = 'passed'
+                            THEN verification_progress.evidence
+                            ELSE excluded.evidence
+                        END,
+                        self_attested = CASE
+                            WHEN verification_progress.status = 'passed'
+                            THEN verification_progress.self_attested
+                            ELSE excluded.self_attested
+                        END,
+                        attempt_count = verification_progress.attempt_count + 1,
+                        attempted_at = excluded.attempted_at,
+                        completed_at = CASE
+                            WHEN verification_progress.status = 'passed'
+                            THEN verification_progress.completed_at
+                            ELSE excluded.completed_at
+                        END
+                    """,
+                    (
+                        collection_id,
+                        course_id,
+                        lesson_id,
+                        step_id,
+                        verification_id,
+                        status.value,
+                        validator_type.value,
+                        evidence,
+                        int(self_attested),
+                        now,
+                        now,
+                        now if passed else None,
+                    ),
+                )
+                row = connection.execute(
+                    """
+                    SELECT * FROM verification_progress
+                    WHERE collection_id = ? AND course_id = ? AND lesson_id = ?
+                      AND step_id = ? AND verification_id = ?
+                    """,
+                    (*step_path, verification_id),
+                ).fetchone()
+                if row is None:
+                    raise StateConflictError(
+                        f"Verification result was not stored: {verification_id}"
+                    )
+            except BaseException:
+                connection.rollback()
+                raise
+            else:
+                connection.commit()
+        finally:
+            connection.close()
+        return _row_to_verification_record(row)
+
+    def verification_records(
+        self, step_path: tuple[str, str, str, str]
+    ) -> list[VerificationRecord]:
+        """Return all retained verification results for one stable step."""
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                """
+                SELECT * FROM verification_progress
+                WHERE collection_id = ? AND course_id = ? AND lesson_id = ?
+                  AND step_id = ?
+                ORDER BY created_at, verification_id
+                """,
+                step_path,
+            ).fetchall()
+        finally:
+            connection.close()
+        return [_row_to_verification_record(row) for row in rows]
+
+    def complete_step(
+        self,
+        step_path: tuple[str, str, str, str],
+        expected_verification_ids: tuple[str, ...],
+    ) -> None:
+        """Complete a step only when every curriculum verification passed."""
+        if not expected_verification_ids:
+            raise ValueError("Expected verification IDs must not be empty")
+        collection_id, course_id, lesson_id, step_id = step_path
+        now = _utc_timestamp()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                rows = connection.execute(
+                    """
+                    SELECT verification_id
+                    FROM verification_progress
+                    WHERE collection_id = ? AND course_id = ? AND lesson_id = ?
+                      AND step_id = ? AND status = ?
+                    """,
+                    (
+                        *step_path,
+                        VerificationStatus.PASSED.value,
+                    ),
+                ).fetchall()
+                passed_ids = {str(row["verification_id"]) for row in rows}
+                missing = [
+                    verification_id
+                    for verification_id in expected_verification_ids
+                    if verification_id not in passed_ids
+                ]
+                if missing:
+                    raise StateConflictError(
+                        "Step has incomplete verifications: " + ", ".join(missing)
+                    )
+                cursor = connection.execute(
+                    """
+                    UPDATE step_progress
+                    SET status = ?, updated_at = ?, completed_at = ?
+                    WHERE collection_id = ? AND course_id = ? AND lesson_id = ?
+                      AND step_id = ?
+                    """,
+                    (StepStatus.COMPLETED.value, now, now, *step_path),
+                )
+                if cursor.rowcount != 1:
+                    raise StateConflictError(f"Step has not been started: {step_id}")
+            except BaseException:
+                connection.rollback()
+                raise
+            else:
+                connection.commit()
+        finally:
+            connection.close()
+
+    def complete_lesson_validated(
+        self,
+        lesson_path: tuple[str, str, str],
+        expected_step_ids: tuple[str, ...],
+    ) -> None:
+        """Complete a lesson only when every curriculum step completed."""
+        if not expected_step_ids:
+            raise ValueError("Expected step IDs must not be empty")
+        collection_id, course_id, lesson_id = lesson_path
+        now = _utc_timestamp()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                rows = connection.execute(
+                    """
+                    SELECT step_id
+                    FROM step_progress
+                    WHERE collection_id = ? AND course_id = ? AND lesson_id = ?
+                      AND status = ?
+                    """,
+                    (
+                        *lesson_path,
+                        StepStatus.COMPLETED.value,
+                    ),
+                ).fetchall()
+                completed_ids = {str(row["step_id"]) for row in rows}
+                missing = [
+                    step_id
+                    for step_id in expected_step_ids
+                    if step_id not in completed_ids
+                ]
+                if missing:
+                    raise StateConflictError(
+                        "Lesson has incomplete steps: " + ", ".join(missing)
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO progress (
+                        collection_id, course_id, lesson_id, status,
+                        created_at, updated_at, completion_source
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(collection_id, course_id, lesson_id) DO UPDATE SET
+                        status = excluded.status,
+                        updated_at = excluded.updated_at,
+                        completion_source = excluded.completion_source
+                    """,
+                    (
+                        collection_id,
+                        course_id,
+                        lesson_id,
+                        ProgressStatus.COMPLETED.value,
+                        now,
+                        now,
+                        CompletionSource.VALIDATED.value,
+                    ),
+                )
+            except BaseException:
+                connection.rollback()
+                raise
+            else:
+                connection.commit()
         finally:
             connection.close()
 
@@ -442,6 +949,11 @@ class StateStore:
             )
             progress_query = "DELETE FROM progress WHERE collection_id = ?"
             attempts_query = "DELETE FROM attempts WHERE collection_id = ?"
+            cursor_query = "DELETE FROM session_cursors WHERE collection_id = ?"
+            step_query = "DELETE FROM step_progress WHERE collection_id = ?"
+            verification_query = (
+                "DELETE FROM verification_progress WHERE collection_id = ?"
+            )
             parameters = (collection_id,)
         else:
             environment_query = (
@@ -453,6 +965,16 @@ class StateStore:
             )
             attempts_query = (
                 "DELETE FROM attempts WHERE collection_id = ? AND course_id = ?"
+            )
+            cursor_query = (
+                "DELETE FROM session_cursors WHERE collection_id = ? AND course_id = ?"
+            )
+            step_query = (
+                "DELETE FROM step_progress WHERE collection_id = ? AND course_id = ?"
+            )
+            verification_query = (
+                "DELETE FROM verification_progress "
+                "WHERE collection_id = ? AND course_id = ?"
             )
             parameters = (collection_id, course_id)
         connection = self._connect()
@@ -467,6 +989,9 @@ class StateStore:
                     )
                 connection.execute(progress_query, parameters)
                 connection.execute(attempts_query, parameters)
+                connection.execute(cursor_query, parameters)
+                connection.execute(verification_query, parameters)
+                connection.execute(step_query, parameters)
             except BaseException:
                 connection.rollback()
                 raise
@@ -489,13 +1014,41 @@ class StateStore:
                         "Destroy retained environments before erasing local state"
                     )
                 connection.execute("DELETE FROM attempts")
+                connection.execute("DELETE FROM session_cursors")
                 if preserve_completed:
                     connection.execute(
                         "DELETE FROM progress WHERE status != ?",
                         (ProgressStatus.COMPLETED.value,),
                     )
+                    connection.execute(
+                        """
+                        DELETE FROM verification_progress
+                        WHERE status != ? OR NOT EXISTS (
+                            SELECT 1 FROM step_progress
+                            WHERE step_progress.collection_id =
+                                      verification_progress.collection_id
+                              AND step_progress.course_id =
+                                      verification_progress.course_id
+                              AND step_progress.lesson_id =
+                                      verification_progress.lesson_id
+                              AND step_progress.step_id =
+                                      verification_progress.step_id
+                              AND step_progress.status = ?
+                        )
+                        """,
+                        (
+                            VerificationStatus.PASSED.value,
+                            StepStatus.COMPLETED.value,
+                        ),
+                    )
+                    connection.execute(
+                        "DELETE FROM step_progress WHERE status != ?",
+                        (StepStatus.COMPLETED.value,),
+                    )
                 else:
                     connection.execute("DELETE FROM progress")
+                    connection.execute("DELETE FROM verification_progress")
+                    connection.execute("DELETE FROM step_progress")
             except BaseException:
                 connection.rollback()
                 raise
@@ -546,6 +1099,35 @@ def _row_to_attempt(row: sqlite3.Row) -> AttemptRecord:
         course_id=str(row["course_id"]),
         lesson_id=str(row["lesson_id"]),
         created_at=str(row["created_at"]),
+    )
+
+
+def _row_to_session_cursor(row: sqlite3.Row) -> SessionCursor:
+    return SessionCursor(
+        collection_id=str(row["collection_id"]),
+        course_id=str(row["course_id"]),
+        lesson_id=str(row["lesson_id"]),
+        step_id=_optional_string(row["step_id"]),
+        verification_id=_optional_string(row["verification_id"]),
+        updated_at=str(row["updated_at"]),
+    )
+
+
+def _row_to_verification_record(row: sqlite3.Row) -> VerificationRecord:
+    return VerificationRecord(
+        collection_id=str(row["collection_id"]),
+        course_id=str(row["course_id"]),
+        lesson_id=str(row["lesson_id"]),
+        step_id=str(row["step_id"]),
+        verification_id=str(row["verification_id"]),
+        status=VerificationStatus(str(row["status"])),
+        validator_type=VerificationType(str(row["validator_type"])),
+        evidence=_optional_string(row["evidence"]),
+        self_attested=bool(row["self_attested"]),
+        attempt_count=int(row["attempt_count"]),
+        created_at=str(row["created_at"]),
+        attempted_at=_optional_string(row["attempted_at"]),
+        completed_at=_optional_string(row["completed_at"]),
     )
 
 
@@ -777,6 +1359,20 @@ def _migrate_environment_columns(connection: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_progress_columns(connection: sqlite3.Connection) -> None:
+    columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(progress)")}
+    if "completion_source" not in columns:
+        connection.execute(_ADD_COMPLETION_SOURCE_SQL)
+    connection.execute(
+        """
+        UPDATE progress
+        SET completion_source = ?
+        WHERE status = ? AND completion_source IS NULL
+        """,
+        (CompletionSource.LEGACY.value, ProgressStatus.COMPLETED.value),
+    )
+
+
 _LEGACY_RETIREMENT_TRIGGER_SQL = (
     """
     CREATE TRIGGER IF NOT EXISTS learnlab_retired_progress_insert
@@ -857,6 +1453,21 @@ _LEGACY_RETIREMENT_TRIGGER_DROP_SQL = (
 
 
 _PROGRESS_VALUES = ", ".join(f"'{status.value}'" for status in ProgressStatus)
+_STEP_STATUS_VALUES = ", ".join(f"'{status.value}'" for status in StepStatus)
+_VERIFICATION_STATUS_VALUES = ", ".join(
+    f"'{status.value}'" for status in VerificationStatus
+)
+_VERIFICATION_TYPE_VALUES = ", ".join(
+    f"'{verification_type.value}'" for verification_type in VerificationType
+)
+_COMPLETION_SOURCE_VALUES = ", ".join(
+    f"'{source.value}'" for source in CompletionSource
+)
+_ADD_COMPLETION_SOURCE_SQL = (
+    "ALTER TABLE progress ADD COLUMN completion_source TEXT CHECK ("
+    "completion_source IS NULL OR "
+    f"completion_source IN ({_COMPLETION_SOURCE_VALUES}))"
+)
 _PHASE_VALUES = ", ".join(f"'{phase.value}'" for phase in EnvironmentPhase)
 
 _SCHEMA = f"""
@@ -867,7 +1478,54 @@ CREATE TABLE IF NOT EXISTS progress (
     status TEXT NOT NULL CHECK (status IN ({_PROGRESS_VALUES})),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    completion_source TEXT CHECK (
+        completion_source IS NULL OR
+        completion_source IN ({_COMPLETION_SOURCE_VALUES})
+    ),
     PRIMARY KEY (collection_id, course_id, lesson_id)
+);
+
+CREATE TABLE IF NOT EXISTS session_cursors (
+    collection_id TEXT NOT NULL,
+    course_id TEXT NOT NULL,
+    lesson_id TEXT NOT NULL,
+    step_id TEXT,
+    verification_id TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (collection_id, course_id)
+);
+
+CREATE TABLE IF NOT EXISTS step_progress (
+    collection_id TEXT NOT NULL,
+    course_id TEXT NOT NULL,
+    lesson_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ({_STEP_STATUS_VALUES})),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT,
+    PRIMARY KEY (collection_id, course_id, lesson_id, step_id)
+);
+
+CREATE TABLE IF NOT EXISTS verification_progress (
+    collection_id TEXT NOT NULL,
+    course_id TEXT NOT NULL,
+    lesson_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    verification_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ({_VERIFICATION_STATUS_VALUES})),
+    validator_type TEXT NOT NULL CHECK (
+        validator_type IN ({_VERIFICATION_TYPE_VALUES})
+    ),
+    evidence TEXT,
+    self_attested INTEGER NOT NULL DEFAULT 0 CHECK (self_attested IN (0, 1)),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    created_at TEXT NOT NULL,
+    attempted_at TEXT,
+    completed_at TEXT,
+    PRIMARY KEY (
+        collection_id, course_id, lesson_id, step_id, verification_id
+    )
 );
 
 CREATE TABLE IF NOT EXISTS attempts (

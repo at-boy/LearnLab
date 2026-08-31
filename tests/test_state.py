@@ -9,13 +9,22 @@ from pathlib import Path
 import pytest
 
 import learnlab.state as state_module
+from learnlab.curriculum import MAX_EVIDENCE_BYTES, VerificationType
 from learnlab.state import (
+    CompletionSource,
     EnvironmentPhase,
     EnvironmentRecord,
     ProgressStatus,
+    SessionCursor,
     StateConflictError,
     StateStore,
+    StepStatus,
+    VerificationStatus,
 )
+
+COURSE_PATH = ("proxmox", "proxmox-admin")
+LESSON_PATH = (*COURSE_PATH, "api-access")
+STEP_PATH = (*LESSON_PATH, "inspect")
 
 
 @pytest.fixture
@@ -235,6 +244,387 @@ def test_initialize_migrates_pre_ownership_environment_schema(tmp_path: Path) ->
     assert record.provider_fingerprint == ""
     assert record.expected_vm_name == ""
     assert record.clone_uncertain is False
+
+
+def test_session_migration_is_additive_and_marks_legacy_completion(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "current.db"
+    connection = sqlite3.connect(path)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE progress (
+                collection_id TEXT NOT NULL,
+                course_id TEXT NOT NULL,
+                lesson_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (collection_id, course_id, lesson_id)
+            );
+            CREATE TABLE attempts (
+                id TEXT PRIMARY KEY,
+                collection_id TEXT NOT NULL,
+                course_id TEXT NOT NULL,
+                lesson_id TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE environments (
+                id TEXT PRIMARY KEY,
+                collection_id TEXT NOT NULL,
+                course_id TEXT NOT NULL,
+                lesson_id TEXT NOT NULL,
+                attempt_id TEXT REFERENCES attempts(id) ON DELETE RESTRICT,
+                profile_name TEXT NOT NULL,
+                provider_type TEXT NOT NULL,
+                vmid INTEGER,
+                node TEXT,
+                ip_address TEXT,
+                phase TEXT NOT NULL,
+                upid TEXT,
+                error_summary TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                provider_endpoint TEXT NOT NULL DEFAULT '',
+                provider_fingerprint TEXT NOT NULL DEFAULT '',
+                expected_vm_name TEXT NOT NULL DEFAULT '',
+                clone_uncertain INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO progress VALUES
+                ('proxmox', 'proxmox-admin', 'api-access', 'completed',
+                 '2026-08-29T00:00:00Z', '2026-08-29T01:00:00Z'),
+                ('proxmox', 'proxmox-admin', 'api-tokens', 'in_progress',
+                 '2026-08-29T02:00:00Z', '2026-08-29T03:00:00Z');
+            INSERT INTO attempts VALUES
+                ('attempt-1', 'proxmox', 'proxmox-admin', 'api-access',
+                 '2026-08-29T00:00:00Z');
+            INSERT INTO environments VALUES (
+                'legacy-env', 'proxmox', 'proxmox-admin', 'api-access',
+                'attempt-1', 'home-proxmox', 'proxmox', 102, 'pve02',
+                '192.0.2.10', 'running', 'UPID:start', NULL,
+                '2026-08-29T00:00:00Z', '2026-08-29T01:00:00Z',
+                'https://proxmox.example.test:8006', 'sha256:owned',
+                'learnlab-proxmox-admin-102', 0
+            );
+            """
+        )
+        before = {
+            "progress": connection.execute("SELECT * FROM progress").fetchall(),
+            "attempts": connection.execute("SELECT * FROM attempts").fetchall(),
+            "environments": connection.execute("SELECT * FROM environments").fetchall(),
+        }
+        connection.commit()
+    finally:
+        connection.close()
+
+    store = StateStore(path)
+    store.initialize()
+
+    connection = sqlite3.connect(path)
+    try:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        assert {"session_cursors", "step_progress", "verification_progress"} <= tables
+        assert "completion_source" in {
+            row[1] for row in connection.execute("PRAGMA table_info(progress)")
+        }
+        original_columns = {
+            "progress": 6,
+            "attempts": 5,
+            "environments": 19,
+        }
+        after = {
+            "progress": [
+                row[: original_columns["progress"]]
+                for row in connection.execute("SELECT * FROM progress").fetchall()
+            ],
+            "attempts": [
+                row[: original_columns["attempts"]]
+                for row in connection.execute("SELECT * FROM attempts").fetchall()
+            ],
+            "environments": [
+                row[: original_columns["environments"]]
+                for row in connection.execute("SELECT * FROM environments").fetchall()
+            ],
+        }
+        assert after == before
+        assert connection.execute(
+            "SELECT COUNT(*) FROM verification_progress"
+        ).fetchone() == (0,)
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE progress SET completion_source = 'invented' "
+                "WHERE lesson_id = 'api-access'"
+            )
+    finally:
+        connection.close()
+
+    assert (
+        store.lesson_completion_source(LESSON_PATH)
+        is state_module.CompletionSource.LEGACY
+    )
+
+
+def test_failed_verification_increments_attempt_without_completing_step(
+    store: StateStore,
+) -> None:
+    store.start_step(STEP_PATH)
+    store.record_verification_result(
+        STEP_PATH,
+        "check-os",
+        passed=False,
+        evidence="bad",
+        validator_type=VerificationType.REMOTE_COMMAND,
+    )
+
+    [record] = store.verification_records(STEP_PATH)
+    assert record.status is VerificationStatus.FAILED
+    assert record.attempt_count == 1
+    assert store.step_statuses(LESSON_PATH)["inspect"] is StepStatus.IN_PROGRESS
+
+
+def test_retry_preserves_prior_passed_verifications(store: StateStore) -> None:
+    store.start_step(STEP_PATH)
+    store.record_verification_result(
+        STEP_PATH,
+        "check-os",
+        passed=True,
+        evidence="NixOS",
+        validator_type=VerificationType.TEXT_EVIDENCE,
+    )
+    store.record_verification_result(
+        STEP_PATH,
+        "check-agent",
+        passed=False,
+        evidence="not ready",
+        validator_type=VerificationType.PROVIDER_CHECK,
+    )
+    store.record_verification_result(
+        STEP_PATH,
+        "check-agent",
+        passed=True,
+        evidence="ready",
+        validator_type=VerificationType.PROVIDER_CHECK,
+    )
+
+    records = {
+        record.verification_id: record
+        for record in store.verification_records(STEP_PATH)
+    }
+    assert records["check-os"].status is VerificationStatus.PASSED
+    assert records["check-os"].attempt_count == 1
+    assert records["check-agent"].status is VerificationStatus.PASSED
+    assert records["check-agent"].attempt_count == 2
+
+
+def test_failed_retry_does_not_clear_a_prior_pass(store: StateStore) -> None:
+    store.start_step(STEP_PATH)
+    store.record_verification_result(
+        STEP_PATH,
+        "check-os",
+        passed=True,
+        evidence="original pass",
+        validator_type=VerificationType.REMOTE_COMMAND,
+    )
+
+    store.record_verification_result(
+        STEP_PATH,
+        "check-os",
+        passed=False,
+        evidence="later failure",
+        validator_type=VerificationType.REMOTE_COMMAND,
+    )
+
+    [record] = store.verification_records(STEP_PATH)
+    assert record.status is VerificationStatus.PASSED
+    assert record.evidence == "original pass"
+    assert record.attempt_count == 2
+
+
+def test_all_verifications_complete_step_and_lesson_transactionally(
+    store: StateStore,
+) -> None:
+    _seed_two_passed_verifications(store)
+
+    store.complete_step(STEP_PATH, ("check-os", "check-agent"))
+
+    assert store.step_statuses(LESSON_PATH)["inspect"] is StepStatus.COMPLETED
+    store.complete_lesson_validated(LESSON_PATH, ("inspect",))
+    assert store.lesson_completion_source(LESSON_PATH) is CompletionSource.VALIDATED
+
+
+def test_step_completion_rejects_missing_expected_verification(
+    store: StateStore,
+) -> None:
+    store.start_step(STEP_PATH)
+    store.record_verification_result(
+        STEP_PATH,
+        "check-os",
+        passed=True,
+        evidence="ok",
+        validator_type=VerificationType.REMOTE_COMMAND,
+    )
+
+    with pytest.raises(StateConflictError, match="check-agent"):
+        store.complete_step(STEP_PATH, ("check-os", "check-agent"))
+
+    assert store.step_statuses(LESSON_PATH)["inspect"] is StepStatus.IN_PROGRESS
+
+
+def test_validated_lesson_completion_rejects_missing_expected_step(
+    store: StateStore,
+) -> None:
+    _seed_two_passed_verifications(store)
+    store.complete_step(STEP_PATH, ("check-os", "check-agent"))
+
+    with pytest.raises(StateConflictError, match="configure"):
+        store.complete_lesson_validated(LESSON_PATH, ("inspect", "configure"))
+
+    assert store.lesson_completion_source(LESSON_PATH) is None
+
+
+def test_session_cursor_persists_between_store_instances(tmp_path: Path) -> None:
+    path = tmp_path / "learnlab.db"
+    first = StateStore(path)
+    first.initialize()
+
+    stored = first.set_session_cursor(
+        COURSE_PATH,
+        lesson_id="api-access",
+        step_id="inspect",
+        verification_id="check-os",
+    )
+    second = StateStore(path)
+    second.initialize()
+
+    assert second.session_cursor(COURSE_PATH) == stored
+    assert stored == SessionCursor(
+        collection_id="proxmox",
+        course_id="proxmox-admin",
+        lesson_id="api-access",
+        step_id="inspect",
+        verification_id="check-os",
+        updated_at=stored.updated_at,
+    )
+
+
+def test_manual_verification_is_persisted_as_self_attested(store: StateStore) -> None:
+    store.start_step(STEP_PATH)
+    store.record_verification_result(
+        STEP_PATH,
+        "reviewed-output",
+        passed=True,
+        evidence="confirmed",
+        validator_type=VerificationType.MANUAL_CONFIRMATION,
+        self_attested=True,
+    )
+
+    [record] = store.verification_records(STEP_PATH)
+    assert record.self_attested is True
+    assert record.validator_type is VerificationType.MANUAL_CONFIRMATION
+
+
+def test_oversized_evidence_is_rejected_before_database_access(
+    tmp_path: Path,
+) -> None:
+    store = DatabaseAccessForbiddenStore(tmp_path / "unused.db")
+
+    with pytest.raises(ValueError, match="8192 bytes"):
+        store.record_verification_result(
+            STEP_PATH,
+            "check-os",
+            passed=False,
+            evidence="x" * (MAX_EVIDENCE_BYTES + 1),
+            validator_type=VerificationType.TEXT_EVIDENCE,
+        )
+
+
+def test_reset_deletes_session_step_and_verification_state(store: StateStore) -> None:
+    store.set_session_cursor(COURSE_PATH, "api-access", "inspect", "check-os")
+    _seed_two_passed_verifications(store)
+    store.reset_scope(*COURSE_PATH)
+
+    assert store.session_cursor(COURSE_PATH) is None
+    assert store.step_statuses(LESSON_PATH) == {}
+    assert store.verification_records(STEP_PATH) == []
+
+
+def test_erase_preserve_progress_retains_only_completed_steps_and_checks(
+    store: StateStore,
+) -> None:
+    _seed_two_passed_verifications(store)
+    store.complete_step(STEP_PATH, ("check-os", "check-agent"))
+    incomplete_path = (*LESSON_PATH, "configure")
+    store.start_step(incomplete_path)
+    store.record_verification_result(
+        incomplete_path,
+        "check-config",
+        passed=False,
+        evidence="bad",
+        validator_type=VerificationType.REMOTE_COMMAND,
+    )
+    store.set_session_cursor(COURSE_PATH, "api-access", "configure", "check-config")
+
+    store.erase_all(preserve_completed=True)
+
+    assert store.session_cursor(COURSE_PATH) is None
+    assert store.step_statuses(LESSON_PATH) == {"inspect": StepStatus.COMPLETED}
+    assert {
+        record.verification_id for record in store.verification_records(STEP_PATH)
+    } == {"check-os", "check-agent"}
+    assert store.verification_records(incomplete_path) == []
+
+
+def test_erase_without_preservation_removes_all_session_progress(
+    store: StateStore,
+) -> None:
+    _seed_two_passed_verifications(store)
+    store.complete_step(STEP_PATH, ("check-os", "check-agent"))
+    store.set_session_cursor(COURSE_PATH, "api-access", "inspect", "check-os")
+
+    store.erase_all(preserve_completed=False)
+
+    assert store.session_cursor(COURSE_PATH) is None
+    assert store.step_statuses(LESSON_PATH) == {}
+    assert store.verification_records(STEP_PATH) == []
+
+
+def test_manual_lesson_completion_records_override_provenance(
+    store: StateStore,
+) -> None:
+    store.complete_lesson(*LESSON_PATH, source=CompletionSource.MANUAL_OVERRIDE)
+
+    assert (
+        store.lesson_completion_source(LESSON_PATH) is CompletionSource.MANUAL_OVERRIDE
+    )
+
+
+def _seed_two_passed_verifications(store: StateStore) -> None:
+    store.start_step(STEP_PATH)
+    store.record_verification_result(
+        STEP_PATH,
+        "check-os",
+        passed=True,
+        evidence="ok",
+        validator_type=VerificationType.REMOTE_COMMAND,
+    )
+    store.record_verification_result(
+        STEP_PATH,
+        "check-agent",
+        passed=True,
+        evidence="ready",
+        validator_type=VerificationType.PROVIDER_CHECK,
+    )
+
+
+class DatabaseAccessForbiddenStore(StateStore):
+    def _connect(self) -> sqlite3.Connection:
+        raise AssertionError("oversized evidence reached database access")
 
 
 def test_default_migration_fences_open_writer_and_retires_legacy_database(
