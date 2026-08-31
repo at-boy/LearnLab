@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
@@ -333,7 +334,7 @@ class CourseSession:
             validator_type=result.validator_type,
             self_attested=result.self_attested,
             evidence=evidence,
-            completed_at=result.completed_at,
+            completed_at=datetime.now(UTC).isoformat(),
         )
 
     def _contextual_error(self, error: Exception) -> str:

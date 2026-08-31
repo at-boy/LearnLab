@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from learnlab.curriculum import (
@@ -189,6 +190,7 @@ class UnsafeResultRegistry:
             summary="q" * 500,
             validator_type=check.type,
             evidence="q" * (8 * 1024),
+            completed_at="token-secret" * 10_000,
         )
 
 
@@ -954,7 +956,7 @@ def test_failed_result_is_redacted_and_rebounded_before_persistence_and_prompts(
         lifecycle=NoEnvironmentLifecycle(),
         validators=UnsafeResultRegistry(),
         prompt=prompt,
-        secrets={"q"},
+        secrets={"q", "token-secret"},
     ).run()
 
     [record] = store.verification_records((*COURSE_PATH, "basics", "inspect"))
@@ -969,6 +971,14 @@ def test_failed_result_is_redacted_and_rebounded_before_persistence_and_prompts(
         assert "[REDACTED]" in result.summary
         assert len(result.summary) <= 500
         assert result.evidence == record.evidence
+        assert "token-secret" not in result.completed_at
+        assert len(result.completed_at) <= 40
+        parsed_result_time = datetime.fromisoformat(result.completed_at)
+        assert parsed_result_time.tzinfo is UTC
+    assert record.attempted_at is not None
+    assert record.completed_at is None
+    parsed_attempted_time = datetime.fromisoformat(record.attempted_at)
+    assert parsed_attempted_time.tzinfo is UTC
     assert "q" not in repr(outcome)
     assert outcome.action is SessionAction.SAVE_AND_EXIT
 
