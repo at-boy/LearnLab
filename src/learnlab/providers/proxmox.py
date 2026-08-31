@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 import time
 from collections.abc import Callable, Mapping
 from typing import cast
@@ -22,6 +23,8 @@ from learnlab.errors import (
 )
 from learnlab.providers.base import ProviderCheck, ProviderHealth, VmLocation
 from learnlab.state import EnvironmentRecord
+
+_PROXMOX_NODE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 
 
 class ProxmoxProvider:
@@ -195,15 +198,16 @@ class ProxmoxProvider:
             raise ValueError(f"Unknown provider check: {check}")
         if check in {"vm-running", "guest-agent-ready"} and environment is None:
             raise ValueError(f"Provider check {check} requires an environment")
+        if environment is not None and check in {"vm-running", "guest-agent-ready"}:
+            if environment.node is None:
+                return ProviderCheck(check, False, "Environment has no VM node")
+            if _PROXMOX_NODE.fullmatch(environment.node) is None:
+                raise ValueError("Unsafe Proxmox node identifier")
 
         try:
             if check == "api-reachable":
-                version = self._request("GET", "/version")
-                version_detail = self._string_value(version, "version")
-                detail = "Proxmox API is reachable"
-                if version_detail is not None:
-                    detail = f"Proxmox API {version_detail} is reachable"
-                return ProviderCheck(check, True, detail)
+                self._request("GET", "/version")
+                return ProviderCheck(check, True, "Proxmox API is reachable")
 
             if check == "template-visible":
                 resources = self._request("GET", "/cluster/resources?type=vm")
@@ -255,8 +259,6 @@ class ProxmoxProvider:
                     ),
                 )
 
-            if environment.node is None:
-                return ProviderCheck(check, False, "Environment has no VM node")
             self._request(
                 "POST",
                 f"/nodes/{environment.node}/qemu/{environment.vmid}/agent/ping",

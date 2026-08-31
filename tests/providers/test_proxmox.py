@@ -218,7 +218,19 @@ def test_api_reachable_check_is_one_named_get(
     assert request.path == "/api2/json/version"
     assert result.name == "api-reachable"
     assert result.ok is True
-    assert result.detail == "Proxmox API 8.4.1 is reachable"
+    assert result.detail == "Proxmox API is reachable"
+
+
+def test_api_reachable_success_does_not_reflect_provider_version_data(
+    fake_server: FakeProxmoxServer, provider: ProxmoxProvider
+) -> None:
+    fake_server.queue(200, {"data": {"version": "8.4.1 private-value"}})
+
+    result = provider.run_check("api-reachable", None)
+
+    assert result.ok is True
+    assert result.detail == "Proxmox API is reachable"
+    assert "private-value" not in result.detail
 
 
 def test_template_visible_check_reads_cluster_resources(
@@ -289,6 +301,29 @@ def test_guest_agent_ready_is_one_proven_ping_without_polling(
     assert request.body == ""
     assert result.name == "guest-agent-ready"
     assert result.ok is True
+
+
+def test_guest_agent_check_rejects_path_confused_node_before_post(
+    fake_server: FakeProxmoxServer, provider: ProxmoxProvider
+) -> None:
+    fake_server.queue(200, {"data": "UPID:pve02:start:"})
+    malicious_node = "pve02/qemu/102/status/start?ignored="
+
+    with pytest.raises(ValueError, match="Unsafe Proxmox node identifier"):
+        provider.run_check("guest-agent-ready", environment(node=malicious_node))
+
+    assert fake_server.requests.all() == []
+
+
+def test_vm_running_check_rejects_unsafe_node_before_get(
+    fake_server: FakeProxmoxServer, provider: ProxmoxProvider
+) -> None:
+    fake_server.queue(200, {"data": []})
+
+    with pytest.raises(ValueError, match="Unsafe Proxmox node identifier"):
+        provider.run_check("vm-running", environment(node="pve02/../pve03"))
+
+    assert fake_server.requests.all() == []
 
 
 @pytest.mark.parametrize("check", ["vm-running", "guest-agent-ready"])
