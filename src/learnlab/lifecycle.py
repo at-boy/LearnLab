@@ -11,7 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from learnlab.curriculum import Course, Lesson
+from learnlab.curriculum import (
+    Course,
+    EnvironmentPolicy,
+    EnvironmentScope,
+    Lesson,
+)
 from learnlab.errors import (
     LearnLabError,
     ProviderError,
@@ -87,6 +92,23 @@ class DestroySummary:
     failed: list[str]
 
 
+@dataclass(frozen=True)
+class EnvironmentResolution:
+    """Outcome of applying one curriculum environment policy."""
+
+    status: str
+    environment: EnvironmentRecord | None = None
+    started: StartedEnvironment | None = None
+
+    @property
+    def replacement_required(self) -> bool:
+        return self.status == "replacement_required"
+
+    @property
+    def recreation_required(self) -> bool:
+        return self.status == "recreation_required"
+
+
 class LifecycleService:
     """Coordinate provider calls with immediately durable local state."""
 
@@ -107,7 +129,89 @@ class LifecycleService:
         self._progress = progress
         self._clock = clock
 
-    def start(self, request: StartRequest) -> StartedEnvironment:
+    def ensure_environment(
+        self,
+        request: StartRequest,
+        policy: EnvironmentPolicy,
+        replace_confirmed: bool = False,
+    ) -> EnvironmentResolution:
+        """Apply curriculum scope without silently replacing retained state."""
+        if policy.scope is EnvironmentScope.NONE:
+            return EnvironmentResolution(status="none")
+
+        existing = self._store.active_environment(
+            request.course.collection_id, request.course.id
+        )
+        if existing is None:
+            return self._create_environment(request, policy)
+
+        if policy.scope is EnvironmentScope.LESSON:
+            existing_owner_id = existing.lesson_owner_id or existing.lesson_id
+            if existing_owner_id != request.lesson.id:
+                if not replace_confirmed:
+                    return EnvironmentResolution("replacement_required", existing)
+                self.destroy_environment(existing)
+                return self._create_environment(request, policy)
+
+        provider = self._reconcile_reusable_environment(request, policy, existing)
+        location = provider.locate_vm(existing.vmid)  # type: ignore[arg-type]
+        if location is None:
+            if replace_confirmed:
+                self.destroy_environment(existing)
+                return self._create_environment(request, policy)
+            return EnvironmentResolution("recreation_required", existing)
+        if location.name != existing.expected_vm_name:
+            raise LifecycleError(
+                f"Located VM {existing.vmid} name does not match recorded ownership"
+            )
+        policy_owner_id = (
+            request.lesson.id if policy.scope is EnvironmentScope.LESSON else None
+        )
+        needs_binding = existing.environment_scope is None or (
+            policy.scope is EnvironmentScope.LESSON and existing.lesson_owner_id is None
+        )
+        reconciled = (
+            self._store.bind_environment_scope(
+                existing.id, policy.scope, policy_owner_id
+            )
+            if needs_binding
+            else existing
+        )
+        return EnvironmentResolution("reused", reconciled)
+
+    def destroy_environment(self, confirmed_record: EnvironmentRecord) -> None:
+        """Destroy one confirmed record without erasing progress or attempts."""
+        try:
+            self._destroy_environment(confirmed_record)
+        except Exception as error:
+            summary = _safe_error_summary(error, self._secrets)
+            if self._store.get_environment(confirmed_record.id) is not None:
+                self._store.transition_environment(
+                    confirmed_record.id,
+                    EnvironmentPhase.FAILED,
+                    error_summary=summary,
+                )
+            raise LifecycleError(
+                f"Environment replacement cleanup failed: {summary}"
+            ) from None
+
+    def _create_environment(
+        self, request: StartRequest, policy: EnvironmentPolicy
+    ) -> EnvironmentResolution:
+        started = self.start(request, policy=policy)
+        record = self._store.get_environment(started.environment_id)
+        if record is None:
+            raise StateConflictError(
+                f"Environment does not exist: {started.environment_id}"
+            )
+        return EnvironmentResolution("created", record, started)
+
+    def start(
+        self,
+        request: StartRequest,
+        *,
+        policy: EnvironmentPolicy | None = None,
+    ) -> StartedEnvironment:
         """Create and start one disposable environment for the selected lesson."""
         started_at = self._clock()
         self._emit_progress(
@@ -131,6 +235,12 @@ class LifecycleService:
             request.course.collection_id,
             request.course.id,
             request.lesson.id,
+            environment_scope=policy.scope if policy is not None else None,
+            lesson_owner_id=(
+                request.lesson.id
+                if policy is not None and policy.scope is EnvironmentScope.LESSON
+                else None
+            ),
         )
         environment_id = str(uuid.uuid4())
         self._store.create_environment(
@@ -145,6 +255,12 @@ class LifecycleService:
                 phase=EnvironmentPhase.ALLOCATING,
                 provider_endpoint=provider.api_origin,
                 provider_fingerprint=provider.profile_fingerprint,
+                environment_scope=policy.scope if policy is not None else None,
+                lesson_owner_id=(
+                    request.lesson.id
+                    if policy is not None and policy.scope is EnvironmentScope.LESSON
+                    else None
+                ),
             )
         )
 
@@ -418,6 +534,52 @@ class LifecycleService:
             ) from None
         if isinstance(provider, Exception):
             raise provider
+        return provider
+
+    def _reconcile_reusable_environment(
+        self,
+        request: StartRequest,
+        policy: EnvironmentPolicy,
+        environment: EnvironmentRecord,
+    ) -> Provider:
+        if (
+            environment.environment_scope is not None
+            and environment.environment_scope is not policy.scope
+        ):
+            raise LifecycleError(
+                "Recorded environment scope does not match curriculum ownership"
+            )
+        expected_owner_id = (
+            request.lesson.id if policy.scope is EnvironmentScope.LESSON else None
+        )
+        if (
+            environment.lesson_owner_id is not None
+            and environment.lesson_owner_id != expected_owner_id
+        ):
+            raise LifecycleError(
+                "Recorded lesson owner does not match curriculum ownership"
+            )
+        if environment.profile_name != request.profile.name:
+            raise LifecycleError(
+                "Selected provider profile does not match recorded ownership"
+            )
+        if environment.vmid is None or not environment.expected_vm_name:
+            raise LifecycleError("Recorded environment ownership is incomplete")
+        expected_vm_name = _vm_name(request.course.id, environment.vmid)
+        if environment.expected_vm_name != expected_vm_name:
+            raise LifecycleError(
+                "Recorded expected VM name does not match current ownership"
+            )
+
+        provider = self._provider_for_profile(request.profile.name)
+        if provider.profile_fingerprint != environment.provider_fingerprint:
+            raise LifecycleError(
+                "Configured provider fingerprint does not match recorded ownership"
+            )
+        if provider.api_origin != environment.provider_endpoint:
+            raise LifecycleError(
+                "Configured provider endpoint does not match recorded ownership"
+            )
         return provider
 
     def _emit_progress(

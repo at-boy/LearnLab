@@ -11,7 +11,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from learnlab.curriculum import MAX_EVIDENCE_BYTES, VerificationType
+from learnlab.curriculum import MAX_EVIDENCE_BYTES, EnvironmentScope, VerificationType
 from learnlab.errors import LearnLabError
 
 
@@ -73,6 +73,8 @@ class AttemptRecord:
     course_id: str
     lesson_id: str
     created_at: str
+    environment_scope: EnvironmentScope | None = None
+    lesson_owner_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -98,6 +100,8 @@ class EnvironmentRecord:
     provider_fingerprint: str = ""
     expected_vm_name: str = ""
     clone_uncertain: bool = False
+    environment_scope: EnvironmentScope | None = None
+    lesson_owner_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -149,6 +153,7 @@ class StateStore:
                     if statement.strip():
                         connection.execute(statement)
                 _migrate_environment_columns(connection)
+                _migrate_attempt_columns(connection)
                 _migrate_progress_columns(connection)
             except BaseException:
                 connection.rollback()
@@ -714,6 +719,9 @@ class StateStore:
         course_id: str,
         lesson_id: str,
         attempt_id: str | None = None,
+        *,
+        environment_scope: EnvironmentScope | None = None,
+        lesson_owner_id: str | None = None,
     ) -> AttemptRecord:
         """Create and return an attempt for a selected lesson."""
         record = AttemptRecord(
@@ -722,6 +730,8 @@ class StateStore:
             course_id=course_id,
             lesson_id=lesson_id,
             created_at=_utc_timestamp(),
+            environment_scope=environment_scope,
+            lesson_owner_id=lesson_owner_id,
         )
         connection = self._connect()
         try:
@@ -729,9 +739,10 @@ class StateStore:
                 connection.execute(
                     """
                     INSERT INTO attempts (
-                        id, collection_id, course_id, lesson_id, created_at
+                        id, collection_id, course_id, lesson_id, created_at,
+                        environment_scope, lesson_owner_id
                     )
-                    VALUES (?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         record.id,
@@ -739,6 +750,12 @@ class StateStore:
                         record.course_id,
                         record.lesson_id,
                         record.created_at,
+                        (
+                            record.environment_scope.value
+                            if record.environment_scope is not None
+                            else None
+                        ),
+                        record.lesson_owner_id,
                     ),
                 )
         finally:
@@ -751,7 +768,8 @@ class StateStore:
         try:
             rows = connection.execute(
                 """
-                SELECT id, collection_id, course_id, lesson_id, created_at
+                SELECT id, collection_id, course_id, lesson_id, created_at,
+                       environment_scope, lesson_owner_id
                 FROM attempts
                 ORDER BY created_at, id
                 """
@@ -779,9 +797,11 @@ class StateStore:
                             profile_name, provider_type, vmid, node, ip_address,
                             phase, upid, error_summary, created_at, updated_at,
                             provider_endpoint, provider_fingerprint,
-                            expected_vm_name, clone_uncertain
+                            expected_vm_name, clone_uncertain,
+                            environment_scope, lesson_owner_id
                         ) VALUES (
-                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?
                         )
                         """,
                         _environment_values(stored),
@@ -902,6 +922,70 @@ class StateStore:
         finally:
             connection.close()
         return _row_to_environment(row) if row is not None else None
+
+    def bind_environment_scope(
+        self,
+        environment_id: str,
+        scope: EnvironmentScope,
+        lesson_owner_id: str | None,
+    ) -> EnvironmentRecord:
+        """Add policy metadata to a legacy record without changing ownership."""
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                row = connection.execute(
+                    "SELECT environment_scope, lesson_owner_id, attempt_id "
+                    "FROM environments WHERE id = ?",
+                    (environment_id,),
+                ).fetchone()
+                if row is None:
+                    raise StateConflictError(
+                        f"Environment does not exist: {environment_id}"
+                    )
+                _require_compatible_scope_binding(
+                    row, scope, lesson_owner_id, "environment"
+                )
+                connection.execute(
+                    "UPDATE environments SET environment_scope = ?, "
+                    "lesson_owner_id = ?, updated_at = ? WHERE id = ?",
+                    (
+                        scope.value,
+                        lesson_owner_id,
+                        _utc_timestamp(),
+                        environment_id,
+                    ),
+                )
+                attempt_id = _optional_string(row["attempt_id"])
+                if attempt_id is not None:
+                    attempt = connection.execute(
+                        "SELECT environment_scope, lesson_owner_id "
+                        "FROM attempts WHERE id = ?",
+                        (attempt_id,),
+                    ).fetchone()
+                    if attempt is None:
+                        raise StateConflictError(
+                            f"Environment attempt does not exist: {attempt_id}"
+                        )
+                    _require_compatible_scope_binding(
+                        attempt, scope, lesson_owner_id, "attempt"
+                    )
+                    connection.execute(
+                        "UPDATE attempts SET environment_scope = ?, "
+                        "lesson_owner_id = ? WHERE id = ?",
+                        (scope.value, lesson_owner_id, attempt_id),
+                    )
+            except BaseException:
+                connection.rollback()
+                raise
+            else:
+                connection.commit()
+        finally:
+            connection.close()
+        record = self.get_environment(environment_id)
+        if record is None:
+            raise StateConflictError(f"Environment does not exist: {environment_id}")
+        return record
 
     def active_environment(
         self, collection_id: str, course_id: str
@@ -1077,6 +1161,12 @@ def _environment_values(environment: EnvironmentRecord) -> tuple[object, ...]:
         environment.provider_fingerprint,
         environment.expected_vm_name,
         int(environment.clone_uncertain),
+        (
+            environment.environment_scope.value
+            if environment.environment_scope is not None
+            else None
+        ),
+        environment.lesson_owner_id,
     )
 
 
@@ -1087,6 +1177,12 @@ def _row_to_attempt(row: sqlite3.Row) -> AttemptRecord:
         course_id=str(row["course_id"]),
         lesson_id=str(row["lesson_id"]),
         created_at=str(row["created_at"]),
+        environment_scope=(
+            EnvironmentScope(str(row["environment_scope"]))
+            if row["environment_scope"] is not None
+            else None
+        ),
+        lesson_owner_id=_optional_string(row["lesson_owner_id"]),
     )
 
 
@@ -1140,11 +1236,35 @@ def _row_to_environment(row: sqlite3.Row) -> EnvironmentRecord:
         provider_fingerprint=str(row["provider_fingerprint"]),
         expected_vm_name=str(row["expected_vm_name"]),
         clone_uncertain=bool(row["clone_uncertain"]),
+        environment_scope=(
+            EnvironmentScope(str(row["environment_scope"]))
+            if row["environment_scope"] is not None
+            else None
+        ),
+        lesson_owner_id=_optional_string(row["lesson_owner_id"]),
     )
 
 
 def _optional_string(value: object) -> str | None:
     return str(value) if value is not None else None
+
+
+def _require_compatible_scope_binding(
+    row: sqlite3.Row,
+    scope: EnvironmentScope,
+    lesson_owner_id: str | None,
+    record_kind: str,
+) -> None:
+    recorded_scope = _optional_string(row["environment_scope"])
+    recorded_owner = _optional_string(row["lesson_owner_id"])
+    if recorded_scope is not None and recorded_scope != scope.value:
+        raise StateConflictError(
+            f"Recorded {record_kind} scope conflicts with curriculum ownership"
+        )
+    if recorded_owner != lesson_owner_id and recorded_owner is not None:
+        raise StateConflictError(
+            f"Recorded {record_kind} lesson owner conflicts with curriculum ownership"
+        )
 
 
 def resolve_default_state_db(state_root: Path) -> Path:
@@ -1345,6 +1465,26 @@ def _migrate_environment_columns(connection: sqlite3.Connection) -> None:
             "ALTER TABLE environments "
             "ADD COLUMN clone_uncertain INTEGER NOT NULL DEFAULT 0"
         )
+    if "environment_scope" not in columns:
+        connection.execute(
+            "ALTER TABLE environments ADD COLUMN environment_scope TEXT CHECK ("
+            "environment_scope IS NULL OR environment_scope IN "
+            "('course', 'lesson', 'none'))"
+        )
+    if "lesson_owner_id" not in columns:
+        connection.execute("ALTER TABLE environments ADD COLUMN lesson_owner_id TEXT")
+
+
+def _migrate_attempt_columns(connection: sqlite3.Connection) -> None:
+    columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(attempts)")}
+    if "environment_scope" not in columns:
+        connection.execute(
+            "ALTER TABLE attempts ADD COLUMN environment_scope TEXT CHECK ("
+            "environment_scope IS NULL OR environment_scope IN "
+            "('course', 'lesson', 'none'))"
+        )
+    if "lesson_owner_id" not in columns:
+        connection.execute("ALTER TABLE attempts ADD COLUMN lesson_owner_id TEXT")
 
 
 def _migrate_progress_columns(connection: sqlite3.Connection) -> None:
@@ -1521,7 +1661,12 @@ CREATE TABLE IF NOT EXISTS attempts (
     collection_id TEXT NOT NULL,
     course_id TEXT NOT NULL,
     lesson_id TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    environment_scope TEXT CHECK (
+        environment_scope IS NULL OR
+        environment_scope IN ('course', 'lesson', 'none')
+    ),
+    lesson_owner_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS environments (
@@ -1543,7 +1688,12 @@ CREATE TABLE IF NOT EXISTS environments (
     provider_endpoint TEXT NOT NULL DEFAULT '',
     provider_fingerprint TEXT NOT NULL DEFAULT '',
     expected_vm_name TEXT NOT NULL DEFAULT '',
-    clone_uncertain INTEGER NOT NULL DEFAULT 0 CHECK (clone_uncertain IN (0, 1))
+    clone_uncertain INTEGER NOT NULL DEFAULT 0 CHECK (clone_uncertain IN (0, 1)),
+    environment_scope TEXT CHECK (
+        environment_scope IS NULL OR
+        environment_scope IN ('course', 'lesson', 'none')
+    ),
+    lesson_owner_id TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS one_retained_environment_per_course

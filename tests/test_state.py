@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 import learnlab.state as state_module
-from learnlab.curriculum import MAX_EVIDENCE_BYTES, VerificationType
+from learnlab.curriculum import MAX_EVIDENCE_BYTES, EnvironmentScope, VerificationType
 from learnlab.state import (
     CompletionSource,
     EnvironmentPhase,
@@ -201,6 +201,33 @@ def test_environment_creation_generates_utc_timestamps_internally(
     )
 
 
+def test_environment_scope_and_lesson_owner_persist_on_attempt_and_environment(
+    store: StateStore, environment_fixture: Callable[..., EnvironmentRecord]
+) -> None:
+    attempt = store.create_attempt(
+        "proxmox",
+        "proxmox-admin",
+        "api-access",
+        environment_scope=EnvironmentScope.LESSON,
+        lesson_owner_id="api-access",
+    )
+    store.create_environment(
+        environment_fixture(
+            attempt_id=attempt.id,
+            environment_scope=EnvironmentScope.LESSON,
+            lesson_owner_id="api-access",
+        )
+    )
+
+    [persisted_attempt] = store.list_attempts()
+    persisted_environment = store.get_environment("env-1")
+    assert persisted_attempt.environment_scope is EnvironmentScope.LESSON
+    assert persisted_attempt.lesson_owner_id == "api-access"
+    assert persisted_environment is not None
+    assert persisted_environment.environment_scope is EnvironmentScope.LESSON
+    assert persisted_environment.lesson_owner_id == "api-access"
+
+
 def test_initialize_migrates_pre_ownership_environment_schema(tmp_path: Path) -> None:
     path = tmp_path / "legacy.db"
     connection = sqlite3.connect(path)
@@ -368,6 +395,13 @@ def test_session_migration_is_additive_and_marks_legacy_completion(
         store.lesson_completion_source(LESSON_PATH)
         is state_module.CompletionSource.LEGACY
     )
+    [legacy_attempt] = store.list_attempts()
+    legacy_environment = store.get_environment("legacy-env")
+    assert legacy_attempt.environment_scope is None
+    assert legacy_attempt.lesson_owner_id is None
+    assert legacy_environment is not None
+    assert legacy_environment.environment_scope is None
+    assert legacy_environment.lesson_owner_id is None
 
 
 def test_failed_verification_increments_attempt_without_completing_step(

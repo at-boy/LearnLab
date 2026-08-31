@@ -9,7 +9,13 @@ import pytest
 from conftest import RecordingProvider
 
 from learnlab.config import ProxmoxProfile
-from learnlab.curriculum import Course, Lesson, Step
+from learnlab.curriculum import (
+    Course,
+    EnvironmentPolicy,
+    EnvironmentScope,
+    Lesson,
+    Step,
+)
 from learnlab.errors import (
     ConfigurationError,
     ProviderCloneOutcomeUnknown,
@@ -201,6 +207,15 @@ class DestroyRecordingProvider(RecordingProvider):
         self.observed_phases[operation] = record.phase
 
 
+class EnvironmentScopeProvider(DestroyRecordingProvider):
+    """Model replacement creating a new VM after the old VM is absent."""
+
+    def clone(self, vmid: int, name: str) -> str:
+        upid = RecordingProvider.clone(self, vmid, name)
+        self.locations[vmid] = VmLocation(node="pve02", status="stopped", name=name)
+        return upid
+
+
 def start_request(profile: ProxmoxProfile) -> StartRequest:
     lesson = Lesson(
         id="api-access",
@@ -218,6 +233,416 @@ def start_request(profile: ProxmoxProfile) -> StartRequest:
         lesson=lesson,
         profile=profile,
         provider_type="proxmox",
+    )
+
+
+class ProviderAccessForbidden:
+    """Fail the test if none-scope resolution touches provider state."""
+
+    def __getattribute__(self, name: str) -> object:
+        raise AssertionError(f"none scope accessed provider attribute {name}")
+
+
+def test_environment_scope_none_returns_without_provider_or_environment(
+    store: StateStore,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+) -> None:
+    resolution = LifecycleService(
+        store, ProviderAccessForbidden(), tmp_path
+    ).ensure_environment(
+        start_request(profile_fixture()),
+        EnvironmentPolicy(EnvironmentScope.NONE),
+    )
+
+    assert resolution.status == "none"
+    assert resolution.environment is None
+    assert store.list_environments() == []
+    assert store.list_attempts() == []
+
+
+def test_environment_scope_course_creates_once_then_reconciles_and_reuses(
+    store: StateStore,
+    recording_provider: RecordingProvider,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+) -> None:
+    request = start_request(profile_fixture(node="pve02"))
+    policy = EnvironmentPolicy(EnvironmentScope.COURSE, "proxmox.vm")
+    service = LifecycleService(store, recording_provider, tmp_path)
+
+    created = service.ensure_environment(request, policy)
+    operations_after_create = list(recording_provider.operations)
+    reused = service.ensure_environment(request, policy)
+
+    assert created.status == "created"
+    assert created.environment is not None
+    assert created.environment.environment_scope is EnvironmentScope.COURSE
+    assert created.environment.lesson_owner_id is None
+    assert reused.status == "reused"
+    assert reused.environment == created.environment
+    assert recording_provider.operations == operations_after_create + ["locate:102"]
+    [attempt] = store.list_attempts()
+    assert attempt.environment_scope is EnvironmentScope.COURSE
+    assert attempt.lesson_owner_id is None
+
+
+def test_environment_scope_lesson_reuses_only_the_same_lesson(
+    store: StateStore,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+) -> None:
+    seed_environment(
+        store,
+        environment_id="env-old",
+        vmid=101,
+        node="pve02",
+        environment_scope=EnvironmentScope.LESSON,
+        lesson_owner_id="api-access",
+    )
+    provider = EnvironmentScopeProvider(
+        {
+            101: VmLocation(
+                node="pve02",
+                status="running",
+                name="learnlab-proxmox-admin-101",
+            )
+        }
+    )
+
+    resolution = LifecycleService(store, provider, tmp_path).ensure_environment(
+        start_request(profile_fixture()),
+        EnvironmentPolicy(EnvironmentScope.LESSON, "proxmox.vm"),
+    )
+
+    assert resolution.status == "reused"
+    assert resolution.environment is not None
+    assert resolution.environment.id == "env-old"
+    assert provider.operations == ["locate:101"]
+
+
+def test_environment_scope_lesson_requires_confirmation_before_replacement(
+    store: StateStore,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+) -> None:
+    seed_environment(
+        store,
+        environment_id="env-old",
+        vmid=101,
+        node="pve02",
+        environment_scope=EnvironmentScope.LESSON,
+        lesson_owner_id="api-access",
+    )
+    request = request_for_lesson(profile_fixture(), "storage")
+
+    resolution = LifecycleService(
+        store, ProviderAccessForbidden(), tmp_path
+    ).ensure_environment(
+        request,
+        EnvironmentPolicy(EnvironmentScope.LESSON, "proxmox.vm"),
+    )
+
+    assert resolution.replacement_required is True
+    assert resolution.environment == store.get_environment("env-old")
+    assert len(store.list_attempts()) == 0
+
+
+def test_environment_scope_lesson_confirmed_replacement_destroys_before_create(
+    store: StateStore,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+) -> None:
+    store.complete_lesson("proxmox", "proxmox-admin", "api-access")
+    seed_environment(
+        store,
+        environment_id="env-old",
+        vmid=101,
+        node="pve02",
+        phase=EnvironmentPhase.RUNNING,
+        environment_scope=EnvironmentScope.LESSON,
+        lesson_owner_id="api-access",
+    )
+    provider = EnvironmentScopeProvider(
+        {
+            101: VmLocation(
+                node="pve02",
+                status="running",
+                name="learnlab-proxmox-admin-101",
+            )
+        }
+    )
+
+    resolution = LifecycleService(store, provider, tmp_path).ensure_environment(
+        request_for_lesson(profile_fixture(node="pve02"), "storage"),
+        EnvironmentPolicy(EnvironmentScope.LESSON, "proxmox.vm"),
+        replace_confirmed=True,
+    )
+
+    assert resolution.status == "created"
+    assert resolution.environment is not None
+    assert resolution.environment.id != "env-old"
+    assert resolution.environment.lesson_owner_id == "storage"
+    assert provider.operations == [
+        "locate:101",
+        "stop:101",
+        "wait:stop",
+        "delete:101",
+        "wait:delete",
+        "locate:101",
+        "allocate_vmid",
+        "clone:102",
+        "wait:clone",
+        "locate:102",
+        "start:102",
+        "wait:start",
+        "wait_for_ipv4:102",
+    ]
+    assert store.completed_lessons("proxmox", "proxmox-admin") == {"api-access"}
+
+
+def test_environment_scope_lesson_teardown_failure_retains_old_without_allocation(
+    store: StateStore,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+) -> None:
+    seed_environment(
+        store,
+        environment_id="env-old",
+        vmid=101,
+        node="pve02",
+        environment_scope=EnvironmentScope.LESSON,
+        lesson_owner_id="api-access",
+    )
+    provider = EnvironmentScopeProvider(
+        {
+            101: VmLocation(
+                node="pve02",
+                status="stopped",
+                name="learnlab-proxmox-admin-101",
+            )
+        }
+    )
+    provider.fail_on("delete:101", ProviderError("delete refused"))
+
+    with pytest.raises(LifecycleError, match="delete refused"):
+        LifecycleService(store, provider, tmp_path).ensure_environment(
+            request_for_lesson(profile_fixture(), "storage"),
+            EnvironmentPolicy(EnvironmentScope.LESSON, "proxmox.vm"),
+            replace_confirmed=True,
+        )
+
+    assert store.get_environment("env-old") is not None
+    assert "allocate_vmid" not in provider.operations
+
+
+def test_environment_scope_course_missing_remote_requires_explicit_recreation(
+    store: StateStore,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+) -> None:
+    seed_environment(
+        store,
+        environment_id="env-missing",
+        vmid=101,
+        node="pve02",
+        environment_scope=EnvironmentScope.COURSE,
+    )
+    provider = EnvironmentScopeProvider({})
+
+    resolution = LifecycleService(store, provider, tmp_path).ensure_environment(
+        start_request(profile_fixture()),
+        EnvironmentPolicy(EnvironmentScope.COURSE, "proxmox.vm"),
+    )
+
+    assert resolution.recreation_required is True
+    assert store.get_environment("env-missing") is not None
+    assert store.list_attempts() == []
+    assert provider.operations == ["locate:101"]
+
+
+def test_environment_scope_course_confirmed_recreation_removes_missing_record_first(
+    store: StateStore,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+) -> None:
+    seed_environment(
+        store,
+        environment_id="env-missing",
+        vmid=101,
+        node="pve02",
+        environment_scope=EnvironmentScope.COURSE,
+    )
+    provider = EnvironmentScopeProvider({})
+
+    resolution = LifecycleService(store, provider, tmp_path).ensure_environment(
+        start_request(profile_fixture(node="pve02")),
+        EnvironmentPolicy(EnvironmentScope.COURSE, "proxmox.vm"),
+        replace_confirmed=True,
+    )
+
+    assert resolution.status == "created"
+    assert resolution.environment is not None
+    assert resolution.environment.id != "env-missing"
+    assert provider.operations == [
+        "locate:101",
+        "locate:101",
+        "allocate_vmid",
+        "clone:102",
+        "wait:clone",
+        "locate:102",
+        "start:102",
+        "wait:start",
+        "wait_for_ipv4:102",
+    ]
+
+
+def test_environment_scope_course_wrong_remote_name_fails_closed(
+    store: StateStore,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+) -> None:
+    seed_environment(
+        store,
+        environment_id="env-owned",
+        vmid=101,
+        node="pve02",
+        environment_scope=EnvironmentScope.COURSE,
+    )
+    provider = EnvironmentScopeProvider(
+        {101: VmLocation(node="pve02", status="running", name="unrelated-vm")}
+    )
+
+    with pytest.raises(LifecycleError, match="name"):
+        LifecycleService(store, provider, tmp_path).ensure_environment(
+            start_request(profile_fixture()),
+            EnvironmentPolicy(EnvironmentScope.COURSE, "proxmox.vm"),
+        )
+
+    assert provider.operations == ["locate:101"]
+    assert store.get_environment("env-owned") is not None
+    assert store.list_attempts() == []
+
+
+@pytest.mark.parametrize(
+    ("record_overrides", "provider_overrides", "message"),
+    [
+        ({"profile_name": "other-profile"}, {}, "profile"),
+        ({"provider_fingerprint": "other-fingerprint"}, {}, "fingerprint"),
+        (
+            {},
+            {"api_origin": "https://other.example.test:8006"},
+            "endpoint",
+        ),
+        ({"expected_vm_name": "learnlab-proxmox-admin-102"}, {}, "expected"),
+    ],
+)
+def test_environment_scope_course_ownership_mismatch_fails_before_remote_lookup(
+    store: StateStore,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+    record_overrides: dict[str, object],
+    provider_overrides: dict[str, object],
+    message: str,
+) -> None:
+    seed_environment(
+        store,
+        environment_id="env-owned",
+        vmid=101,
+        node="pve02",
+        environment_scope=EnvironmentScope.COURSE,
+        **record_overrides,
+    )
+    provider = EnvironmentScopeProvider(
+        {
+            101: VmLocation(
+                node="pve02",
+                status="running",
+                name="learnlab-proxmox-admin-101",
+            )
+        }
+    )
+    for name, value in provider_overrides.items():
+        setattr(provider, name, value)
+
+    with pytest.raises(LifecycleError, match=message):
+        LifecycleService(store, provider, tmp_path).ensure_environment(
+            start_request(profile_fixture()),
+            EnvironmentPolicy(EnvironmentScope.COURSE, "proxmox.vm"),
+        )
+
+    assert provider.operations == []
+
+
+def test_environment_scope_course_reuse_binds_legacy_scope_after_reconciliation(
+    store: StateStore,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+) -> None:
+    attempt = store.create_attempt(
+        "proxmox", "proxmox-admin", "api-access", attempt_id="attempt-old"
+    )
+    seed_environment(
+        store,
+        environment_id="env-old",
+        vmid=101,
+        node="pve02",
+        attempt_id=attempt.id,
+    )
+    provider = EnvironmentScopeProvider(
+        {
+            101: VmLocation(
+                node="pve02",
+                status="running",
+                name="learnlab-proxmox-admin-101",
+            )
+        }
+    )
+
+    resolution = LifecycleService(store, provider, tmp_path).ensure_environment(
+        start_request(profile_fixture()),
+        EnvironmentPolicy(EnvironmentScope.COURSE, "proxmox.vm"),
+    )
+
+    assert resolution.environment is not None
+    assert resolution.environment.environment_scope is EnvironmentScope.COURSE
+    [persisted_attempt] = store.list_attempts()
+    assert persisted_attempt.environment_scope is EnvironmentScope.COURSE
+
+
+def test_environment_scope_none_override_leaves_course_environment_untouched(
+    store: StateStore,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+) -> None:
+    seed_environment(
+        store,
+        environment_id="env-course",
+        vmid=101,
+        node="pve02",
+        environment_scope=EnvironmentScope.COURSE,
+    )
+    before = store.get_environment("env-course")
+
+    resolution = LifecycleService(
+        store, ProviderAccessForbidden(), tmp_path
+    ).ensure_environment(
+        request_for_lesson(profile_fixture(), "reading"),
+        EnvironmentPolicy(EnvironmentScope.NONE),
+    )
+
+    assert resolution.status == "none"
+    assert store.get_environment("env-course") == before
+    assert store.list_attempts() == []
+
+
+def request_for_lesson(profile: ProxmoxProfile, lesson_id: str) -> StartRequest:
+    request = start_request(profile)
+    lesson = replace(request.lesson, id=lesson_id, title=lesson_id.title())
+    return replace(
+        request,
+        lesson=lesson,
+        course=replace(request.course, lessons=(*request.course.lessons, lesson)),
     )
 
 
@@ -1163,6 +1588,9 @@ def seed_environment(
     provider_fingerprint: str = "test-provider-fingerprint",
     expected_vm_name: str | None = None,
     clone_uncertain: bool = False,
+    environment_scope: EnvironmentScope | None = None,
+    lesson_owner_id: str | None = None,
+    attempt_id: str | None = None,
 ) -> None:
     store.create_environment(
         EnvironmentRecord(
@@ -1170,7 +1598,7 @@ def seed_environment(
             collection_id="proxmox",
             course_id=course_id,
             lesson_id="api-access",
-            attempt_id=None,
+            attempt_id=attempt_id,
             profile_name=profile_name,
             provider_type="proxmox",
             phase=phase,
@@ -1180,5 +1608,7 @@ def seed_environment(
             provider_fingerprint=provider_fingerprint,
             expected_vm_name=(expected_vm_name or f"learnlab-{course_id}-{vmid}"),
             clone_uncertain=clone_uncertain,
+            environment_scope=environment_scope,
+            lesson_owner_id=lesson_owner_id,
         )
     )
