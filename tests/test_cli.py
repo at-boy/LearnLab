@@ -2,20 +2,34 @@ from __future__ import annotations
 
 import shutil
 import sqlite3
+import threading
 from dataclasses import dataclass, field
+from io import StringIO
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
-from learnlab.curriculum import Course, CurriculumError, Lesson, Step
+from learnlab.curriculum import (
+    Course,
+    CurriculumError,
+    EnvironmentPolicy,
+    EnvironmentScope,
+    Lesson,
+    Step,
+    Verification,
+    VerificationType,
+)
 from learnlab.lifecycle import (
     DestroySummary,
+    EnvironmentResolution,
     LifecycleError,
     StartedEnvironment,
     StartRequest,
 )
+from learnlab.progress import ProgressEvent, ProgressKind
 from learnlab.providers.base import ProviderCheck, ProviderHealth
+from learnlab.session import SessionAction, SessionOutcome
 from learnlab.state import (
     EnvironmentPhase,
     EnvironmentRecord,
@@ -162,6 +176,21 @@ class RecordingLifecycle:
             ),
         )
 
+    def ensure_environment(
+        self,
+        request: StartRequest,
+        policy: EnvironmentPolicy,
+        replace_confirmed: bool = False,
+    ) -> EnvironmentResolution:
+        existing = self.store.active_environment(
+            request.course.collection_id, request.course.id
+        )
+        if existing is not None:
+            self.requests.append(request)
+            return EnvironmentResolution("reused", existing)
+        started = self.start(request)
+        return EnvironmentResolution("created", started=started)
+
     def destroy_all(
         self,
         preserve_completed: bool,
@@ -179,6 +208,69 @@ class RecordingLifecycle:
         if not self.store.list_environments():
             self.store.erase_all(preserve_completed)
         return DestroySummary(destroyed=destroyed, failed=[])
+
+
+@dataclass
+class SessionLifecycle:
+    resolution: EnvironmentResolution = EnvironmentResolution("none")
+    calls: list[tuple[str, EnvironmentScope, bool]] = field(default_factory=list)
+
+    def ensure_environment(
+        self,
+        request: StartRequest,
+        policy: EnvironmentPolicy,
+        replace_confirmed: bool = False,
+    ) -> EnvironmentResolution:
+        self.calls.append((request.lesson.id, policy.scope, replace_confirmed))
+        return self.resolution
+
+
+class ReplacementSessionLifecycle(SessionLifecycle):
+    def __init__(self, existing: EnvironmentRecord) -> None:
+        super().__init__()
+        self.existing = existing
+
+    def ensure_environment(
+        self,
+        request: StartRequest,
+        policy: EnvironmentPolicy,
+        replace_confirmed: bool = False,
+    ) -> EnvironmentResolution:
+        self.calls.append((request.lesson.id, policy.scope, replace_confirmed))
+        if not replace_confirmed:
+            return EnvironmentResolution("replacement_required", self.existing)
+        return EnvironmentResolution("created")
+
+
+class BlockingSessionLifecycle(SessionLifecycle):
+    def __init__(
+        self,
+        progress,
+        entered: threading.Event,
+        release: threading.Event,
+    ) -> None:
+        super().__init__(EnvironmentResolution("created"))
+        self.progress = progress
+        self.entered = entered
+        self.release = release
+
+    def ensure_environment(
+        self,
+        request: StartRequest,
+        policy: EnvironmentPolicy,
+        replace_confirmed: bool = False,
+    ) -> EnvironmentResolution:
+        self.progress.on_progress(
+            ProgressEvent(
+                ProgressKind.ENVIRONMENT_REQUESTED,
+                "Creating lesson environment",
+                0,
+            )
+        )
+        self.entered.set()
+        if not self.release.wait(timeout=5):
+            raise AssertionError("test did not release lifecycle")
+        return super().ensure_environment(request, policy, replace_confirmed)
 
 
 @dataclass
@@ -246,11 +338,25 @@ def app_harness(monkeypatch: pytest.MonkeyPatch, tmp_xdg: Path) -> AppHarness:
                         id="understand-api",
                         title="Understand the API",
                         content="Review the API boundary.",
+                        verifications=(
+                            Verification(
+                                id="confirm",
+                                type=VerificationType.MANUAL_CONFIRMATION,
+                                prompt="Confirm the API boundary.",
+                            ),
+                        ),
                     ),
                     Step(
                         id="locate-endpoint",
                         title="Locate the endpoint",
                         content="Find the documented endpoint.",
+                        verifications=(
+                            Verification(
+                                id="confirm",
+                                type=VerificationType.MANUAL_CONFIRMATION,
+                                prompt="Confirm the endpoint.",
+                            ),
+                        ),
                     ),
                 ),
             ),
@@ -262,15 +368,30 @@ def app_harness(monkeypatch: pytest.MonkeyPatch, tmp_xdg: Path) -> AppHarness:
                         id="create-token",
                         title="Create a token",
                         content="Create a dedicated API token.",
+                        verifications=(
+                            Verification(
+                                id="confirm",
+                                type=VerificationType.MANUAL_CONFIRMATION,
+                                prompt="Confirm the token.",
+                            ),
+                        ),
                     ),
                     Step(
                         id="limit-token",
                         title="Limit the token",
                         content="Apply least privilege.",
+                        verifications=(
+                            Verification(
+                                id="confirm",
+                                type=VerificationType.MANUAL_CONFIRMATION,
+                                prompt="Confirm least privilege.",
+                            ),
+                        ),
                     ),
                 ),
             ),
         ),
+        environment=EnvironmentPolicy(EnvironmentScope.COURSE, "proxmox.vm"),
     )
     catalog = RecordingCatalog(course)
     store = StateStore(tmp_xdg / "state" / "learnlab" / "state.db")
@@ -278,7 +399,7 @@ def app_harness(monkeypatch: pytest.MonkeyPatch, tmp_xdg: Path) -> AppHarness:
     lifecycle = RecordingLifecycle(tmp_xdg / "state" / "learnlab", store)
     provider_profiles: list[str] = []
 
-    def provider_factory(settings, profile_name: str):
+    def provider_factory(settings, profile_name: str, secret=None):
         assert settings.provider(profile_name).name == profile_name
         provider_profiles.append(profile_name)
         return object()
@@ -304,6 +425,79 @@ def tmp_xdg(monkeypatch: pytest.MonkeyPatch, tmp_path):
     (config_dir / "config.toml").write_text(CONFIG, encoding="utf-8")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     return tmp_path
+
+
+def session_lesson(
+    lesson_id: str = "basics",
+    title: str = "Basics",
+    *,
+    checks: tuple[Verification, ...] | None = None,
+    environment: EnvironmentPolicy | None = None,
+) -> Lesson:
+    declared_checks = checks or (
+        Verification(
+            id="confirm",
+            type=VerificationType.MANUAL_CONFIRMATION,
+            prompt="Confirm the result.",
+        ),
+    )
+    return Lesson(
+        id=lesson_id,
+        title=title,
+        steps=(
+            Step(
+                id="inspect",
+                title="Inspect the system",
+                instructions="Inspect the system before continuing.",
+                verifications=declared_checks,
+            ),
+        ),
+        environment=environment,
+    )
+
+
+def session_course(
+    scope: EnvironmentScope,
+    *,
+    lessons: tuple[Lesson, ...] | None = None,
+) -> Course:
+    return Course(
+        collection_id="proxmox",
+        id="proxmox-admin",
+        title="Proxmox Administration",
+        lessons=lessons or (session_lesson(),),
+        environment=EnvironmentPolicy(
+            scope,
+            "proxmox.vm" if scope is not EnvironmentScope.NONE else None,
+        ),
+    )
+
+
+def install_session_cli(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+    course: Course,
+    lifecycle,
+) -> tuple[StateStore, list[tuple[str, str | None]]]:
+    from learnlab import cli
+
+    store = StateStore(tmp_xdg / "session-state" / "learnlab.db")
+    store.initialize()
+    providers: list[tuple[str, str | None]] = []
+
+    monkeypatch.setenv("LEARNLAB_HOME_SECRET", "secret")
+    monkeypatch.setattr(cli, "catalog_factory", lambda: RecordingCatalog(course))
+    monkeypatch.setattr(cli, "state_store_factory", lambda: store)
+    monkeypatch.setattr(cli, "state_root", lambda: tmp_xdg / "session-state")
+    monkeypatch.setattr(
+        cli,
+        "provider_factory",
+        lambda settings, profile_name, secret=None: (
+            providers.append((profile_name, secret)) or object()
+        ),
+    )
+    monkeypatch.setattr(cli, "lifecycle_factory", lifecycle)
+    return store, providers
 
 
 @pytest.fixture
@@ -413,19 +607,341 @@ def test_provider_test_warns_when_tls_verification_is_disabled(
     assert "TLS certificate verification is disabled" in result.stdout
 
 
+def test_resume_without_course_state_exits_two_and_directs_to_start(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+) -> None:
+    lifecycle = SessionLifecycle()
+    install_session_cli(
+        monkeypatch,
+        tmp_xdg,
+        session_course(EnvironmentScope.NONE),
+        lambda *args, **kwargs: lifecycle,
+    )
+
+    result = CliRunner().invoke(
+        __import__("learnlab.cli", fromlist=["app"]).app,
+        ["resume", "proxmox/proxmox-admin"],
+    )
+
+    assert result.exit_code == 2
+    assert "use learnlab start" in result.stdout
+    assert lifecycle.calls == []
+
+
+def test_none_scoped_start_skips_provider_config_and_runs_interactive_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+) -> None:
+    from learnlab import cli
+
+    lifecycle = SessionLifecycle()
+    store, providers = install_session_cli(
+        monkeypatch,
+        tmp_xdg,
+        session_course(EnvironmentScope.NONE),
+        lambda *args, **kwargs: lifecycle,
+    )
+    monkeypatch.setattr(
+        cli,
+        "load_settings",
+        lambda: pytest.fail("none scope must not load provider configuration"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "resolve_token_secret",
+        lambda profile: pytest.fail("none scope must not resolve a secret"),
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["start", "proxmox/proxmox-admin", "--provider", "missing"],
+        input="\n\ny\nq\n",
+    )
+
+    assert result.exit_code == 0
+    assert "Selected lesson: Basics" in result.stdout
+    assert "Environment policy: none" in result.stdout
+    assert "Step 1 of 1: Inspect the system" in result.stdout
+    assert "Verification 1 of 1: confirm" in result.stdout
+    assert "PASS (self-attested): Learner confirmed" in result.stdout
+    assert "Progress saved." in result.stdout
+    assert providers == []
+    assert lifecycle.calls == [("basics", EnvironmentScope.NONE, False)]
+    assert store.completed_lessons("proxmox", "proxmox-admin") == {"basics"}
+
+
+@pytest.mark.parametrize("command", ["start", "resume"])
+def test_start_and_resume_continue_at_first_incomplete_verification(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+    command: str,
+) -> None:
+    from learnlab import cli
+
+    checks = (
+        Verification(
+            id="already-passed",
+            type=VerificationType.MANUAL_CONFIRMATION,
+            prompt="Confirm the first result.",
+        ),
+        Verification(
+            id="retry-this",
+            type=VerificationType.MANUAL_CONFIRMATION,
+            prompt="Confirm the second result.",
+            failure_message="Review the output and try again.",
+        ),
+    )
+    lifecycle = SessionLifecycle()
+    store, _ = install_session_cli(
+        monkeypatch,
+        tmp_xdg,
+        session_course(
+            EnvironmentScope.NONE,
+            lessons=(session_lesson(checks=checks),),
+        ),
+        lambda *args, **kwargs: lifecycle,
+    )
+    step_path = ("proxmox", "proxmox-admin", "basics", "inspect")
+    store.start_lesson("proxmox", "proxmox-admin", "basics")
+    store.start_step(step_path)
+    store.record_verification_result(
+        step_path,
+        "already-passed",
+        passed=True,
+        evidence=None,
+        validator_type=VerificationType.MANUAL_CONFIRMATION,
+        self_attested=True,
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        [command, "proxmox/proxmox-admin"],
+        input="\n\nn\nr\ny\nq\n",
+    )
+
+    assert result.exit_code == 0
+    assert "Verification 1 of 2: already-passed" not in result.stdout
+    assert "Verification 2 of 2: retry-this" in result.stdout
+    assert "FAIL: Review the output and try again." in result.stdout
+    assert "Retry this verification" in result.stdout
+    assert "PASS (self-attested): Learner confirmed" in result.stdout
+    records = {
+        record.verification_id: record
+        for record in store.verification_records(step_path)
+    }
+    assert records["already-passed"].attempt_count == 1
+    assert records["retry-this"].attempt_count == 2
+
+
+def test_completed_lesson_offers_next_lesson_before_returning_to_shell(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+) -> None:
+    from learnlab import cli
+
+    lifecycle = SessionLifecycle()
+    install_session_cli(
+        monkeypatch,
+        tmp_xdg,
+        session_course(
+            EnvironmentScope.NONE,
+            lessons=(
+                session_lesson("first", "First Lesson"),
+                session_lesson("second", "Second Lesson"),
+            ),
+        ),
+        lambda *args, **kwargs: lifecycle,
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["start", "proxmox/proxmox-admin"],
+        input="1\n\ny\nq\n",
+    )
+
+    assert result.exit_code == 0
+    assert "Lesson complete: First Lesson" in result.stdout
+    assert "Next lesson: Second Lesson" in result.stdout
+    assert result.stdout.index("Next lesson: Second Lesson") < result.stdout.index(
+        "Progress saved."
+    )
+    assert lifecycle.calls == [("first", EnvironmentScope.NONE, False)]
+
+
+def test_lesson_replacement_discloses_exact_target_before_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+) -> None:
+    from learnlab import cli
+
+    lessons = (
+        session_lesson("first", "First Lesson"),
+        session_lesson("second", "Second Lesson"),
+    )
+    course = session_course(EnvironmentScope.LESSON, lessons=lessons)
+    store, providers = install_session_cli(
+        monkeypatch,
+        tmp_xdg,
+        course,
+        lambda *args, **kwargs: replacement,
+    )
+    existing = EnvironmentRecord(
+        id="env-first",
+        collection_id="proxmox",
+        course_id="proxmox-admin",
+        lesson_id="first",
+        attempt_id=None,
+        profile_name="home-proxmox",
+        provider_type="proxmox",
+        phase=EnvironmentPhase.RUNNING,
+        vmid=117,
+        node="pve",
+        provider_endpoint="https://proxmox.example.test:8006",
+        provider_fingerprint="test-fingerprint",
+        expected_vm_name="learnlab-proxmox-admin-117",
+        environment_scope=EnvironmentScope.LESSON,
+        lesson_owner_id="first",
+    )
+    store.create_environment(existing)
+    replacement = ReplacementSessionLifecycle(existing)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["start", "proxmox/proxmox-admin"],
+        input="2\ny\n\ny\nq\n",
+    )
+
+    assert result.exit_code == 0
+    assert "Existing environment to replace:" in result.stdout
+    assert "VM 117" in result.stdout
+    assert "learnlab-proxmox-admin-117" in result.stdout
+    assert "First Lesson" in result.stdout
+    assert "Second Lesson" in result.stdout
+    assert replacement.calls == [
+        ("second", EnvironmentScope.LESSON, False),
+        ("second", EnvironmentScope.LESSON, True),
+    ]
+    assert providers == [("home-proxmox", "secret")]
+
+
+def test_start_emits_life_sign_before_blocking_provisioning_returns(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+) -> None:
+    from learnlab import cli
+
+    entered = threading.Event()
+    release = threading.Event()
+    output = StringIO()
+    result_holder: list[object] = []
+    install_session_cli(
+        monkeypatch,
+        tmp_xdg,
+        session_course(EnvironmentScope.COURSE),
+        lambda *args, progress, **kwargs: BlockingSessionLifecycle(
+            progress, entered, release
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "progress_renderer_factory",
+        lambda: cli.TerminalProgressRenderer(output, is_terminal=False),
+    )
+
+    worker = threading.Thread(
+        target=lambda: result_holder.append(
+            CliRunner().invoke(
+                cli.app,
+                ["start", "proxmox/proxmox-admin"],
+                input="\n\ny\nq\n",
+            )
+        )
+    )
+    worker.start()
+    assert entered.wait(timeout=2), result_holder
+
+    assert "Creating lesson environment" in output.getvalue()
+    assert worker.is_alive()
+
+    release.set()
+    worker.join(timeout=3)
+    assert not worker.is_alive()
+    assert result_holder[0].exit_code == 0
+
+
+def test_start_resolves_secret_once_and_shares_one_redaction_set(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+) -> None:
+    from learnlab import cli
+
+    secret_calls: list[str] = []
+    redaction_sets: list[set[str]] = []
+    provider_secrets: list[str | None] = []
+    course = session_course(EnvironmentScope.COURSE)
+    store = StateStore(tmp_xdg / "shared-secret" / "learnlab.db")
+    store.initialize()
+
+    class RecordingSshExecutor:
+        def __init__(self, state_path: Path, *, secrets: set[str]) -> None:
+            redaction_sets.append(secrets)
+
+    class RecordingSession:
+        def __init__(self, **kwargs) -> None:
+            redaction_sets.append(kwargs["secrets"])
+
+        def run(self, **kwargs) -> SessionOutcome:
+            return SessionOutcome(SessionAction.EXIT, "basics")
+
+    def provider_factory(settings, profile_name: str, secret=None):
+        provider_secrets.append(secret)
+        return object()
+
+    def lifecycle_factory(*args, secrets: set[str], **kwargs):
+        redaction_sets.append(secrets)
+        return SessionLifecycle(EnvironmentResolution("created"))
+
+    def resolve_secret(profile) -> str:
+        secret_calls.append(profile.name)
+        return "one-secret"
+
+    monkeypatch.setattr(cli, "catalog_factory", lambda: RecordingCatalog(course))
+    monkeypatch.setattr(cli, "state_store_factory", lambda: store)
+    monkeypatch.setattr(cli, "state_root", lambda: tmp_xdg / "shared-secret")
+    monkeypatch.setattr(cli, "provider_factory", provider_factory)
+    monkeypatch.setattr(cli, "lifecycle_factory", lifecycle_factory)
+    monkeypatch.setattr(cli, "resolve_token_secret", resolve_secret)
+    monkeypatch.setattr(cli, "SshExecutor", RecordingSshExecutor)
+    monkeypatch.setattr(cli, "CourseSession", RecordingSession)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["start", "proxmox/proxmox-admin"],
+        input="\n",
+    )
+
+    assert result.exit_code == 0
+    assert secret_calls == ["home-proxmox"]
+    assert provider_secrets == ["one-secret"]
+    assert len(redaction_sets) == 3
+    assert all(item is redaction_sets[0] for item in redaction_sets)
+    assert redaction_sets[0] == {"one-secret"}
+
+
 def test_start_defaults_to_first_incomplete_lesson(app_harness: AppHarness) -> None:
     app_harness.complete("proxmox", "proxmox-admin", "api-access")
 
     result = app_harness.invoke(
         ["start", "proxmox/proxmox-admin", "--provider", "home-proxmox"],
-        input="\n",
+        input="\nq\n",
     )
 
     assert result.exit_code == 0
     assert "1. API Access [completed]" in result.stdout
     assert "2. API Tokens [first incomplete]" in result.stdout
     assert app_harness.lifecycle.requests.one().lesson.id == "api-tokens"
-    assert "UserKnownHostsFile=" in result.stdout
+    assert "Environment policy: course (proxmox.vm)" in result.stdout
     assert app_harness.store.lesson_statuses("proxmox", "proxmox-admin") == {
         "api-access": ProgressStatus.COMPLETED,
         "api-tokens": ProgressStatus.IN_PROGRESS,
@@ -439,7 +955,7 @@ def test_start_can_select_a_completed_lesson_before_the_default(
 
     result = app_harness.invoke(
         ["start", "proxmox/proxmox-admin", "--provider", "home-proxmox"],
-        input="1\n",
+        input="1\nq\n",
     )
 
     assert result.exit_code == 0
@@ -454,7 +970,7 @@ def test_start_defaults_to_first_lesson_when_all_are_complete(
 
     result = app_harness.invoke(
         ["start", "proxmox/proxmox-admin", "--provider", "home-proxmox"],
-        input="\n",
+        input="\nq\n",
     )
 
     assert result.exit_code == 0
@@ -483,19 +999,20 @@ def test_start_renders_selected_lesson_steps_in_order(
 ) -> None:
     result = app_harness.invoke(
         ["start", "proxmox/proxmox-admin", "--provider", "home-proxmox"],
-        input="2\n",
+        input="2\n\ny\nq\n",
     )
 
     assert result.exit_code == 0
     output = result.stdout
-    assert output.index("1. Create a token") < output.index(
+    assert output.index("Step 1 of 2: Create a token") < output.index(
         "Create a dedicated API token."
     )
     assert output.index("Create a dedicated API token.") < output.index(
-        "2. Limit the token"
+        "Step 2 of 2: Limit the token"
     )
-    assert output.index("2. Limit the token") < output.index("Apply least privilege.")
-    assert "completed" not in output.split("SSH:", 1)[-1]
+    assert output.index("Step 2 of 2: Limit the token") < output.index(
+        "Apply least privilege."
+    )
 
 
 def test_start_does_not_mark_progress_when_lifecycle_fails(
@@ -523,7 +1040,7 @@ def test_start_labels_an_existing_attempt_in_progress(
 
     result = app_harness.invoke(
         ["start", "proxmox/proxmox-admin"],
-        input="1\n",
+        input="1\nq\n",
     )
 
     assert result.exit_code == 0
@@ -533,7 +1050,7 @@ def test_start_labels_an_existing_attempt_in_progress(
 def test_start_uses_default_provider_profile(app_harness: AppHarness) -> None:
     result = app_harness.invoke(
         ["start", "proxmox/proxmox-admin"],
-        input="\n",
+        input="\nq\n",
     )
 
     assert result.exit_code == 0
@@ -549,12 +1066,12 @@ def test_start_warns_when_tls_verification_is_disabled_before_connection_details
         encoding="utf-8",
     )
 
-    result = app_harness.invoke(["start", "proxmox/proxmox-admin"], input="\n")
+    result = app_harness.invoke(["start", "proxmox/proxmox-admin"], input="\nq\n")
 
     assert result.exit_code == 0
     warning = "WARNING: TLS certificate verification is disabled"
     assert warning in result.stdout
-    assert result.stdout.index(warning) < result.stdout.index("SSH:")
+    assert result.stdout.index(warning) < result.stdout.index("Lesson: API Access")
 
 
 def test_progress_complete_advances_later_start_default(
@@ -565,7 +1082,7 @@ def test_progress_complete_advances_later_start_default(
     )
     started = app_harness.invoke(
         ["start", "proxmox/proxmox-admin"],
-        input="\n",
+        input="\nq\n",
     )
 
     assert completed.exit_code == 0
@@ -990,7 +1507,7 @@ def test_default_database_name_is_learnlab_db(
     assert cli._default_state_store().db_path == tmp_path / "learnlab.db"
 
 
-def test_start_migrates_legacy_default_db_and_refuses_active_environment(
+def test_start_migrates_legacy_default_db_and_resumes_active_environment(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from learnlab import cli
@@ -1000,30 +1517,38 @@ def test_start_migrates_legacy_default_db_and_refuses_active_environment(
     _create_pre_ownership_legacy_db(legacy_path)
     provider_calls: list[str] = []
     lifecycle_calls: list[str] = []
+    config_dir = tmp_path / "config" / "learnlab"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text(CONFIG, encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("LEARNLAB_HOME_SECRET", "secret")
     monkeypatch.setattr(cli, "state_root", lambda: state_root_path)
     monkeypatch.setattr(
         cli,
         "provider_factory",
-        lambda *args, **kwargs: provider_calls.append("provider"),
+        lambda *args, **kwargs: provider_calls.append("provider") or object(),
     )
     monkeypatch.setattr(
         cli,
         "lifecycle_factory",
-        lambda *args, **kwargs: lifecycle_calls.append("lifecycle"),
+        lambda *args, **kwargs: (
+            lifecycle_calls.append("lifecycle")
+            or SessionLifecycle(EnvironmentResolution("reused"))
+        ),
     )
 
     result = CliRunner().invoke(
         cli.app,
         ["start", "proxmox/proxmox-admin"],
-        input="\n",
+        input="\nq\n",
     )
 
     current_path = state_root_path / "learnlab.db"
     backup_path = state_root_path / "state.db.migrated"
-    assert result.exit_code == 3
-    assert "already has an environment" in result.stdout
-    assert provider_calls == []
-    assert lifecycle_calls == []
+    assert result.exit_code == 0
+    assert "already has an environment" not in result.stdout
+    assert provider_calls == ["provider"]
+    assert lifecycle_calls == ["lifecycle"]
     assert current_path.exists()
     assert not legacy_path.exists()
     assert backup_path.exists()

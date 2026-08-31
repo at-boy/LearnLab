@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import sys
+import time
 from collections.abc import Callable, Mapping
 from importlib.resources import files
 from pathlib import Path
-from typing import Protocol
+from types import TracebackType
+from typing import Protocol, TextIO
 
 import typer
 
@@ -15,21 +18,261 @@ from learnlab.config import (
     resolve_token_secret,
     state_dir,
 )
-from learnlab.curriculum import Course, CurriculumCatalog, CurriculumError, Lesson
+from learnlab.curriculum import (
+    Course,
+    CurriculumCatalog,
+    CurriculumError,
+    EnvironmentScope,
+    Lesson,
+    Step,
+    Verification,
+    VerificationType,
+)
 from learnlab.errors import ConfigurationError, LearnLabError, redact
-from learnlab.lifecycle import LifecycleService, StartRequest
+from learnlab.lifecycle import EnvironmentResolution, LifecycleService
+from learnlab.progress import ProgressEvent, ProgressKind, ProgressObserver
 from learnlab.providers.base import Provider
+from learnlab.providers.proxmox import ProxmoxProvider
 from learnlab.providers.registry import build_provider
+from learnlab.session import CourseSession, SessionAction, SessionOutcome, SessionPrompt
+from learnlab.ssh import SshExecutor
 from learnlab.state import (
     ProgressStatus,
     StateConflictError,
     StateStore,
     resolve_default_state_db,
 )
+from learnlab.validation import (
+    ManualConfirmationValidator,
+    ProviderCheckValidator,
+    RemoteCommandValidator,
+    TextEvidenceValidator,
+    ValidatorRegistry,
+    VerificationResult,
+)
 
-ProviderFactory = Callable[[Settings, str], Provider]
 CatalogFactory = Callable[[], CurriculumCatalog]
 StateStoreFactory = Callable[[], StateStore]
+
+
+class ProviderFactory(Protocol):
+    def __call__(
+        self,
+        settings: Settings,
+        profile_name: str,
+        secret: str | None = None,
+    ) -> Provider: ...
+
+
+class TerminalProgressRenderer(ProgressObserver):
+    """Render lifecycle progress safely for terminals and captured logs."""
+
+    _SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+
+    def __init__(
+        self,
+        output: TextIO | None = None,
+        *,
+        is_terminal: bool | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._output = output if output is not None else sys.stdout
+        self._is_terminal = (
+            self._output.isatty() if is_terminal is None else is_terminal
+        )
+        self._clock = clock
+        self._active_line = False
+        self._closed = False
+
+    def __enter__(self) -> TerminalProgressRenderer:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    def on_progress(self, event: ProgressEvent) -> None:
+        if self._closed:
+            return
+        attempt = f" (attempt {event.attempt})" if event.attempt is not None else ""
+        if self._is_terminal:
+            frame_index = int(self._clock() * 10) % len(self._SPINNER_FRAMES)
+            frame = self._SPINNER_FRAMES[frame_index]
+            self._output.write(
+                f"\r{frame} {event.message}{attempt} [{event.elapsed_seconds:.1f}s]"
+            )
+            self._active_line = True
+        else:
+            self._output.write(f"{event.message}{attempt}\n")
+        self._output.flush()
+        if event.kind is ProgressKind.ENVIRONMENT_READY:
+            self.close()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        if self._is_terminal and self._active_line:
+            self._output.write("\n")
+            self._output.flush()
+        self._closed = True
+
+
+class TyperSessionPrompt(SessionPrompt):
+    """Translate the session prompt protocol into terminal interactions."""
+
+    def __init__(self, course: Course) -> None:
+        self._course = course
+
+    def present_lesson(self, course: Course, lesson: Lesson) -> None:
+        typer.echo(f"Lesson: {lesson.title}")
+
+    def present_step(
+        self, lesson: Lesson, step: Step, position: int, total: int
+    ) -> None:
+        typer.echo()
+        typer.echo(f"Step {position} of {total}: {step.title}")
+        typer.echo(step.instructions)
+
+    def begin_verification(
+        self,
+        lesson: Lesson,
+        step: Step,
+        verification: Verification,
+        position: int,
+        total: int,
+    ) -> SessionAction:
+        typer.echo()
+        typer.echo(f"Verification {position} of {total}: {verification.id}")
+        response = typer.prompt(
+            "Press Enter when ready for LearnLab to check it, "
+            "or type q to save and exit",
+            default="",
+            show_default=False,
+        )
+        return (
+            SessionAction.SAVE_AND_EXIT
+            if response.strip().lower() == "q"
+            else SessionAction.READY
+        )
+
+    def present_result(
+        self, verification: Verification, result: VerificationResult
+    ) -> None:
+        status = "PASS" if result.passed else "FAIL"
+        attestation = " (self-attested)" if result.self_attested else ""
+        typer.echo(f"{status}{attestation}: {result.summary}")
+
+    def failed_verification(
+        self, verification: Verification, result: VerificationResult
+    ) -> SessionAction:
+        while True:
+            response = (
+                typer.prompt(
+                    "Retry this verification [r], or save and exit [q]",
+                    default="r",
+                    show_default=False,
+                )
+                .strip()
+                .lower()
+            )
+            if response in {"r", "retry"}:
+                return SessionAction.RETRY
+            if response in {"q", "quit", "save", "exit"}:
+                return SessionAction.SAVE_AND_EXIT
+            typer.echo("Choose r to retry or q to save and exit")
+
+    def lesson_completed(
+        self, course: Course, lesson: Lesson, next_lesson: Lesson | None
+    ) -> SessionAction:
+        typer.echo()
+        typer.echo(f"Lesson complete: {lesson.title}")
+        if next_lesson is not None:
+            typer.echo(f"Next lesson: {next_lesson.title}")
+            choices = "Continue [c], review a lesson [r], or save and exit [q]"
+        else:
+            typer.echo("Course complete.")
+            choices = "Review a lesson [r], or save and exit [q]"
+        while True:
+            response = (
+                typer.prompt(
+                    choices,
+                    default="q",
+                    show_default=False,
+                )
+                .strip()
+                .lower()
+            )
+            if next_lesson is not None and response in {"c", "continue"}:
+                return SessionAction.CONTINUE
+            if response in {"r", "review"}:
+                return SessionAction.REVIEW
+            if response in {"q", "quit", "save", "exit"}:
+                return SessionAction.SAVE_AND_EXIT
+            typer.echo("Choose one of the listed actions")
+
+    def choose_review_lesson(self, course: Course) -> str | None:
+        typer.echo("Lessons available for review:")
+        for position, lesson in enumerate(course.lessons, start=1):
+            typer.echo(f"{position}. {lesson.title}")
+        while True:
+            response = (
+                typer.prompt(
+                    "Select a lesson number, or q to save and exit",
+                    default="q",
+                    show_default=False,
+                )
+                .strip()
+                .lower()
+            )
+            if response in {"q", "quit", "save", "exit"}:
+                return None
+            if response.isdigit() and 1 <= int(response) <= len(course.lessons):
+                return course.lessons[int(response) - 1].id
+            typer.echo(f"Choose a lesson number from 1 to {len(course.lessons)}")
+
+    def confirm_environment_change(
+        self, resolution: EnvironmentResolution, lesson: Lesson
+    ) -> bool:
+        environment = resolution.environment
+        if environment is None:
+            typer.echo("No recorded environment target is available.")
+            return False
+        owner_id = environment.lesson_owner_id or environment.lesson_id
+        existing_lesson = next(
+            (
+                candidate
+                for candidate in self._course.lessons
+                if candidate.id == owner_id
+            ),
+            None,
+        )
+        typer.echo("Existing environment to replace:")
+        typer.echo(f"  Profile: {environment.profile_name}")
+        vm_label = (
+            str(environment.vmid) if environment.vmid is not None else "unallocated"
+        )
+        typer.echo(f"  VM {vm_label}")
+        typer.echo(f"  Expected name: {environment.expected_vm_name or 'unknown'}")
+        typer.echo(
+            "  Current lesson: "
+            f"{existing_lesson.title if existing_lesson is not None else owner_id}"
+        )
+        typer.echo(f"  Requested lesson: {lesson.title}")
+        action = "Recreate" if resolution.recreation_required else "Replace"
+        return typer.confirm(f"{action} this environment?", default=False)
+
+    def legacy_completion(self, lesson: Lesson) -> None:
+        typer.echo(f"{lesson.title}: completed before step verification tracking")
+
+    def ask_text(self, prompt: str) -> str:
+        return str(typer.prompt(prompt))
+
+    def confirm(self, prompt: str) -> bool:
+        return typer.confirm(prompt, default=False)
 
 
 class LifecycleFactory(Protocol):
@@ -40,6 +283,7 @@ class LifecycleFactory(Protocol):
         state_root: Path,
         *,
         secrets: set[str] | None = None,
+        progress: ProgressObserver = ...,
     ) -> LifecycleService: ...
 
 
@@ -48,9 +292,38 @@ provider_app = typer.Typer()
 progress_app = typer.Typer()
 app.add_typer(provider_app, name="provider")
 app.add_typer(progress_app, name="progress")
-provider_factory: ProviderFactory = build_provider
+
+
+def _build_provider(
+    settings: Settings,
+    profile_name: str,
+    secret: str | None = None,
+) -> Provider:
+    if secret is None:
+        return build_provider(settings, profile_name)
+    return ProxmoxProvider(settings.provider(profile_name), secret)
+
+
+def _default_validator_registry() -> ValidatorRegistry:
+    registry = ValidatorRegistry()
+    registry.register(VerificationType.REMOTE_COMMAND, RemoteCommandValidator())
+    registry.register(VerificationType.TEXT_EVIDENCE, TextEvidenceValidator())
+    registry.register(
+        VerificationType.MANUAL_CONFIRMATION, ManualConfirmationValidator()
+    )
+    registry.register(VerificationType.PROVIDER_CHECK, ProviderCheckValidator())
+    return registry
+
+
+provider_factory: ProviderFactory = _build_provider
 state_root: Callable[[], Path] = state_dir
 lifecycle_factory: LifecycleFactory = LifecycleService
+progress_renderer_factory: Callable[[], TerminalProgressRenderer] = (
+    TerminalProgressRenderer
+)
+validator_registry_factory: Callable[[], ValidatorRegistry] = (
+    _default_validator_registry
+)
 
 
 def _default_catalog() -> CurriculumCatalog:
@@ -97,52 +370,88 @@ def start_course(
     course_path: str,
     provider_profile: str | None = typer.Option(None, "--provider"),
 ) -> None:
-    """Start a selected lesson from an ordered course."""
+    """Start or resume an interactive course session."""
+    _run_course_session(course_path, provider_profile, require_existing=False)
+
+
+@app.command("resume")
+def resume_course(
+    course_path: str,
+    provider_profile: str | None = typer.Option(None, "--provider"),
+) -> None:
+    """Resume a course that already has local progress or environment state."""
+    _run_course_session(course_path, provider_profile, require_existing=True)
+
+
+def _run_course_session(
+    course_path: str,
+    provider_profile: str | None,
+    *,
+    require_existing: bool,
+) -> None:
+    """Construct terminal adapters and delegate course behavior to CourseSession."""
     secrets: set[str] = set()
     try:
         course = catalog_factory().load_course(course_path)
         store = state_store_factory()
         store.initialize()
-        if store.active_environment(course.collection_id, course.id) is not None:
-            raise StateConflictError(
-                "Course already has an environment; run learnlab destroy first"
+        if require_existing and not _course_has_state(store, course):
+            raise ConfigurationError(
+                f"No saved state for {course_path}; use learnlab start {course_path}"
             )
 
         statuses = store.lesson_statuses(course.collection_id, course.id)
         default_index = _default_lesson_index(course, statuses)
         _render_lessons(course, statuses, default_index)
         lesson = _prompt_for_lesson(course, default_index)
+        policy = course.effective_environment(lesson)
+        typer.echo(f"Selected lesson: {lesson.title}")
+        _render_environment_policy(policy.scope, policy.provider_capability)
 
-        settings = load_settings()
-        profile_name = provider_profile or settings.default_provider
-        profile = settings.provider(profile_name)
-        _render_tls_warning(profile)
-        secret = resolve_token_secret(profile)
-        secrets.add(secret)
-        provider = provider_factory(settings, profile_name)
+        profile: ProxmoxProfile | None = None
+        provider: Provider | None = None
+        provider_type: str | None = None
+        if policy.scope is not EnvironmentScope.NONE:
+            settings = load_settings()
+            profile_name = provider_profile or settings.default_provider
+            profile = settings.provider(profile_name)
+            _render_tls_warning(profile)
+            secret = resolve_token_secret(profile)
+            secrets.add(secret)
+            provider = provider_factory(settings, profile_name, secret)
+            provider_type = "proxmox"
+
+        root = state_root()
+        renderer = progress_renderer_factory()
         lifecycle = lifecycle_factory(
             store,
-            provider,
-            state_root(),
+            provider if provider is not None else {},
+            root,
+            secrets=secrets,
+            progress=renderer,
+        )
+        ssh_executor = SshExecutor(root, secrets=secrets)
+        session = CourseSession(
+            course=course,
+            store=store,
+            lifecycle=lifecycle,
+            validators=validator_registry_factory(),
+            prompt=TyperSessionPrompt(course),
+            profile=profile,
+            provider_type=provider_type,
+            provider=provider,
+            ssh_executor=ssh_executor,
             secrets=secrets,
         )
-        started = lifecycle.start(
-            StartRequest(
-                course=course,
-                lesson=lesson,
-                profile=profile,
-                provider_type="proxmox",
+        with renderer:
+            outcome = session.run(
+                lesson_id=lesson.id,
+                review_completed=(statuses.get(lesson.id) is ProgressStatus.COMPLETED),
             )
-        )
-        store.start_lesson(course.collection_id, course.id, lesson.id)
     except LearnLabError as error:
         _exit_with_error(error, secrets)
 
-    typer.echo(f"SSH: {started.ssh_command}")
-    typer.echo(f"Lesson: {lesson.title}")
-    for number, step in enumerate(lesson.steps, start=1):
-        typer.echo(f"{number}. {step.title}")
-        typer.echo(step.content)
+    _render_session_outcome(course_path, outcome, secrets)
 
 
 @app.command("destroy")
@@ -322,6 +631,35 @@ def progress_complete(lesson_path: str) -> None:
         _exit_with_error(error)
 
     typer.echo(f"Completed: {lesson_path}")
+
+
+def _course_has_state(store: StateStore, course: Course) -> bool:
+    course_path = (course.collection_id, course.id)
+    return bool(
+        store.lesson_statuses(*course_path)
+        or store.session_cursor(course_path) is not None
+        or store.active_environment(*course_path) is not None
+    )
+
+
+def _render_environment_policy(
+    scope: EnvironmentScope, provider_capability: str | None
+) -> None:
+    capability = f" ({provider_capability})" if provider_capability is not None else ""
+    typer.echo(f"Environment policy: {scope.value}{capability}")
+
+
+def _render_session_outcome(
+    course_path: str,
+    outcome: SessionOutcome,
+    secrets: set[str],
+) -> None:
+    if outcome.action is SessionAction.ERROR:
+        message = redact(outcome.error or "session operation failed", secrets)
+        typer.echo(f"Error: {message}")
+        raise typer.Exit(code=3)
+    if outcome.action is SessionAction.SAVE_AND_EXIT:
+        typer.echo(f"Progress saved. Resume with: learnlab resume {course_path}")
 
 
 def _default_lesson_index(course: Course, statuses: dict[str, ProgressStatus]) -> int:
