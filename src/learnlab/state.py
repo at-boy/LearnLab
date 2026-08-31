@@ -231,6 +231,8 @@ class StateStore:
         source: CompletionSource = CompletionSource.MANUAL_OVERRIDE,
     ) -> None:
         """Mark a lesson completed with explicit provenance."""
+        if source is not CompletionSource.MANUAL_OVERRIDE:
+            raise ValueError("Manual completion requires manual override provenance")
         now = _utc_timestamp()
         connection = self._connect()
         try:
@@ -302,7 +304,7 @@ class StateStore:
         """Persist a lesson's current status as one atomic update."""
         now = _utc_timestamp()
         completion_source = (
-            CompletionSource.LEGACY.value
+            CompletionSource.MANUAL_OVERRIDE.value
             if status is ProgressStatus.COMPLETED
             else None
         )
@@ -1023,23 +1025,9 @@ class StateStore:
                     connection.execute(
                         """
                         DELETE FROM verification_progress
-                        WHERE status != ? OR NOT EXISTS (
-                            SELECT 1 FROM step_progress
-                            WHERE step_progress.collection_id =
-                                      verification_progress.collection_id
-                              AND step_progress.course_id =
-                                      verification_progress.course_id
-                              AND step_progress.lesson_id =
-                                      verification_progress.lesson_id
-                              AND step_progress.step_id =
-                                      verification_progress.step_id
-                              AND step_progress.status = ?
-                        )
+                        WHERE status != ?
                         """,
-                        (
-                            VerificationStatus.PASSED.value,
-                            StepStatus.COMPLETED.value,
-                        ),
+                        (VerificationStatus.PASSED.value,),
                     )
                     connection.execute(
                         "DELETE FROM step_progress WHERE status != ?",

@@ -554,7 +554,7 @@ def test_reset_deletes_session_step_and_verification_state(store: StateStore) ->
     assert store.verification_records(STEP_PATH) == []
 
 
-def test_erase_preserve_progress_retains_only_completed_steps_and_checks(
+def test_erase_preserve_progress_retains_completed_steps_and_passed_checks(
     store: StateStore,
 ) -> None:
     _seed_two_passed_verifications(store)
@@ -563,12 +563,19 @@ def test_erase_preserve_progress_retains_only_completed_steps_and_checks(
     store.start_step(incomplete_path)
     store.record_verification_result(
         incomplete_path,
-        "check-config",
+        "passed-config",
+        passed=True,
+        evidence="good",
+        validator_type=VerificationType.REMOTE_COMMAND,
+    )
+    store.record_verification_result(
+        incomplete_path,
+        "failed-config",
         passed=False,
         evidence="bad",
         validator_type=VerificationType.REMOTE_COMMAND,
     )
-    store.set_session_cursor(COURSE_PATH, "api-access", "configure", "check-config")
+    store.set_session_cursor(COURSE_PATH, "api-access", "configure", "failed-config")
 
     store.erase_all(preserve_completed=True)
 
@@ -577,7 +584,9 @@ def test_erase_preserve_progress_retains_only_completed_steps_and_checks(
     assert {
         record.verification_id for record in store.verification_records(STEP_PATH)
     } == {"check-os", "check-agent"}
-    assert store.verification_records(incomplete_path) == []
+    [preserved] = store.verification_records(incomplete_path)
+    assert preserved.verification_id == "passed-config"
+    assert preserved.status is VerificationStatus.PASSED
 
 
 def test_erase_without_preservation_removes_all_session_progress(
@@ -598,6 +607,29 @@ def test_manual_lesson_completion_records_override_provenance(
     store: StateStore,
 ) -> None:
     store.complete_lesson(*LESSON_PATH, source=CompletionSource.MANUAL_OVERRIDE)
+
+    assert (
+        store.lesson_completion_source(LESSON_PATH) is CompletionSource.MANUAL_OVERRIDE
+    )
+
+
+@pytest.mark.parametrize(
+    "forged_source",
+    (CompletionSource.LEGACY, CompletionSource.VALIDATED),
+)
+def test_manual_lesson_completion_rejects_forged_provenance(
+    store: StateStore, forged_source: CompletionSource
+) -> None:
+    with pytest.raises(ValueError, match="manual override"):
+        store.complete_lesson(*LESSON_PATH, source=forged_source)
+
+    assert store.lesson_completion_source(LESSON_PATH) is None
+
+
+def test_generic_completed_status_records_manual_override_provenance(
+    store: StateStore,
+) -> None:
+    store.mark_lesson(*LESSON_PATH, ProgressStatus.COMPLETED)
 
     assert (
         store.lesson_completion_source(LESSON_PATH) is CompletionSource.MANUAL_OVERRIDE
