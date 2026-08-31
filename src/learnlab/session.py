@@ -172,9 +172,10 @@ class CourseSession:
                         course_completed=True,
                     )
 
+        reviewing = review_completed and self._is_completed(lesson)
         while True:
             self._current_lesson_id = lesson.id
-            outcome = self._run_lesson(lesson)
+            outcome = self._run_lesson(lesson, reviewing=reviewing)
             if outcome.action is SessionAction.REVIEW:
                 selected_id = self._prompt.choose_review_lesson(self._course)
                 if selected_id is None:
@@ -187,6 +188,7 @@ class CourseSession:
                 lesson = self._lesson_by_id(selected_id)
                 if self._is_legacy_completed(lesson):
                     self._prompt.legacy_completion(lesson)
+                reviewing = self._is_completed(lesson)
                 continue
             if outcome.action is not SessionAction.CONTINUE:
                 return outcome
@@ -198,8 +200,9 @@ class CourseSession:
                     lesson_completed=True,
                     course_completed=True,
                 )
+            reviewing = False
 
-    def _run_lesson(self, lesson: Lesson) -> SessionOutcome:
+    def _run_lesson(self, lesson: Lesson, *, reviewing: bool = False) -> SessionOutcome:
         self._current_step_id = None
         self._current_verification_id = None
         policy = self._course.effective_environment(lesson)
@@ -231,18 +234,22 @@ class CourseSession:
         for step_position, step in enumerate(lesson.steps, start=1):
             self._current_step_id = step.id
             statuses = self._store.step_statuses(lesson_path)
-            if statuses.get(step.id) is StepStatus.COMPLETED:
+            if statuses.get(step.id) is StepStatus.COMPLETED and not reviewing:
                 continue
             step_path = (*lesson_path, step.id)
             self._store.start_step(step_path)
             self._prompt.present_step(lesson, step, step_position, len(lesson.steps))
 
             records = self._store.verification_records(step_path)
-            passed_ids = {
-                record.verification_id
-                for record in records
-                if record.status is VerificationStatus.PASSED
-            }
+            passed_ids = (
+                set()
+                if reviewing
+                else {
+                    record.verification_id
+                    for record in records
+                    if record.status is VerificationStatus.PASSED
+                }
+            )
             for verification_position, verification in enumerate(
                 step.verifications, start=1
             ):
@@ -265,8 +272,10 @@ class CourseSession:
                 if action is SessionAction.SAVE_AND_EXIT:
                     return SessionOutcome(action, lesson.id)
                 while True:
-                    result = self._validators.validate(
-                        self._validation_context(resolution), verification
+                    result = self._safe_result(
+                        self._validators.validate(
+                            self._validation_context(resolution), verification
+                        )
                     )
                     self._store.record_verification_result(
                         step_path,
@@ -309,6 +318,22 @@ class CourseSession:
             lesson.id,
             lesson_completed=True,
             course_completed=next_lesson is None,
+        )
+
+    def _safe_result(self, result: VerificationResult) -> VerificationResult:
+        """Return a bounded immutable copy safe for storage and presentation."""
+        evidence = (
+            redact(result.evidence, self._secrets)
+            if result.evidence is not None
+            else None
+        )
+        return VerificationResult(
+            passed=result.passed,
+            summary=redact(result.summary, self._secrets),
+            validator_type=result.validator_type,
+            self_attested=result.self_attested,
+            evidence=evidence,
+            completed_at=result.completed_at,
         )
 
     def _contextual_error(self, error: Exception) -> str:

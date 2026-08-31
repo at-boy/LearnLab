@@ -180,6 +180,18 @@ class FailingRegistry:
         raise ProviderError("SSH failed with token-secret")
 
 
+class UnsafeResultRegistry:
+    def validate(
+        self, context: ValidationContext, check: Verification
+    ) -> VerificationResult:
+        return VerificationResult(
+            passed=False,
+            summary="q" * 500,
+            validator_type=check.type,
+            evidence="q" * (8 * 1024),
+        )
+
+
 class RetryingPrompt(RecordingPrompt):
     def __init__(self, store: StateStore, step_path: tuple[str, str, str, str]) -> None:
         super().__init__(store, step_path)
@@ -372,6 +384,78 @@ class ReviewPrompt(LegacyPrompt):
         return "legacy"
 
 
+class ResultCapturingPrompt(NavigationPrompt):
+    def __init__(self) -> None:
+        super().__init__({})
+        self.results: list[VerificationResult] = []
+
+    def present_result(self, check: Verification, result: VerificationResult) -> None:
+        self.results.append(result)
+
+    def failed_verification(
+        self, check: Verification, result: VerificationResult
+    ) -> SessionAction:
+        self.results.append(result)
+        return SessionAction.SAVE_AND_EXIT
+
+
+class ValidatedReviewFailurePrompt(NavigationPrompt):
+    def __init__(self) -> None:
+        super().__init__({"reviewed": SessionAction.EXIT})
+        self.presented_checks: list[str] = []
+
+    def begin_verification(
+        self,
+        lesson: Lesson,
+        step: Step,
+        check: Verification,
+        position: int,
+        total: int,
+    ) -> SessionAction:
+        self.presented_checks.append(check.id)
+        return SessionAction.READY
+
+    def failed_verification(
+        self, check: Verification, result: VerificationResult
+    ) -> SessionAction:
+        return SessionAction.SAVE_AND_EXIT
+
+
+class ValidatedReviewInterruptPrompt(ValidatedReviewFailurePrompt):
+    def begin_verification(
+        self,
+        lesson: Lesson,
+        step: Step,
+        check: Verification,
+        position: int,
+        total: int,
+    ) -> SessionAction:
+        self.presented_checks.append(check.id)
+        raise KeyboardInterrupt
+
+
+class ValidatedMenuReviewPrompt(NavigationPrompt):
+    def __init__(self) -> None:
+        super().__init__(
+            {"current": SessionAction.REVIEW, "reviewed": SessionAction.EXIT}
+        )
+        self.presented_checks: list[tuple[str, str]] = []
+
+    def begin_verification(
+        self,
+        lesson: Lesson,
+        step: Step,
+        check: Verification,
+        position: int,
+        total: int,
+    ) -> SessionAction:
+        self.presented_checks.append((lesson.id, check.id))
+        return SessionAction.READY
+
+    def choose_review_lesson(self, course: Course) -> str | None:
+        return "reviewed"
+
+
 def mark_legacy_complete(store: StateStore, lesson_id: str) -> None:
     store.mark_lesson(*COURSE_PATH, lesson_id, ProgressStatus.COMPLETED)
     connection = sqlite3.connect(store.db_path)
@@ -384,6 +468,26 @@ def mark_legacy_complete(store: StateStore, lesson_id: str) -> None:
         connection.commit()
     finally:
         connection.close()
+
+
+def mark_validated_complete(store: StateStore, lesson: Lesson) -> None:
+    lesson_path = (*COURSE_PATH, lesson.id)
+    for step in lesson.steps:
+        step_path = (*lesson_path, step.id)
+        store.start_step(step_path)
+        for check in step.verifications:
+            store.record_verification_result(
+                step_path,
+                check.id,
+                passed=True,
+                evidence="original safe evidence",
+                validator_type=check.type,
+                self_attested=True,
+            )
+        store.complete_step(step_path, tuple(check.id for check in step.verifications))
+    store.complete_lesson_validated(
+        lesson_path, tuple(step.id for step in lesson.steps)
+    )
 
 
 def test_resume_skips_passed_check_and_persists_next_result_before_advancing(
@@ -827,6 +931,207 @@ def test_validation_failure_returns_redacted_full_curriculum_context(
     assert "check contextual-check" in outcome.error
     assert "token-secret" not in outcome.error
     assert "[REDACTED]" in outcome.error
+
+
+def test_failed_result_is_redacted_and_rebounded_before_persistence_and_prompts(
+    tmp_path: Path,
+) -> None:
+    course = course_with_steps(
+        Step(
+            id="inspect",
+            title="Inspect",
+            instructions="Inspect the system.",
+            verifications=(verification("safe-result"),),
+        )
+    )
+    store = StateStore(tmp_path / "state.db")
+    store.initialize()
+    prompt = ResultCapturingPrompt()
+
+    outcome = CourseSession(
+        course=course,
+        store=store,
+        lifecycle=NoEnvironmentLifecycle(),
+        validators=UnsafeResultRegistry(),
+        prompt=prompt,
+        secrets={"q"},
+    ).run()
+
+    [record] = store.verification_records((*COURSE_PATH, "basics", "inspect"))
+    assert record.evidence is not None
+    assert "q" not in record.evidence
+    assert "[REDACTED]" in record.evidence
+    assert len(record.evidence.encode("utf-8")) <= 8 * 1024
+    assert len(prompt.results) == 2
+    assert prompt.results[0] is prompt.results[1]
+    for result in prompt.results:
+        assert "q" not in result.summary
+        assert "[REDACTED]" in result.summary
+        assert len(result.summary) <= 500
+        assert result.evidence == record.evidence
+    assert "q" not in repr(outcome)
+    assert outcome.action is SessionAction.SAVE_AND_EXIT
+
+
+def test_failed_validated_review_reruns_check_without_clearing_prior_success(
+    tmp_path: Path,
+) -> None:
+    reviewed = Lesson(
+        id="reviewed",
+        title="Reviewed",
+        steps=(
+            Step(
+                id="do-work",
+                title="Do work",
+                instructions="Complete the work.",
+                verifications=(verification("review-check"),),
+            ),
+        ),
+    )
+    course = Course(
+        collection_id=COURSE_PATH[0],
+        id=COURSE_PATH[1],
+        title="Operations",
+        lessons=(reviewed,),
+        environment=EnvironmentPolicy(EnvironmentScope.NONE),
+    )
+    store = StateStore(tmp_path / "state.db")
+    store.initialize()
+    mark_validated_complete(store, reviewed)
+    prompt = ValidatedReviewFailurePrompt()
+
+    outcome = CourseSession(
+        course=course,
+        store=store,
+        lifecycle=NoEnvironmentLifecycle(),
+        validators=ScriptedRegistry({"review-check": [False]}),
+        prompt=prompt,
+    ).run(lesson_id="reviewed", review_completed=True)
+
+    [record] = store.verification_records((*COURSE_PATH, "reviewed", "do-work"))
+    assert prompt.presented_steps == ["do-work"]
+    assert prompt.presented_checks == ["review-check"]
+    assert record.status is VerificationStatus.PASSED
+    assert record.attempt_count == 2
+    assert record.evidence == "original safe evidence"
+    assert (
+        store.step_statuses((*COURSE_PATH, "reviewed"))["do-work"]
+        is StepStatus.COMPLETED
+    )
+    assert (
+        store.lesson_completion_source((*COURSE_PATH, "reviewed"))
+        is CompletionSource.VALIDATED
+    )
+    assert outcome.action is SessionAction.SAVE_AND_EXIT
+
+
+def test_interrupted_validated_review_preserves_prior_completion_and_result(
+    tmp_path: Path,
+) -> None:
+    reviewed = Lesson(
+        id="reviewed",
+        title="Reviewed",
+        steps=(
+            Step(
+                id="do-work",
+                title="Do work",
+                instructions="Complete the work.",
+                verifications=(verification("review-check"),),
+            ),
+        ),
+    )
+    course = Course(
+        collection_id=COURSE_PATH[0],
+        id=COURSE_PATH[1],
+        title="Operations",
+        lessons=(reviewed,),
+        environment=EnvironmentPolicy(EnvironmentScope.NONE),
+    )
+    store = StateStore(tmp_path / "state.db")
+    store.initialize()
+    mark_validated_complete(store, reviewed)
+    prompt = ValidatedReviewInterruptPrompt()
+
+    outcome = CourseSession(
+        course=course,
+        store=store,
+        lifecycle=NoEnvironmentLifecycle(),
+        validators=ScriptedRegistry({"review-check": [True]}),
+        prompt=prompt,
+    ).run(lesson_id="reviewed", review_completed=True)
+
+    [record] = store.verification_records((*COURSE_PATH, "reviewed", "do-work"))
+    cursor = store.session_cursor(COURSE_PATH)
+    assert prompt.presented_checks == ["review-check"]
+    assert record.status is VerificationStatus.PASSED
+    assert record.attempt_count == 1
+    assert record.evidence == "original safe evidence"
+    assert (
+        store.lesson_completion_source((*COURSE_PATH, "reviewed"))
+        is CompletionSource.VALIDATED
+    )
+    assert cursor is not None
+    assert cursor.verification_id == "review-check"
+    assert outcome.action is SessionAction.SAVE_AND_EXIT
+
+
+def test_completion_menu_review_reruns_validated_lesson_checks(
+    tmp_path: Path,
+) -> None:
+    reviewed = Lesson(
+        id="reviewed",
+        title="Reviewed",
+        steps=(
+            Step(
+                id="review-step",
+                title="Review",
+                instructions="Review the work.",
+                verifications=(verification("review-check"),),
+            ),
+        ),
+    )
+    current = Lesson(
+        id="current",
+        title="Current",
+        steps=(
+            Step(
+                id="current-step",
+                title="Current",
+                instructions="Complete the current work.",
+                verifications=(verification("current-check"),),
+            ),
+        ),
+    )
+    course = Course(
+        collection_id=COURSE_PATH[0],
+        id=COURSE_PATH[1],
+        title="Operations",
+        lessons=(reviewed, current),
+        environment=EnvironmentPolicy(EnvironmentScope.NONE),
+    )
+    store = StateStore(tmp_path / "state.db")
+    store.initialize()
+    mark_validated_complete(store, reviewed)
+    prompt = ValidatedMenuReviewPrompt()
+
+    outcome = CourseSession(
+        course=course,
+        store=store,
+        lifecycle=NoEnvironmentLifecycle(),
+        validators=ScriptedRegistry({"current-check": [True], "review-check": [True]}),
+        prompt=prompt,
+    ).run()
+
+    [reviewed_record] = store.verification_records(
+        (*COURSE_PATH, "reviewed", "review-step")
+    )
+    assert prompt.presented_checks == [
+        ("current", "current-check"),
+        ("reviewed", "review-check"),
+    ]
+    assert reviewed_record.attempt_count == 2
+    assert reviewed_record.evidence == "original safe evidence"
+    assert outcome.lesson_id == "reviewed"
 
 
 def test_none_scope_save_avoids_provider_and_preserves_existing_environment(
