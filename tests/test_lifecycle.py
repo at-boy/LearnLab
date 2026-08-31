@@ -98,9 +98,18 @@ class StateObservingProvider(RecordingProvider):
         node: str,
         timeout: float,
         heartbeat: Callable[[int], None] | None = None,
+        guest_agent_heartbeat: Callable[[int], None] | None = None,
+        address_heartbeat: Callable[[int], None] | None = None,
     ) -> str:
         self._snapshot("wait_for_ipv4")
-        return super().wait_for_ipv4(vmid, node, timeout, heartbeat)
+        return super().wait_for_ipv4(
+            vmid,
+            node,
+            timeout,
+            heartbeat,
+            guest_agent_heartbeat,
+            address_heartbeat,
+        )
 
 
 class RecordingProgress:
@@ -118,6 +127,26 @@ class RecordingProgress:
 class FailingProgress:
     def on_progress(self, event: ProgressEvent) -> None:
         raise RuntimeError("observer-private-value failed")
+
+
+class PhaseHeartbeatProvider(RecordingProvider):
+    def wait_for_ipv4(
+        self,
+        vmid: int,
+        node: str,
+        timeout: float,
+        heartbeat: Callable[[int], None] | None = None,
+        guest_agent_heartbeat: Callable[[int], None] | None = None,
+        address_heartbeat: Callable[[int], None] | None = None,
+    ) -> str:
+        self._record(f"wait_for_ipv4:{vmid}")
+        (guest_agent_heartbeat or heartbeat or _ignore_attempt)(1)
+        (address_heartbeat or heartbeat or _ignore_attempt)(1)
+        return "192.0.2.10"
+
+
+def _ignore_attempt(attempt: int) -> None:
+    return None
 
 
 class DestroyRecordingProvider(RecordingProvider):
@@ -234,6 +263,28 @@ def test_progress_observer_failure_does_not_change_start_outcome(
 
     assert started.ip_address == "192.0.2.10"
     assert recording_provider.operations[-1] == "wait_for_ipv4:102"
+
+
+def test_start_maps_guest_and_address_heartbeats_to_their_own_stages(
+    store: StateStore,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+) -> None:
+    recorder = RecordingProgress()
+
+    LifecycleService(
+        store, PhaseHeartbeatProvider(), tmp_path, progress=recorder
+    ).start(start_request(profile_fixture(node="pve02")))
+
+    assert [
+        (event.kind.value, event.attempt)
+        for event in recorder.events
+        if event.kind.value in {"guest-agent-waiting", "address-discovery"}
+    ] == [
+        ("guest-agent-waiting", None),
+        ("guest-agent-waiting", 1),
+        ("address-discovery", 1),
+    ]
 
 
 def test_start_persists_remote_boundaries_in_order(

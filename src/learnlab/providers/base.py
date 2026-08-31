@@ -68,6 +68,8 @@ class Provider(Protocol):
         node: str,
         timeout: float,
         heartbeat: Callable[[int], None] | None = None,
+        guest_agent_heartbeat: Callable[[int], None] | None = None,
+        address_heartbeat: Callable[[int], None] | None = None,
     ) -> str: ...
 
     def delete(self, vmid: int, node: str) -> str: ...

@@ -271,6 +271,43 @@ def test_wait_for_task_heartbeats_running_polls_at_existing_interval(
     assert clock.value == 4.0
 
 
+def test_wait_for_task_ignores_throwing_heartbeat_without_changing_polling(
+    fake_server: FakeProxmoxServer, profile: ProxmoxProfile
+) -> None:
+    fake_server.queue(200, {"data": {"status": "running"}})
+    fake_server.queue(200, {"data": {"status": "running"}})
+    fake_server.queue(200, {"data": {"status": "stopped", "exitstatus": "OK"}})
+    provider, clock = provider_with_clock(fake_server, profile)
+
+    provider.wait_for_task(
+        "pve02",
+        "UPID:pve02:clone:",
+        timeout=10,
+        heartbeat=_raise_callback,
+    )
+
+    assert clock.value == 4.0
+    assert len(fake_server.requests.all()) == 3
+
+
+def test_wait_for_task_throwing_heartbeat_keeps_existing_deadline(
+    fake_server: FakeProxmoxServer, profile: ProxmoxProfile
+) -> None:
+    fake_server.always(200, {"data": {"status": "running"}})
+    provider, clock = provider_with_clock(fake_server, profile)
+
+    with pytest.raises(ProviderTimeoutError, match="UPID"):
+        provider.wait_for_task(
+            "pve02",
+            "UPID:pve02:clone:",
+            timeout=2,
+            heartbeat=_raise_callback,
+        )
+
+    assert clock.value == 2.0
+    assert len(fake_server.requests.all()) == 1
+
+
 def test_wait_for_task_rejects_non_ok_exit(
     fake_server: FakeProxmoxServer, provider: ProxmoxProvider
 ) -> None:
@@ -399,6 +436,87 @@ def test_wait_for_ipv4_heartbeats_guest_and_address_retries(
         },
     )
     provider, clock = provider_with_clock(fake_server, profile)
+    guest_heartbeats: list[tuple[int, float]] = []
+    address_heartbeats: list[tuple[int, float]] = []
+
+    assert (
+        provider.wait_for_ipv4(
+            102,
+            "pve02",
+            timeout=10,
+            guest_agent_heartbeat=lambda attempt: guest_heartbeats.append(
+                (attempt, clock.value)
+            ),
+            address_heartbeat=lambda attempt: address_heartbeats.append(
+                (attempt, clock.value)
+            ),
+        )
+        == "192.0.2.10"
+    )
+
+    assert guest_heartbeats == [(1, 0.0), (2, 2.0)]
+    assert address_heartbeats == [(1, 4.0), (2, 6.0)]
+    assert clock.value == 6.0
+
+
+def test_wait_for_ipv4_announces_address_phase_before_its_first_poll(
+    fake_server: FakeProxmoxServer, profile: ProxmoxProfile
+) -> None:
+    fake_server.queue(200, {"data": {}})
+    fake_server.queue(
+        200,
+        {
+            "data": {
+                "result": [
+                    {
+                        "ip-addresses": [
+                            {"ip-address": "192.0.2.10", "ip-address-type": "ipv4"}
+                        ]
+                    }
+                ]
+            }
+        },
+    )
+    provider, _ = provider_with_clock(fake_server, profile)
+    observed: list[tuple[int, list[str]]] = []
+
+    assert (
+        provider.wait_for_ipv4(
+            102,
+            "pve02",
+            timeout=10,
+            address_heartbeat=lambda attempt: observed.append(
+                (attempt, [request.method for request in fake_server.requests.all()])
+            ),
+        )
+        == "192.0.2.10"
+    )
+
+    assert observed == [(1, ["POST"])]
+
+
+def test_wait_for_ipv4_keeps_legacy_heartbeat_attempt_sequence(
+    fake_server: FakeProxmoxServer, profile: ProxmoxProfile
+) -> None:
+    fake_server.queue(500, {"errors": "guest agent unavailable"})
+    fake_server.queue(500, {"errors": "guest agent unavailable"})
+    fake_server.queue(200, {"data": {}})
+    fake_server.queue(200, {"data": {"result": []}})
+    fake_server.queue(
+        200,
+        {
+            "data": {
+                "result": [
+                    {
+                        "ip-addresses": [
+                            {"ip-address": "192.0.2.10", "ip-address-type": "ipv4"}
+                        ]
+                    }
+                ]
+            }
+        },
+    )
+    provider, clock = provider_with_clock(fake_server, profile)
     heartbeats: list[tuple[int, float]] = []
 
     assert (
@@ -413,6 +531,47 @@ def test_wait_for_ipv4_heartbeats_guest_and_address_retries(
 
     assert heartbeats == [(1, 0.0), (2, 2.0), (3, 4.0)]
     assert clock.value == 6.0
+
+
+def test_wait_for_ipv4_ignores_throwing_phase_callbacks_without_delay(
+    fake_server: FakeProxmoxServer, profile: ProxmoxProfile
+) -> None:
+    fake_server.queue(500, {"errors": "guest agent unavailable"})
+    fake_server.queue(200, {"data": {}})
+    fake_server.queue(200, {"data": {"result": []}})
+    fake_server.queue(
+        200,
+        {
+            "data": {
+                "result": [
+                    {
+                        "ip-addresses": [
+                            {"ip-address": "192.0.2.10", "ip-address-type": "ipv4"}
+                        ]
+                    }
+                ]
+            }
+        },
+    )
+    provider, clock = provider_with_clock(fake_server, profile)
+
+    assert (
+        provider.wait_for_ipv4(
+            102,
+            "pve02",
+            timeout=10,
+            guest_agent_heartbeat=_raise_callback,
+            address_heartbeat=_raise_callback,
+        )
+        == "192.0.2.10"
+    )
+
+    assert clock.value == 4.0
+    assert len(fake_server.requests.all()) == 4
+
+
+def _raise_callback(attempt: int) -> None:
+    raise RuntimeError(f"observer-{attempt}-private-value")
 
 
 def test_wait_for_ipv4_rejects_agent_readiness_after_a_short_deadline(

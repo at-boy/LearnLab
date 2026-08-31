@@ -279,13 +279,17 @@ class ProxmoxProvider:
         node: str,
         timeout: float,
         heartbeat: Callable[[int], None] | None = None,
+        guest_agent_heartbeat: Callable[[int], None] | None = None,
+        address_heartbeat: Callable[[int], None] | None = None,
     ) -> str:
         deadline = self._clock() + timeout
         ping_path = f"/nodes/{node}/qemu/{vmid}/agent/ping"
         interfaces_path = f"/nodes/{node}/qemu/{vmid}/agent/network-get-interfaces"
         readiness_timeout = f"Timed out waiting for guest agent readiness for VM {vmid}"
         address_timeout = f"Timed out waiting for guest IPv4 address for VM {vmid}"
-        attempt = 0
+        guest_heartbeat = guest_agent_heartbeat or heartbeat
+        guest_agent_attempt = 0
+        generic_attempt = 0
         while True:
             self._raise_if_deadline_reached(deadline, readiness_timeout)
             try:
@@ -293,24 +297,38 @@ class ProxmoxProvider:
                 self._raise_if_deadline_reached(deadline, readiness_timeout)
                 break
             except ProviderOperationError:
-                attempt += 1
-                self._notify_heartbeat(heartbeat, attempt)
+                guest_agent_attempt += 1
+                generic_attempt += 1
+                self._notify_heartbeat(
+                    guest_heartbeat,
+                    (
+                        guest_agent_attempt
+                        if guest_agent_heartbeat is not None
+                        else generic_attempt
+                    ),
+                )
                 self._sleep_until_deadline(deadline, readiness_timeout)
+        address_attempt = 0
         while True:
             self._raise_if_deadline_reached(deadline, address_timeout)
+            if address_heartbeat is not None:
+                address_attempt += 1
+                self._notify_heartbeat(address_heartbeat, address_attempt)
             try:
                 interfaces = self._request("GET", interfaces_path)
                 self._raise_if_deadline_reached(deadline, address_timeout)
             except ProviderOperationError:
-                attempt += 1
-                self._notify_heartbeat(heartbeat, attempt)
+                generic_attempt += 1
+                if address_heartbeat is None:
+                    self._notify_heartbeat(heartbeat, generic_attempt)
                 self._sleep_until_deadline(deadline, address_timeout)
                 continue
             address = self._first_ipv4(interfaces)
             if address is not None:
                 return address
-            attempt += 1
-            self._notify_heartbeat(heartbeat, attempt)
+            generic_attempt += 1
+            if address_heartbeat is None:
+                self._notify_heartbeat(heartbeat, generic_attempt)
             self._sleep_until_deadline(deadline, address_timeout)
 
     def delete(self, vmid: int, node: str) -> str:

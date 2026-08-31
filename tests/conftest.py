@@ -72,6 +72,8 @@ class RecordingProvider:
         node: str,
         timeout: float,
         heartbeat: Callable[[int], None] | None = None,
+        guest_agent_heartbeat: Callable[[int], None] | None = None,
+        address_heartbeat: Callable[[int], None] | None = None,
     ) -> str:
         self._record(f"wait_for_ipv4:{vmid}")
         return "192.0.2.10"

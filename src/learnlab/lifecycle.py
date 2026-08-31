@@ -252,24 +252,39 @@ class LifecycleService:
                 started_at,
                 vmid=vmid,
             )
+            address_discovery_emitted = False
+
+            def emit_address_discovery(attempt: int) -> None:
+                nonlocal address_discovery_emitted
+                address_discovery_emitted = True
+                self._emit_progress(
+                    ProgressKind.ADDRESS_DISCOVERY,
+                    "Discovering environment address",
+                    started_at,
+                    vmid=vmid,
+                    attempt=attempt,
+                )
+
             ip_address = provider.wait_for_ipv4(
                 vmid,
                 location.node,
                 _GUEST_TIMEOUT_SECONDS,
-                heartbeat=lambda attempt: self._emit_progress(
+                guest_agent_heartbeat=lambda attempt: self._emit_progress(
                     ProgressKind.GUEST_AGENT_WAITING,
                     "Waiting for guest agent",
                     started_at,
                     vmid=vmid,
                     attempt=attempt,
                 ),
+                address_heartbeat=emit_address_discovery,
             )
-            self._emit_progress(
-                ProgressKind.ADDRESS_DISCOVERY,
-                "Discovering environment address",
-                started_at,
-                vmid=vmid,
-            )
+            if not address_discovery_emitted:
+                self._emit_progress(
+                    ProgressKind.ADDRESS_DISCOVERY,
+                    "Discovering environment address",
+                    started_at,
+                    vmid=vmid,
+                )
             self._store.transition_environment(
                 environment_id, EnvironmentPhase.RUNNING, ip_address=ip_address
             )
