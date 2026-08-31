@@ -17,6 +17,7 @@ from learnlab.errors import (
     ProviderTimeoutError,
 )
 from learnlab.providers.proxmox import ProxmoxProvider
+from learnlab.state import EnvironmentPhase, EnvironmentRecord
 from tests.providers.fake_proxmox import FakeProxmoxServer, fake_proxmox_server
 
 
@@ -72,6 +73,25 @@ def provider_with_clock(
         sleep=clock.sleep,
     )
     return provider, clock
+
+
+def environment(**overrides: object) -> EnvironmentRecord:
+    values: dict[str, object] = {
+        "id": "env-1",
+        "collection_id": "proxmox",
+        "course_id": "proxmox-admin",
+        "lesson_id": "api-access",
+        "attempt_id": None,
+        "profile_name": "home-proxmox",
+        "provider_type": "proxmox",
+        "phase": EnvironmentPhase.RUNNING,
+        "vmid": 102,
+        "node": "pve02",
+        "ip_address": "192.0.2.10",
+        "expected_vm_name": "learnlab-proxmox-admin-102",
+    }
+    values.update(overrides)
+    return EnvironmentRecord(**values)  # type: ignore[arg-type]
 
 
 @pytest.fixture
@@ -184,6 +204,110 @@ def test_allocate_vmid_uses_cluster_nextid(
     assert provider.allocate_vmid() == 102
     assert fake_server.requests.one().method == "GET"
     assert fake_server.requests.one().path == "/api2/json/cluster/nextid"
+
+
+def test_api_reachable_check_is_one_named_get(
+    fake_server: FakeProxmoxServer, provider: ProxmoxProvider
+) -> None:
+    fake_server.queue(200, {"data": {"version": "8.4.1"}})
+
+    result = provider.run_check("api-reachable", None)
+
+    request = fake_server.requests.one()
+    assert request.method == "GET"
+    assert request.path == "/api2/json/version"
+    assert result.name == "api-reachable"
+    assert result.ok is True
+    assert result.detail == "Proxmox API 8.4.1 is reachable"
+
+
+def test_template_visible_check_reads_cluster_resources(
+    fake_server: FakeProxmoxServer, provider: ProxmoxProvider
+) -> None:
+    fake_server.queue(
+        200,
+        {
+            "data": [
+                {
+                    "vmid": 9001,
+                    "name": "nixos-26.05-base-v2",
+                    "node": "pve02",
+                    "template": 1,
+                }
+            ]
+        },
+    )
+
+    result = provider.run_check("template-visible", None)
+
+    request = fake_server.requests.one()
+    assert request.method == "GET"
+    assert request.path == "/api2/json/cluster/resources?type=vm"
+    assert result.name == "template-visible"
+    assert result.ok is True
+    assert "9001" in result.detail
+
+
+def test_vm_running_check_uses_read_only_location_lookup(
+    fake_server: FakeProxmoxServer, provider: ProxmoxProvider
+) -> None:
+    fake_server.queue(
+        200,
+        {
+            "data": [
+                {
+                    "vmid": 102,
+                    "node": "pve02",
+                    "status": "running",
+                    "name": "learnlab-proxmox-admin-102",
+                }
+            ]
+        },
+    )
+
+    result = provider.run_check("vm-running", environment())
+
+    request = fake_server.requests.one()
+    assert request.method == "GET"
+    assert request.path == "/api2/json/cluster/resources?type=vm"
+    assert result.name == "vm-running"
+    assert result.ok is True
+    assert "running" in result.detail
+
+
+def test_guest_agent_ready_is_one_proven_ping_without_polling(
+    fake_server: FakeProxmoxServer, provider: ProxmoxProvider
+) -> None:
+    fake_server.queue(200, {"data": {"result": {}}})
+
+    result = provider.run_check("guest-agent-ready", environment())
+
+    assert len(fake_server.requests.all()) == 1
+    request = fake_server.requests.one()
+    assert request.method == "POST"
+    assert request.path == "/api2/json/nodes/pve02/qemu/102/agent/ping"
+    assert request.body == ""
+    assert result.name == "guest-agent-ready"
+    assert result.ok is True
+
+
+@pytest.mark.parametrize("check", ["vm-running", "guest-agent-ready"])
+def test_environment_checks_reject_missing_environment_before_any_request(
+    fake_server: FakeProxmoxServer, provider: ProxmoxProvider, check: str
+) -> None:
+    with pytest.raises(ValueError, match="requires an environment"):
+        provider.run_check(check, None)
+
+    assert fake_server.requests.all() == []
+
+
+def test_unknown_provider_check_is_rejected_before_any_request(
+    fake_server: FakeProxmoxServer, provider: ProxmoxProvider
+) -> None:
+    with pytest.raises(ValueError, match="Unknown provider check"):
+        provider.run_check("delete-everything", environment())
+
+    assert fake_server.requests.all() == []
 
 
 def test_locate_vm_returns_its_node_and_status(

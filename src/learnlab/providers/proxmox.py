@@ -21,6 +21,7 @@ from learnlab.errors import (
     redact,
 )
 from learnlab.providers.base import ProviderCheck, ProviderHealth, VmLocation
+from learnlab.state import EnvironmentRecord
 
 
 class ProxmoxProvider:
@@ -179,6 +180,94 @@ class ProxmoxProvider:
             (self._mutation_permissions_warning(),),
             provider_error=provider_error,
         )
+
+    def run_check(
+        self, check: str, environment: EnvironmentRecord | None
+    ) -> ProviderCheck:
+        """Run one explicitly named provider check without changing state."""
+        known_checks = {
+            "api-reachable",
+            "template-visible",
+            "vm-running",
+            "guest-agent-ready",
+        }
+        if check not in known_checks:
+            raise ValueError(f"Unknown provider check: {check}")
+        if check in {"vm-running", "guest-agent-ready"} and environment is None:
+            raise ValueError(f"Provider check {check} requires an environment")
+
+        try:
+            if check == "api-reachable":
+                version = self._request("GET", "/version")
+                version_detail = self._string_value(version, "version")
+                detail = "Proxmox API is reachable"
+                if version_detail is not None:
+                    detail = f"Proxmox API {version_detail} is reachable"
+                return ProviderCheck(check, True, detail)
+
+            if check == "template-visible":
+                resources = self._request("GET", "/cluster/resources?type=vm")
+                template = next(
+                    (
+                        item
+                        for item in self._as_list(resources)
+                        if isinstance(item, Mapping)
+                        and item.get("vmid") == self._profile.template_vmid
+                    ),
+                    None,
+                )
+                visible = isinstance(template, Mapping) and self._template_matches(
+                    template
+                )
+                return ProviderCheck(
+                    check,
+                    visible,
+                    (
+                        f"Template {self._profile.template_vmid} is visible"
+                        if visible
+                        else f"Template {self._profile.template_vmid} is not visible"
+                    ),
+                )
+
+            if environment is None:
+                raise ValueError(f"Provider check {check} requires an environment")
+            if environment.vmid is None:
+                return ProviderCheck(check, False, "Environment has no VM ID")
+
+            if check == "vm-running":
+                location = self.locate_vm(environment.vmid)
+                expected_name_matches = location is not None and (
+                    not environment.expected_vm_name
+                    or location.name == environment.expected_vm_name
+                )
+                running = (
+                    location is not None
+                    and expected_name_matches
+                    and location.status == "running"
+                )
+                return ProviderCheck(
+                    check,
+                    running,
+                    (
+                        f"VM {environment.vmid} is running"
+                        if running
+                        else f"VM {environment.vmid} is not running"
+                    ),
+                )
+
+            if environment.node is None:
+                return ProviderCheck(check, False, "Environment has no VM node")
+            self._request(
+                "POST",
+                f"/nodes/{environment.node}/qemu/{environment.vmid}/agent/ping",
+            )
+            return ProviderCheck(
+                check,
+                True,
+                f"Guest agent for VM {environment.vmid} is ready",
+            )
+        except ProviderError as error:
+            return ProviderCheck(check, False, str(error))
 
     def allocate_vmid(self) -> int:
         value = self._request("GET", "/cluster/nextid")

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from learnlab.state import EnvironmentRecord
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,10 @@ class Provider(Protocol):
     def profile_fingerprint(self) -> str: ...
 
     def health_check(self) -> ProviderHealth: ...
+
+    def run_check(
+        self, check: str, environment: EnvironmentRecord | None
+    ) -> ProviderCheck: ...
 
     def allocate_vmid(self) -> int: ...
 
