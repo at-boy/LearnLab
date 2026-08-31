@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -47,7 +48,13 @@ class Provider(Protocol):
 
     def clone(self, vmid: int, name: str) -> str: ...
 
-    def wait_for_task(self, node: str, upid: str, timeout: float) -> None: ...
+    def wait_for_task(
+        self,
+        node: str,
+        upid: str,
+        timeout: float,
+        heartbeat: Callable[[int], None] | None = None,
+    ) -> None: ...
 
     def locate_vm(self, vmid: int) -> VmLocation | None: ...
 
@@ -55,6 +62,12 @@ class Provider(Protocol):
 
     def stop(self, vmid: int, node: str) -> str: ...
 
-    def wait_for_ipv4(self, vmid: int, node: str, timeout: float) -> str: ...
+    def wait_for_ipv4(
+        self,
+        vmid: int,
+        node: str,
+        timeout: float,
+        heartbeat: Callable[[int], None] | None = None,
+    ) -> str: ...
 
     def delete(self, vmid: int, node: str) -> str: ...

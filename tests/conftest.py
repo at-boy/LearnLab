@@ -41,7 +41,13 @@ class RecordingProvider:
         self.clone_names.append(name)
         return "clone"
 
-    def wait_for_task(self, node: str, upid: str, timeout: float) -> None:
+    def wait_for_task(
+        self,
+        node: str,
+        upid: str,
+        timeout: float,
+        heartbeat: Callable[[int], None] | None = None,
+    ) -> None:
         self._record(f"wait:{upid}")
 
     def locate_vm(self, vmid: int) -> VmLocation | None:
@@ -60,7 +66,13 @@ class RecordingProvider:
         self._record(f"stop:{vmid}")
         return "stop"
 
-    def wait_for_ipv4(self, vmid: int, node: str, timeout: float) -> str:
+    def wait_for_ipv4(
+        self,
+        vmid: int,
+        node: str,
+        timeout: float,
+        heartbeat: Callable[[int], None] | None = None,
+    ) -> str:
         self._record(f"wait_for_ipv4:{vmid}")
         return "192.0.2.10"
 

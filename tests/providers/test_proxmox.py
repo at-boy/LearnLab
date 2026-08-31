@@ -251,6 +251,26 @@ def test_wait_for_task_requires_stopped_and_ok(
     )
 
 
+def test_wait_for_task_heartbeats_running_polls_at_existing_interval(
+    fake_server: FakeProxmoxServer, profile: ProxmoxProfile
+) -> None:
+    fake_server.queue(200, {"data": {"status": "running"}})
+    fake_server.queue(200, {"data": {"status": "running"}})
+    fake_server.queue(200, {"data": {"status": "stopped", "exitstatus": "OK"}})
+    provider, clock = provider_with_clock(fake_server, profile)
+    heartbeats: list[tuple[int, float]] = []
+
+    provider.wait_for_task(
+        "pve02",
+        "UPID:pve02:clone:",
+        timeout=10,
+        heartbeat=lambda attempt: heartbeats.append((attempt, clock.value)),
+    )
+
+    assert heartbeats == [(1, 0.0), (2, 2.0)]
+    assert clock.value == 4.0
+
+
 def test_wait_for_task_rejects_non_ok_exit(
     fake_server: FakeProxmoxServer, provider: ProxmoxProvider
 ) -> None:
@@ -355,6 +375,44 @@ def test_wait_for_ipv4_ignores_loopback_and_invalid_addresses(
         "POST",
         "GET",
     ]
+
+
+def test_wait_for_ipv4_heartbeats_guest_and_address_retries(
+    fake_server: FakeProxmoxServer, profile: ProxmoxProfile
+) -> None:
+    fake_server.queue(500, {"errors": "guest agent unavailable"})
+    fake_server.queue(500, {"errors": "guest agent unavailable"})
+    fake_server.queue(200, {"data": {}})
+    fake_server.queue(200, {"data": {"result": []}})
+    fake_server.queue(
+        200,
+        {
+            "data": {
+                "result": [
+                    {
+                        "ip-addresses": [
+                            {"ip-address": "192.0.2.10", "ip-address-type": "ipv4"}
+                        ]
+                    }
+                ]
+            }
+        },
+    )
+    provider, clock = provider_with_clock(fake_server, profile)
+    heartbeats: list[tuple[int, float]] = []
+
+    assert (
+        provider.wait_for_ipv4(
+            102,
+            "pve02",
+            timeout=10,
+            heartbeat=lambda attempt: heartbeats.append((attempt, clock.value)),
+        )
+        == "192.0.2.10"
+    )
+
+    assert heartbeats == [(1, 0.0), (2, 2.0), (3, 4.0)]
+    assert clock.value == 6.0
 
 
 def test_wait_for_ipv4_rejects_agent_readiness_after_a_short_deadline(

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import re
 import shutil
+import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -16,6 +17,12 @@ from learnlab.errors import (
     ProviderError,
     ProviderMutationUncertain,
     redact,
+)
+from learnlab.progress import (
+    NullProgressObserver,
+    ProgressEvent,
+    ProgressKind,
+    ProgressObserver,
 )
 from learnlab.providers.base import Provider
 from learnlab.ssh import create_known_hosts, render_ssh_command
@@ -29,6 +36,7 @@ from learnlab.state import (
 _TASK_TIMEOUT_SECONDS = 300.0
 _GUEST_TIMEOUT_SECONDS = 300.0
 _ERROR_SUMMARY_LIMIT = 500
+_NULL_PROGRESS_OBSERVER = NullProgressObserver()
 
 
 class LifecycleError(LearnLabError):
@@ -89,14 +97,25 @@ class LifecycleService:
         state_root: Path,
         *,
         secrets: set[str] | None = None,
+        progress: ProgressObserver = _NULL_PROGRESS_OBSERVER,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._store = store
         self._provider = provider
         self._state_root = state_root
         self._secrets = secrets or set()
+        self._progress = progress
+        self._clock = clock
 
     def start(self, request: StartRequest) -> StartedEnvironment:
         """Create and start one disposable environment for the selected lesson."""
+        started_at = self._clock()
+        self._emit_progress(
+            ProgressKind.ENVIRONMENT_REQUESTED,
+            "Creating lesson environment",
+            started_at,
+            elapsed_seconds=0,
+        )
         if (
             self._store.active_environment(
                 request.course.collection_id, request.course.id
@@ -130,10 +149,21 @@ class LifecycleService:
         )
 
         try:
+            self._emit_progress(
+                ProgressKind.ALLOCATING_VMID,
+                "Allocating a virtual machine ID",
+                started_at,
+            )
             vmid = provider.allocate_vmid()
             expected_vm_name = _vm_name(request.course.id, vmid)
             self._store.record_clone_intent(environment_id, vmid, expected_vm_name)
             try:
+                self._emit_progress(
+                    ProgressKind.CLONE_REQUESTED,
+                    "Requesting environment clone",
+                    started_at,
+                    vmid=vmid,
+                )
                 clone_upid = provider.clone(vmid, expected_vm_name)
             except ProviderMutationUncertain:
                 raise
@@ -149,8 +179,29 @@ class LifecycleService:
                 EnvironmentPhase.CLONING,
                 upid=clone_upid,
             )
+            self._emit_progress(
+                ProgressKind.CLONE_WAITING,
+                "Waiting for environment clone",
+                started_at,
+                vmid=vmid,
+            )
             provider.wait_for_task(
-                request.profile.node, clone_upid, _TASK_TIMEOUT_SECONDS
+                request.profile.node,
+                clone_upid,
+                _TASK_TIMEOUT_SECONDS,
+                heartbeat=lambda attempt: self._emit_progress(
+                    ProgressKind.CLONE_WAITING,
+                    "Waiting for environment clone",
+                    started_at,
+                    vmid=vmid,
+                    attempt=attempt,
+                ),
+            )
+            self._emit_progress(
+                ProgressKind.CLONE_COMPLETE,
+                "Environment clone completed",
+                started_at,
+                vmid=vmid,
             )
             location = provider.locate_vm(vmid)
             if location is None:
@@ -166,20 +217,70 @@ class LifecycleService:
                 clone_uncertain=False,
             )
 
+            self._emit_progress(
+                ProgressKind.START_REQUESTED,
+                "Requesting environment start",
+                started_at,
+                vmid=vmid,
+            )
             start_upid = provider.start(vmid, location.node)
             self._store.transition_environment(
                 environment_id, EnvironmentPhase.STARTING, upid=start_upid
             )
-            provider.wait_for_task(location.node, start_upid, _TASK_TIMEOUT_SECONDS)
+            self._emit_progress(
+                ProgressKind.START_WAITING,
+                "Waiting for environment start",
+                started_at,
+                vmid=vmid,
+            )
+            provider.wait_for_task(
+                location.node,
+                start_upid,
+                _TASK_TIMEOUT_SECONDS,
+                heartbeat=lambda attempt: self._emit_progress(
+                    ProgressKind.START_WAITING,
+                    "Waiting for environment start",
+                    started_at,
+                    vmid=vmid,
+                    attempt=attempt,
+                ),
+            )
             self._store.transition_environment(environment_id, EnvironmentPhase.RUNNING)
+            self._emit_progress(
+                ProgressKind.GUEST_AGENT_WAITING,
+                "Waiting for guest agent",
+                started_at,
+                vmid=vmid,
+            )
             ip_address = provider.wait_for_ipv4(
-                vmid, location.node, _GUEST_TIMEOUT_SECONDS
+                vmid,
+                location.node,
+                _GUEST_TIMEOUT_SECONDS,
+                heartbeat=lambda attempt: self._emit_progress(
+                    ProgressKind.GUEST_AGENT_WAITING,
+                    "Waiting for guest agent",
+                    started_at,
+                    vmid=vmid,
+                    attempt=attempt,
+                ),
+            )
+            self._emit_progress(
+                ProgressKind.ADDRESS_DISCOVERY,
+                "Discovering environment address",
+                started_at,
+                vmid=vmid,
             )
             self._store.transition_environment(
                 environment_id, EnvironmentPhase.RUNNING, ip_address=ip_address
             )
 
             known_hosts = create_known_hosts(self._state_root, environment_id)
+            self._emit_progress(
+                ProgressKind.ENVIRONMENT_READY,
+                "Environment is ready",
+                started_at,
+                vmid=vmid,
+            )
             return StartedEnvironment(
                 environment_id=environment_id,
                 ip_address=ip_address,
@@ -303,6 +404,33 @@ class LifecycleService:
         if isinstance(provider, Exception):
             raise provider
         return provider
+
+    def _emit_progress(
+        self,
+        kind: ProgressKind,
+        message: str,
+        started_at: float,
+        *,
+        vmid: int | None = None,
+        attempt: int | None = None,
+        elapsed_seconds: float | None = None,
+    ) -> None:
+        elapsed = (
+            max(0.0, self._clock() - started_at)
+            if elapsed_seconds is None
+            else elapsed_seconds
+        )
+        event = ProgressEvent(
+            kind=kind,
+            message=message,
+            elapsed_seconds=elapsed,
+            vmid=vmid,
+            attempt=attempt,
+        )
+        try:
+            self._progress.on_progress(event)
+        except Exception:
+            return
 
 
 def _vm_name(course_id: str, vmid: int) -> str:

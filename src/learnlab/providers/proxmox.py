@@ -208,9 +208,16 @@ class ProxmoxProvider:
                 f"Proxmox clone outcome is uncertain: {error}"
             ) from None
 
-    def wait_for_task(self, node: str, upid: str, timeout: float) -> None:
+    def wait_for_task(
+        self,
+        node: str,
+        upid: str,
+        timeout: float,
+        heartbeat: Callable[[int], None] | None = None,
+    ) -> None:
         deadline = self._clock() + timeout
         path = f"/nodes/{node}/tasks/{quote(upid, safe='')}/status"
+        attempt = 0
         while True:
             self._raise_if_deadline_reached(
                 deadline, f"Timed out waiting for Proxmox task {upid}"
@@ -230,6 +237,8 @@ class ProxmoxProvider:
                 raise ProviderTaskFailed(
                     f"Proxmox task {upid} stopped with exit status {exitstatus!s}"
                 )
+            attempt += 1
+            self._notify_heartbeat(heartbeat, attempt)
             self._sleep_until_deadline(
                 deadline, f"Timed out waiting for Proxmox task {upid}"
             )
@@ -264,12 +273,19 @@ class ProxmoxProvider:
             self._request("POST", f"/nodes/{node}/qemu/{vmid}/status/stop"), "stop"
         )
 
-    def wait_for_ipv4(self, vmid: int, node: str, timeout: float) -> str:
+    def wait_for_ipv4(
+        self,
+        vmid: int,
+        node: str,
+        timeout: float,
+        heartbeat: Callable[[int], None] | None = None,
+    ) -> str:
         deadline = self._clock() + timeout
         ping_path = f"/nodes/{node}/qemu/{vmid}/agent/ping"
         interfaces_path = f"/nodes/{node}/qemu/{vmid}/agent/network-get-interfaces"
         readiness_timeout = f"Timed out waiting for guest agent readiness for VM {vmid}"
         address_timeout = f"Timed out waiting for guest IPv4 address for VM {vmid}"
+        attempt = 0
         while True:
             self._raise_if_deadline_reached(deadline, readiness_timeout)
             try:
@@ -277,6 +293,8 @@ class ProxmoxProvider:
                 self._raise_if_deadline_reached(deadline, readiness_timeout)
                 break
             except ProviderOperationError:
+                attempt += 1
+                self._notify_heartbeat(heartbeat, attempt)
                 self._sleep_until_deadline(deadline, readiness_timeout)
         while True:
             self._raise_if_deadline_reached(deadline, address_timeout)
@@ -284,11 +302,15 @@ class ProxmoxProvider:
                 interfaces = self._request("GET", interfaces_path)
                 self._raise_if_deadline_reached(deadline, address_timeout)
             except ProviderOperationError:
+                attempt += 1
+                self._notify_heartbeat(heartbeat, attempt)
                 self._sleep_until_deadline(deadline, address_timeout)
                 continue
             address = self._first_ipv4(interfaces)
             if address is not None:
                 return address
+            attempt += 1
+            self._notify_heartbeat(heartbeat, attempt)
             self._sleep_until_deadline(deadline, address_timeout)
 
     def delete(self, vmid: int, node: str) -> str:
@@ -369,6 +391,17 @@ class ProxmoxProvider:
         if remaining <= 0:
             raise ProviderTimeoutError(timeout_message)
         self._sleep(min(2.0, remaining))
+
+    @staticmethod
+    def _notify_heartbeat(
+        heartbeat: Callable[[int], None] | None, attempt: int
+    ) -> None:
+        if heartbeat is None:
+            return
+        try:
+            heartbeat(attempt)
+        except Exception:
+            return
 
     def _raise_if_deadline_reached(self, deadline: float, timeout_message: str) -> None:
         if self._clock() >= deadline:

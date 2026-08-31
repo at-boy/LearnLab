@@ -18,6 +18,7 @@ from learnlab.errors import (
     ProviderTimeoutError,
 )
 from learnlab.lifecycle import LifecycleError, LifecycleService, StartRequest
+from learnlab.progress import ProgressEvent
 from learnlab.providers.base import VmLocation
 from learnlab.ssh import create_known_hosts, render_ssh_command
 from learnlab.state import (
@@ -73,9 +74,15 @@ class StateObservingProvider(RecordingProvider):
         self._snapshot("clone")
         return super().clone(vmid, name)
 
-    def wait_for_task(self, node: str, upid: str, timeout: float) -> None:
+    def wait_for_task(
+        self,
+        node: str,
+        upid: str,
+        timeout: float,
+        heartbeat: Callable[[int], None] | None = None,
+    ) -> None:
         self._snapshot(f"wait:{upid}")
-        super().wait_for_task(node, upid, timeout)
+        super().wait_for_task(node, upid, timeout, heartbeat)
 
     def locate_vm(self, vmid: int) -> VmLocation | None:
         self._snapshot("locate")
@@ -85,9 +92,32 @@ class StateObservingProvider(RecordingProvider):
         self._snapshot("start")
         return super().start(vmid, node)
 
-    def wait_for_ipv4(self, vmid: int, node: str, timeout: float) -> str:
+    def wait_for_ipv4(
+        self,
+        vmid: int,
+        node: str,
+        timeout: float,
+        heartbeat: Callable[[int], None] | None = None,
+    ) -> str:
         self._snapshot("wait_for_ipv4")
-        return super().wait_for_ipv4(vmid, node, timeout)
+        return super().wait_for_ipv4(vmid, node, timeout, heartbeat)
+
+
+class RecordingProgress:
+    def __init__(self) -> None:
+        self.events: list[ProgressEvent] = []
+
+    @property
+    def kinds(self) -> list[str]:
+        return [event.kind.value for event in self.events]
+
+    def on_progress(self, event: ProgressEvent) -> None:
+        self.events.append(event)
+
+
+class FailingProgress:
+    def on_progress(self, event: ProgressEvent) -> None:
+        raise RuntimeError("observer-private-value failed")
 
 
 class DestroyRecordingProvider(RecordingProvider):
@@ -160,6 +190,50 @@ def start_request(profile: ProxmoxProfile) -> StartRequest:
         profile=profile,
         provider_type="proxmox",
     )
+
+
+def test_start_emits_immediate_ordered_safe_progress(
+    store: StateStore,
+    recording_provider: RecordingProvider,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+) -> None:
+    recorder = RecordingProgress()
+
+    LifecycleService(store, recording_provider, tmp_path, progress=recorder).start(
+        start_request(profile_fixture(node="pve02"))
+    )
+
+    assert recorder.kinds == [
+        "environment-requested",
+        "allocating-vmid",
+        "clone-requested",
+        "clone-waiting",
+        "clone-complete",
+        "start-requested",
+        "start-waiting",
+        "guest-agent-waiting",
+        "address-discovery",
+        "environment-ready",
+    ]
+    assert recorder.events[0].elapsed_seconds == 0
+    assert all("secret" not in event.message.lower() for event in recorder.events)
+    assert recorder.events[2].vmid == 102
+    assert recorder.events[-1].vmid == 102
+
+
+def test_progress_observer_failure_does_not_change_start_outcome(
+    store: StateStore,
+    recording_provider: RecordingProvider,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+) -> None:
+    started = LifecycleService(
+        store, recording_provider, tmp_path, progress=FailingProgress()
+    ).start(start_request(profile_fixture(node="pve02")))
+
+    assert started.ip_address == "192.0.2.10"
+    assert recording_provider.operations[-1] == "wait_for_ipv4:102"
 
 
 def test_start_persists_remote_boundaries_in_order(
