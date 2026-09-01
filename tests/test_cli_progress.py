@@ -82,6 +82,34 @@ def test_tty_progress_updates_one_spinner_line_with_event_elapsed_time() -> None
     )
 
 
+def test_tty_progress_clears_remnants_when_next_status_is_shorter() -> None:
+    output = StringIO()
+    times = iter((0.0, 0.1))
+    renderer = TerminalProgressRenderer(
+        output,
+        is_terminal=True,
+        clock=lambda: next(times),
+    )
+
+    renderer.on_progress(
+        progress_event(
+            ProgressKind.CLONE_WAITING,
+            "1234567890",
+            0,
+        )
+    )
+    renderer.on_progress(
+        progress_event(
+            ProgressKind.START_WAITING,
+            "x",
+            1,
+        )
+    )
+    renderer.close()
+
+    assert output.getvalue() == ("\r⠋ 1234567890 [0.0s]\r⠙ x [1.0s]         \n")
+
+
 def test_progress_renderer_closes_once_on_success() -> None:
     output = StringIO()
     renderer = TerminalProgressRenderer(

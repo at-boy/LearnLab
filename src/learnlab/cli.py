@@ -82,6 +82,7 @@ class TerminalProgressRenderer(ProgressObserver):
         )
         self._clock = clock
         self._active_line = False
+        self._rendered_width = 0
         self._closed = False
 
     def __enter__(self) -> TerminalProgressRenderer:
@@ -102,23 +103,31 @@ class TerminalProgressRenderer(ProgressObserver):
         if self._is_terminal:
             frame_index = int(self._clock() * 10) % len(self._SPINNER_FRAMES)
             frame = self._SPINNER_FRAMES[frame_index]
-            self._output.write(
-                f"\r{frame} {event.message}{attempt} [{event.elapsed_seconds:.1f}s]"
+            rendered = (
+                f"{frame} {event.message}{attempt} [{event.elapsed_seconds:.1f}s]"
             )
+            padding = " " * max(0, self._rendered_width - len(rendered))
+            self._output.write(f"\r{rendered}{padding}")
             self._active_line = True
+            self._rendered_width = len(rendered)
         else:
             self._output.write(f"{event.message}{attempt}\n")
         self._output.flush()
         if event.kind is ProgressKind.ENVIRONMENT_READY:
-            self.close()
+            self._finish_line()
 
     def close(self) -> None:
         if self._closed:
             return
+        self._finish_line()
+        self._closed = True
+
+    def _finish_line(self) -> None:
         if self._is_terminal and self._active_line:
             self._output.write("\n")
             self._output.flush()
-        self._closed = True
+        self._active_line = False
+        self._rendered_width = 0
 
 
 class TyperSessionPrompt(SessionPrompt):

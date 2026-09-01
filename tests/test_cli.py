@@ -273,6 +273,47 @@ class BlockingSessionLifecycle(SessionLifecycle):
         return super().ensure_environment(request, policy, replace_confirmed)
 
 
+class ContinuingBlockingSessionLifecycle(SessionLifecycle):
+    def __init__(
+        self,
+        progress,
+        second_entered: threading.Event,
+        release_second: threading.Event,
+    ) -> None:
+        super().__init__(EnvironmentResolution("created"))
+        self.progress = progress
+        self.second_entered = second_entered
+        self.release_second = release_second
+
+    def ensure_environment(
+        self,
+        request: StartRequest,
+        policy: EnvironmentPolicy,
+        replace_confirmed: bool = False,
+    ) -> EnvironmentResolution:
+        self.calls.append((request.lesson.id, policy.scope, replace_confirmed))
+        self.progress.on_progress(
+            ProgressEvent(
+                ProgressKind.ENVIRONMENT_REQUESTED,
+                "Creating lesson environment",
+                0,
+            )
+        )
+        if len(self.calls) == 1:
+            self.progress.on_progress(
+                ProgressEvent(
+                    ProgressKind.ENVIRONMENT_READY,
+                    "Environment is ready",
+                    1,
+                )
+            )
+            return self.resolution
+        self.second_entered.set()
+        if not self.release_second.wait(timeout=5):
+            raise AssertionError("test did not release second lesson lifecycle")
+        return self.resolution
+
+
 @dataclass
 class AppHarness:
     store: StateStore
@@ -868,6 +909,67 @@ def test_start_emits_life_sign_before_blocking_provisioning_returns(
     worker.join(timeout=3)
     assert not worker.is_alive()
     assert result_holder[0].exit_code == 0
+
+
+def test_continue_emits_life_sign_while_second_lesson_provisioning_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+) -> None:
+    from learnlab import cli
+
+    second_entered = threading.Event()
+    release_second = threading.Event()
+    output = StringIO()
+    result_holder: list[object] = []
+    lifecycle_holder: list[ContinuingBlockingSessionLifecycle] = []
+    course = session_course(
+        EnvironmentScope.LESSON,
+        lessons=(
+            session_lesson("first", "First Lesson"),
+            session_lesson("second", "Second Lesson"),
+        ),
+    )
+
+    def lifecycle_factory(*args, progress, **kwargs):
+        lifecycle = ContinuingBlockingSessionLifecycle(
+            progress,
+            second_entered,
+            release_second,
+        )
+        lifecycle_holder.append(lifecycle)
+        return lifecycle
+
+    install_session_cli(monkeypatch, tmp_xdg, course, lifecycle_factory)
+    monkeypatch.setattr(
+        cli,
+        "progress_renderer_factory",
+        lambda: cli.TerminalProgressRenderer(output, is_terminal=False),
+    )
+
+    worker = threading.Thread(
+        target=lambda: result_holder.append(
+            CliRunner().invoke(
+                cli.app,
+                ["start", "proxmox/proxmox-admin"],
+                input="1\n\ny\nc\n\ny\nq\n",
+            )
+        )
+    )
+    worker.start()
+    assert second_entered.wait(timeout=2), result_holder
+
+    try:
+        assert output.getvalue().count("Creating lesson environment") == 2
+        assert worker.is_alive()
+    finally:
+        release_second.set()
+        worker.join(timeout=3)
+    assert not worker.is_alive()
+    assert result_holder[0].exit_code == 0
+    assert lifecycle_holder[0].calls == [
+        ("first", EnvironmentScope.LESSON, False),
+        ("second", EnvironmentScope.LESSON, False),
+    ]
 
 
 def test_start_resolves_secret_once_and_shares_one_redaction_set(
