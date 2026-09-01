@@ -143,8 +143,7 @@ def test_lesson_environment_override_wins_over_course(tmp_curriculum):
     loaded = tmp_curriculum.load()
     assert loaded.environment.scope is EnvironmentScope.COURSE
     assert (
-        loaded.effective_environment(loaded.lessons[0]).scope
-        is EnvironmentScope.NONE
+        loaded.effective_environment(loaded.lessons[0]).scope is EnvironmentScope.NONE
     )
 
 
@@ -305,9 +304,13 @@ def test_remote_command_timeout_must_be_between_one_and_300_seconds(
 def test_remote_command_timeout_defaults_to_30_seconds(
     curriculum_builder: CurriculumBuilder,
 ) -> None:
-    verification = curriculum_builder.verifications([REMOTE_A]).load().lessons[0].steps[
-        0
-    ].verifications[0]
+    verification = (
+        curriculum_builder.verifications([REMOTE_A])
+        .load()
+        .lessons[0]
+        .steps[0]
+        .verifications[0]
+    )
 
     assert verification.timeout_seconds == 30
 

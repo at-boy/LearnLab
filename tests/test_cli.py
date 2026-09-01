@@ -1196,9 +1196,12 @@ def test_progress_complete_requires_administrative_override_confirmation(
     assert "Normal learners should complete lessons through start or resume" in (
         confirmed.stdout
     )
-    assert app_harness.store.lesson_completion_source(
-        ("proxmox", "proxmox-admin", "api-access")
-    ) is CompletionSource.MANUAL_OVERRIDE
+    assert (
+        app_harness.store.lesson_completion_source(
+            ("proxmox", "proxmox-admin", "api-access")
+        )
+        is CompletionSource.MANUAL_OVERRIDE
+    )
 
 
 def test_progress_complete_yes_advances_later_start_default(

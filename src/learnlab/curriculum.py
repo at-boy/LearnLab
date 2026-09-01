@@ -340,9 +340,7 @@ def _optional_environment(
 
 
 def _parse_environment(value: object, path: Traversable) -> EnvironmentPolicy:
-    if not isinstance(value, Mapping) or not all(
-        isinstance(key, str) for key in value
-    ):
+    if not isinstance(value, Mapping) or not all(isinstance(key, str) for key in value):
         raise CurriculumError(f"{path}: environment must be a mapping")
     keys = {"scope"}
     if "provider_capability" in value:
