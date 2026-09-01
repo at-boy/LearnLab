@@ -21,9 +21,11 @@ from learnlab.curriculum import (
     VerificationType,
 )
 from learnlab.lifecycle import (
+    PROVISIONING_INTERRUPTED_GUIDANCE,
     DestroySummary,
     EnvironmentResolution,
     LifecycleError,
+    ProvisioningInterrupted,
     StartedEnvironment,
     StartRequest,
 )
@@ -272,6 +274,16 @@ class BlockingSessionLifecycle(SessionLifecycle):
         if not self.release.wait(timeout=5):
             raise AssertionError("test did not release lifecycle")
         return super().ensure_environment(request, policy, replace_confirmed)
+
+
+class ProvisioningInterruptedLifecycle(SessionLifecycle):
+    def ensure_environment(
+        self,
+        request: StartRequest,
+        policy: EnvironmentPolicy,
+        replace_confirmed: bool = False,
+    ) -> EnvironmentResolution:
+        raise ProvisioningInterrupted(PROVISIONING_INTERRUPTED_GUIDANCE)
 
 
 class ContinuingBlockingSessionLifecycle(SessionLifecycle):
@@ -713,6 +725,105 @@ def test_none_scoped_start_skips_provider_config_and_runs_interactive_session(
     assert store.completed_lessons("proxmox", "proxmox-admin") == {"basics"}
 
 
+def test_none_to_provider_transition_resolves_configuration_only_when_entered(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+) -> None:
+    from learnlab import cli
+
+    course = session_course(
+        EnvironmentScope.COURSE,
+        lessons=(
+            session_lesson(
+                "first",
+                "Provider-Free First",
+                environment=EnvironmentPolicy(EnvironmentScope.NONE),
+            ),
+            session_lesson("second", "Provider Second"),
+        ),
+    )
+    lifecycle = SessionLifecycle()
+    store, providers = install_session_cli(
+        monkeypatch,
+        tmp_xdg,
+        course,
+        lambda *args, **kwargs: lifecycle,
+    )
+    real_load_settings = cli.load_settings
+    settings_snapshots: list[set[str]] = []
+
+    def load_after_none_lesson():
+        completed = store.completed_lessons("proxmox", "proxmox-admin")
+        settings_snapshots.append(completed)
+        assert completed == {"first"}
+        return real_load_settings()
+
+    monkeypatch.setattr(cli, "load_settings", load_after_none_lesson)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["start", "proxmox/proxmox-admin"],
+        input="1\n\ny\nc\n\ny\nq\n",
+    )
+
+    assert result.exit_code == 0
+    assert settings_snapshots == [{"first"}]
+    assert providers == [("home-proxmox", "secret")]
+    assert lifecycle.calls == [
+        ("first", EnvironmentScope.NONE, False),
+        ("second", EnvironmentScope.COURSE, False),
+    ]
+    assert store.completed_lessons("proxmox", "proxmox-admin") == {
+        "first",
+        "second",
+    }
+
+
+def test_incompatible_provider_capability_fails_before_config_or_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+) -> None:
+    from learnlab import cli
+
+    course = Course(
+        collection_id="proxmox",
+        id="proxmox-admin",
+        title="Unsupported Provider Course",
+        lessons=(session_lesson(),),
+        environment=EnvironmentPolicy(EnvironmentScope.COURSE, "other.vm"),
+    )
+    lifecycle = SessionLifecycle()
+    store, providers = install_session_cli(
+        monkeypatch,
+        tmp_xdg,
+        course,
+        lambda *args, **kwargs: lifecycle,
+    )
+    monkeypatch.setattr(
+        cli,
+        "load_settings",
+        lambda: pytest.fail("incompatible capability must fail before config"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "resolve_token_secret",
+        lambda profile: pytest.fail("incompatible capability must not read a secret"),
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["start", "proxmox/proxmox-admin"],
+        input="\n",
+    )
+
+    assert result.exit_code == 3
+    assert "Unsupported provider capability: other.vm" in result.stdout
+    assert providers == []
+    assert lifecycle.calls == []
+    assert store.list_attempts() == []
+    assert store.list_environments() == []
+
+
 @pytest.mark.parametrize("command", ["start", "resume"])
 def test_start_and_resume_continue_at_first_incomplete_verification(
     monkeypatch: pytest.MonkeyPatch,
@@ -912,6 +1023,33 @@ def test_start_emits_life_sign_before_blocking_provisioning_returns(
     assert result_holder[0].exit_code == 0
 
 
+def test_provisioning_interrupt_prints_destroy_guidance_without_resume_claim(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+) -> None:
+    from learnlab import cli
+
+    store, _ = install_session_cli(
+        monkeypatch,
+        tmp_xdg,
+        session_course(EnvironmentScope.COURSE),
+        lambda *args, **kwargs: ProvisioningInterruptedLifecycle(),
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["start", "proxmox/proxmox-admin"],
+        input="\n",
+    )
+
+    assert result.exit_code == 130
+    assert PROVISIONING_INTERRUPTED_GUIDANCE in result.stdout
+    assert "Progress saved" not in result.stdout
+    assert "learnlab resume" not in result.stdout
+    assert "secret" not in result.stdout
+    assert store.lesson_statuses("proxmox", "proxmox-admin") == {}
+
+
 def test_continue_emits_life_sign_while_second_lesson_provisioning_blocks(
     monkeypatch: pytest.MonkeyPatch,
     tmp_xdg: Path,
@@ -993,8 +1131,11 @@ def test_start_resolves_secret_once_and_shares_one_redaction_set(
     class RecordingSession:
         def __init__(self, **kwargs) -> None:
             redaction_sets.append(kwargs["secrets"])
+            self.course = kwargs["course"]
+            self.dependency_resolver = kwargs["dependency_resolver"]
 
         def run(self, **kwargs) -> SessionOutcome:
+            self.dependency_resolver.resolve(self.course.environment)
             return SessionOutcome(SessionAction.EXIT, "basics")
 
     def provider_factory(settings, profile_name: str, secret=None):

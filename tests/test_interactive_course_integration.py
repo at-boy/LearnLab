@@ -34,6 +34,8 @@ from learnlab.state import (
 
 COURSE_PATH = "fake/full-course"
 SECRET = "integration-token-secret"  # noqa: S105 - deliberate redaction sentinel
+HOST_KEY = "192.0.2.44 ssh-ed25519 aG9zdC1wdWJsaWMta2V5"
+HOST_FINGERPRINT = "SHA256:hXBw+k0I59jZzDV4ZC5NNDnXbG6HjQJobltlAdMlBms"
 CONFIG = """
 default_provider = "fake-provider"
 
@@ -173,8 +175,20 @@ class FakeSshRunner:
         self.results[command] = deque(results)
 
     def __call__(self, argv: list[str], **kwargs: object):
+        if argv[0] == "ssh-keyscan":
+            target = argv[-1]
+            self.operations.append(f"ssh-keyscan:{target}")
+            return subprocess.CompletedProcess(argv, 0, f"{HOST_KEY}\n".encode(), b"")
         command = argv[-1]
         self.operations.append(f"ssh:{command}")
+        known_hosts_option = next(
+            value for value in argv if value.startswith("UserKnownHostsFile=")
+        )
+        known_hosts = Path(known_hosts_option.partition("=")[2])
+        if known_hosts.read_text(encoding="utf-8") != f"{HOST_KEY}\n":
+            return subprocess.CompletedProcess(
+                argv, 255, b"", b"strict host-key verification failed"
+            )
         return_code, stdout, stderr = self.results[command].popleft()
         return subprocess.CompletedProcess(argv, return_code, stdout, stderr)
 
@@ -376,7 +390,7 @@ def test_public_course_workflow_resumes_reuses_and_preserves_validated_state(
             CliRunner().invoke(
                 cli.app,
                 ["start", COURSE_PATH],
-                input="\n\nr\n\n\nr\nq\n",
+                input="\n\ny\nr\n\n\nr\nq\n",
             )
         )
     )
@@ -396,6 +410,11 @@ def test_public_course_workflow_resumes_reuses_and_preserves_validated_state(
     assert "FAIL: System is not ready yet." in start_result.stdout
     assert "FAIL: agent missing: [REDACTED]" in start_result.stdout
     assert "Verification 4 of 4: vm-visible" in start_result.stdout
+    assert "SSH target: student@192.0.2.44" in start_result.stdout
+    assert f"Presented host key: ssh-ed25519 {HOST_FINGERPRINT}" in start_result.stdout
+    assert "Strict connection command: ssh -i /keys/learnlab-integration" in (
+        start_result.stdout
+    )
     assert "Progress saved." in start_result.stdout
 
     db_path = resolve_default_state_db(state_dir())
@@ -413,6 +432,7 @@ def test_public_course_workflow_resumes_reuses_and_preserves_validated_state(
         / "known_hosts"
     )
     assert stat.S_IMODE(known_hosts.stat().st_mode) == 0o600
+    assert known_hosts.read_text(encoding="utf-8") == f"{HOST_KEY}\n"
     cursor = store.session_cursor(("fake", "full-course"))
     assert cursor is not None
     assert (cursor.lesson_id, cursor.step_id, cursor.verification_id) == (
@@ -460,6 +480,8 @@ def test_public_course_workflow_resumes_reuses_and_preserves_validated_state(
         "start:104",
         "wait:start-104",
         "address:104",
+        "ssh-keyscan:192.0.2.44",
+        "ssh-keyscan:192.0.2.44",
         "ssh:check-system",
         "ssh:check-system",
         "ssh:check-service",

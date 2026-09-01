@@ -15,8 +15,20 @@ from learnlab.curriculum import (
     VerificationType,
 )
 from learnlab.errors import ProviderError
-from learnlab.lifecycle import EnvironmentResolution, LifecycleService, StartRequest
-from learnlab.session import CourseSession, SessionAction, SessionOutcome
+from learnlab.lifecycle import (
+    PROVISIONING_INTERRUPTED_GUIDANCE,
+    EnvironmentResolution,
+    LifecycleService,
+    ProvisioningInterrupted,
+    StartRequest,
+)
+from learnlab.session import (
+    CourseSession,
+    SessionAction,
+    SessionDependencies,
+    SessionOutcome,
+)
+from learnlab.ssh import HostKeyPresentation
 from learnlab.state import (
     CompletionSource,
     EnvironmentPhase,
@@ -238,6 +250,19 @@ class ReusingLifecycle:
         return EnvironmentResolution(status)
 
 
+class StaticEnvironmentLifecycle:
+    def __init__(self, environment: EnvironmentRecord) -> None:
+        self.environment = environment
+
+    def ensure_environment(
+        self,
+        request: StartRequest,
+        policy: EnvironmentPolicy,
+        replace_confirmed: bool = False,
+    ) -> EnvironmentResolution:
+        return EnvironmentResolution("created", self.environment)
+
+
 class ReplacingLifecycle:
     def __init__(self) -> None:
         self.calls: list[tuple[str, bool]] = []
@@ -374,11 +399,107 @@ class LifecycleAccessForbidden:
         raise AssertionError("lifecycle accessed without a provider profile")
 
 
+class ProvisioningInterruptLifecycle:
+    def ensure_environment(
+        self,
+        request: StartRequest,
+        policy: EnvironmentPolicy,
+        replace_confirmed: bool = False,
+    ) -> EnvironmentResolution:
+        raise ProvisioningInterrupted(PROVISIONING_INTERRUPTED_GUIDANCE)
+
+
 class CancellingReplacementPrompt(NavigationPrompt):
     def confirm_environment_change(
         self, resolution: EnvironmentResolution, lesson: Lesson
     ) -> bool:
         return False
+
+
+class TrustingHostKeyPrompt(NavigationPrompt):
+    def __init__(self) -> None:
+        super().__init__({"basics": SessionAction.EXIT})
+        self.confirmations: list[str] = []
+
+    def confirm(self, prompt: str) -> bool:
+        self.confirmations.append(prompt)
+        return True
+
+
+class EnrollmentRecordingSshExecutor:
+    def __init__(self) -> None:
+        self.enrolled = False
+
+    def enroll_host_key(self, profile, environment, confirm) -> bool:
+        assert confirm(
+            HostKeyPresentation(
+                target="student@192.0.2.10",
+                identities=(("ssh-ed25519", "SHA256:confirmed-key"),),
+                connection_command=(
+                    "ssh -i learnlab-test-key -o BatchMode=yes -o "
+                    "StrictHostKeyChecking=yes student@192.0.2.10"
+                ),
+            )
+        )
+        self.enrolled = True
+        return True
+
+
+class EnrollmentAwareRegistry:
+    def __init__(self, ssh_executor: EnrollmentRecordingSshExecutor) -> None:
+        self.ssh_executor = ssh_executor
+
+    def validate(
+        self, context: ValidationContext, check: Verification
+    ) -> VerificationResult:
+        assert self.ssh_executor.enrolled is True
+        return VerificationResult(
+            passed=True,
+            summary="strict SSH passed",
+            validator_type=check.type,
+        )
+
+
+class ContextRecordingRegistry:
+    def __init__(self) -> None:
+        self.providers_by_check: dict[str, object | None] = {}
+
+    def validate(
+        self, context: ValidationContext, check: Verification
+    ) -> VerificationResult:
+        self.providers_by_check[check.id] = context.provider
+        return VerificationResult(
+            passed=True,
+            summary="passed",
+            validator_type=check.type,
+            self_attested=True,
+        )
+
+
+class PolicyDependencyResolver:
+    def __init__(
+        self,
+        none_lifecycle: NoEnvironmentLifecycle,
+        provider_lifecycle: ReusingLifecycle,
+        provider: object,
+    ) -> None:
+        self.none_lifecycle = none_lifecycle
+        self.provider_lifecycle = provider_lifecycle
+        self.provider = provider
+        self.calls: list[EnvironmentPolicy] = []
+        self.provider_resolutions = 0
+
+    def resolve(self, policy: EnvironmentPolicy) -> SessionDependencies:
+        self.calls.append(policy)
+        if policy.scope is EnvironmentScope.NONE:
+            return SessionDependencies(lifecycle=self.none_lifecycle)
+        self.provider_resolutions += 1
+        return SessionDependencies(
+            lifecycle=self.provider_lifecycle,
+            profile=FakeProfile(),
+            provider_type="fake",
+            provider=self.provider,  # type: ignore[arg-type]
+        )
 
 
 class ReviewPrompt(LegacyPrompt):
@@ -725,6 +846,150 @@ def test_continue_chooses_first_incomplete_lesson_and_reuses_course_scope(
     assert outcome.course_completed is True
 
 
+def test_remote_verification_confirms_host_identity_before_strict_validation(
+    tmp_path: Path,
+) -> None:
+    remote = Verification(
+        id="inspect-system",
+        type=VerificationType.REMOTE_COMMAND,
+        command="test -r /etc/os-release",
+        timeout_seconds=10,
+    )
+    course = Course(
+        collection_id=COURSE_PATH[0],
+        id=COURSE_PATH[1],
+        title="Operations",
+        lessons=(
+            Lesson(
+                id="basics",
+                title="Basics",
+                steps=(
+                    Step(
+                        id="inspect",
+                        title="Inspect",
+                        instructions="Inspect the system.",
+                        verifications=(remote,),
+                    ),
+                ),
+            ),
+        ),
+        environment=EnvironmentPolicy(EnvironmentScope.COURSE, "demo.vm"),
+    )
+    store = StateStore(tmp_path / "state.db")
+    store.initialize()
+    environment = EnvironmentRecord(
+        id="env-1",
+        collection_id=COURSE_PATH[0],
+        course_id=COURSE_PATH[1],
+        lesson_id="basics",
+        attempt_id=None,
+        profile_name="lab",
+        provider_type="fake",
+        phase=EnvironmentPhase.RUNNING,
+        ip_address="192.0.2.10",
+    )
+    ssh_executor = EnrollmentRecordingSshExecutor()
+    prompt = TrustingHostKeyPrompt()
+
+    outcome = CourseSession(
+        course=course,
+        store=store,
+        lifecycle=StaticEnvironmentLifecycle(environment),
+        validators=EnrollmentAwareRegistry(ssh_executor),
+        prompt=prompt,
+        profile=FakeProfile(),
+        provider_type="fake",
+        ssh_executor=ssh_executor,  # type: ignore[arg-type]
+    ).run()
+
+    assert outcome.action is SessionAction.EXIT
+    assert prompt.confirmations == [
+        "SSH target: student@192.0.2.10\n"
+        "Presented host key: ssh-ed25519 "
+        "SHA256:confirmed-key\n"
+        "Strict connection command: ssh -i learnlab-test-key -o BatchMode=yes "
+        "-o StrictHostKeyChecking=yes student@192.0.2.10\n"
+        "Trust this key for this isolated LearnLab environment?"
+    ]
+
+
+def test_lazily_resolves_dependencies_by_effective_policy_across_none_transitions(
+    tmp_path: Path,
+) -> None:
+    def scoped_lesson(
+        lesson_id: str, environment: EnvironmentPolicy | None = None
+    ) -> Lesson:
+        return Lesson(
+            id=lesson_id,
+            title=lesson_id.title(),
+            environment=environment,
+            steps=(
+                Step(
+                    id=f"{lesson_id}-step",
+                    title="Do work",
+                    instructions="Complete the work.",
+                    verifications=(verification(f"{lesson_id}-check"),),
+                ),
+            ),
+        )
+
+    course_policy = EnvironmentPolicy(EnvironmentScope.COURSE, "demo.vm")
+    none_policy = EnvironmentPolicy(EnvironmentScope.NONE)
+    course = Course(
+        collection_id=COURSE_PATH[0],
+        id=COURSE_PATH[1],
+        title="Operations",
+        lessons=(
+            scoped_lesson("first", none_policy),
+            scoped_lesson("second"),
+            scoped_lesson("third", none_policy),
+            scoped_lesson("fourth"),
+        ),
+        environment=course_policy,
+    )
+    store = StateStore(tmp_path / "state.db")
+    store.initialize()
+    none_lifecycle = NoEnvironmentLifecycle()
+    provider_lifecycle = ReusingLifecycle()
+    provider_marker = object()
+    resolver = PolicyDependencyResolver(
+        none_lifecycle, provider_lifecycle, provider_marker
+    )
+    registry = ContextRecordingRegistry()
+    prompt = NavigationPrompt(
+        {
+            "first": SessionAction.CONTINUE,
+            "second": SessionAction.CONTINUE,
+            "third": SessionAction.CONTINUE,
+            "fourth": SessionAction.EXIT,
+        }
+    )
+
+    outcome = CourseSession(
+        course=course,
+        store=store,
+        lifecycle=NoEnvironmentLifecycle(),
+        dependency_resolver=resolver,
+        validators=registry,
+        prompt=prompt,
+    ).run()
+
+    assert outcome.course_completed is True
+    assert resolver.calls == [none_policy, course_policy]
+    assert resolver.provider_resolutions == 1
+    assert none_lifecycle.calls == 2
+    assert provider_lifecycle.calls == [
+        ("second", EnvironmentScope.COURSE, False),
+        ("fourth", EnvironmentScope.COURSE, False),
+    ]
+    assert registry.providers_by_check == {
+        "first-check": None,
+        "second-check": provider_marker,
+        "third-check": None,
+        "fourth-check": provider_marker,
+    }
+
+
 def test_lesson_scope_confirms_replacement_before_resolving_next_lesson(
     tmp_path: Path,
 ) -> None:
@@ -813,6 +1078,51 @@ def test_interrupt_returns_saved_outcome_with_current_cursor(tmp_path: Path) -> 
         SessionAction.SAVE_AND_EXIT,
         "basics",
     )
+
+
+def test_provisioning_interrupt_is_distinct_from_resumable_lesson_interrupt(
+    tmp_path: Path,
+) -> None:
+    course = Course(
+        collection_id=COURSE_PATH[0],
+        id=COURSE_PATH[1],
+        title="Operations",
+        lessons=(
+            Lesson(
+                id="basics",
+                title="Basics",
+                steps=(
+                    Step(
+                        id="inspect",
+                        title="Inspect",
+                        instructions="Inspect the system.",
+                        verifications=(verification("resume-check"),),
+                    ),
+                ),
+            ),
+        ),
+        environment=EnvironmentPolicy(EnvironmentScope.COURSE, "demo.vm"),
+    )
+    store = StateStore(tmp_path / "state.db")
+    store.initialize()
+
+    outcome = CourseSession(
+        course=course,
+        store=store,
+        lifecycle=ProvisioningInterruptLifecycle(),
+        validators=ScriptedRegistry({"resume-check": [True]}),
+        prompt=NavigationPrompt({}),
+        profile=FakeProfile(),
+        provider_type="fake",
+    ).run()
+
+    assert outcome == SessionOutcome(
+        SessionAction.PROVISIONING_INTERRUPTED,
+        "basics",
+        error=PROVISIONING_INTERRUPTED_GUIDANCE,
+    )
+    assert store.lesson_statuses(*COURSE_PATH) == {}
+    assert store.session_cursor(COURSE_PATH) is None
 
 
 def test_legacy_completion_is_labeled_and_skipped_unless_reviewed(

@@ -30,6 +30,11 @@ TEXT_EVIDENCE = {
     "prompt": "What does the operating system ID identify?",
     "matches": "(?i)linux",
 }
+PROVIDER_CHECK = {
+    "id": "provider-visible",
+    "type": "provider-check",
+    "check": "vm-running",
+}
 
 
 class CurriculumBuilder:
@@ -206,6 +211,26 @@ def test_remote_command_is_rejected_for_effective_none_scope(
     curriculum_builder.scope("none").verifications([REMOTE_A])
 
     with pytest.raises(CurriculumError, match="requires an environment"):
+        curriculum_builder.load()
+
+
+def test_provider_check_is_rejected_for_course_none_scope(
+    curriculum_builder: CurriculumBuilder,
+) -> None:
+    curriculum_builder.scope("none").verifications([PROVIDER_CHECK])
+
+    with pytest.raises(CurriculumError, match="provider-check requires a provider"):
+        curriculum_builder.load()
+
+
+def test_provider_check_is_rejected_for_lesson_override_none_scope(
+    curriculum_builder: CurriculumBuilder,
+) -> None:
+    curriculum_builder.lesson_environment({"scope": "none"}).verifications(
+        [PROVIDER_CHECK]
+    )
+
+    with pytest.raises(CurriculumError, match="provider-check requires a provider"):
         curriculum_builder.load()
 
 

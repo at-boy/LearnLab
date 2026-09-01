@@ -23,7 +23,13 @@ from learnlab.errors import (
     ProviderTaskFailed,
     ProviderTimeoutError,
 )
-from learnlab.lifecycle import LifecycleError, LifecycleService, StartRequest
+from learnlab.lifecycle import (
+    PROVISIONING_INTERRUPTED_GUIDANCE,
+    LifecycleError,
+    LifecycleService,
+    ProvisioningInterrupted,
+    StartRequest,
+)
 from learnlab.progress import ProgressEvent
 from learnlab.providers.base import VmLocation
 from learnlab.ssh import create_known_hosts, render_ssh_command
@@ -216,6 +222,17 @@ class EnvironmentScopeProvider(DestroyRecordingProvider):
         return upid
 
 
+class InterruptingProvisionProvider(RecordingProvider):
+    def __init__(self, interrupt_on: str) -> None:
+        super().__init__()
+        self.interrupt_on = interrupt_on
+
+    def _record(self, operation: str) -> None:
+        self.operations.append(operation)
+        if operation == self.interrupt_on:
+            raise KeyboardInterrupt
+
+
 def start_request(profile: ProxmoxProfile) -> StartRequest:
     lesson = Lesson(
         id="api-access",
@@ -346,6 +363,94 @@ def test_environment_scope_lesson_requires_confirmation_before_replacement(
     assert resolution.replacement_required is True
     assert resolution.environment == store.get_environment("env-old")
     assert len(store.list_attempts()) == 0
+
+
+@pytest.mark.parametrize(
+    ("recorded_scope", "requested_scope"),
+    [
+        (EnvironmentScope.COURSE, EnvironmentScope.LESSON),
+        (EnvironmentScope.LESSON, EnvironmentScope.COURSE),
+    ],
+)
+def test_environment_scope_change_requires_confirmation_before_provider_access(
+    store: StateStore,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+    recorded_scope: EnvironmentScope,
+    requested_scope: EnvironmentScope,
+) -> None:
+    seed_environment(
+        store,
+        environment_id="env-old",
+        vmid=101,
+        node="pve02",
+        environment_scope=recorded_scope,
+        lesson_owner_id=(
+            "api-access" if recorded_scope is EnvironmentScope.LESSON else None
+        ),
+    )
+
+    resolution = LifecycleService(
+        store, ProviderAccessForbidden(), tmp_path
+    ).ensure_environment(
+        start_request(profile_fixture()),
+        EnvironmentPolicy(requested_scope, "proxmox.vm"),
+    )
+
+    assert resolution.replacement_required is True
+    assert resolution.environment == store.get_environment("env-old")
+    assert store.list_attempts() == []
+
+
+@pytest.mark.parametrize(
+    ("recorded_scope", "requested_scope", "expected_owner"),
+    [
+        (EnvironmentScope.COURSE, EnvironmentScope.LESSON, "api-access"),
+        (EnvironmentScope.LESSON, EnvironmentScope.COURSE, None),
+    ],
+)
+def test_confirmed_environment_scope_change_destroys_before_creating_new_scope(
+    store: StateStore,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+    recorded_scope: EnvironmentScope,
+    requested_scope: EnvironmentScope,
+    expected_owner: str | None,
+) -> None:
+    seed_environment(
+        store,
+        environment_id="env-old",
+        vmid=101,
+        node="pve02",
+        phase=EnvironmentPhase.RUNNING,
+        environment_scope=recorded_scope,
+        lesson_owner_id=(
+            "api-access" if recorded_scope is EnvironmentScope.LESSON else None
+        ),
+    )
+    provider = EnvironmentScopeProvider(
+        {
+            101: VmLocation(
+                node="pve02",
+                status="running",
+                name="learnlab-proxmox-admin-101",
+            )
+        }
+    )
+
+    resolution = LifecycleService(store, provider, tmp_path).ensure_environment(
+        start_request(profile_fixture(node="pve02")),
+        EnvironmentPolicy(requested_scope, "proxmox.vm"),
+        replace_confirmed=True,
+    )
+
+    assert resolution.status == "created"
+    assert resolution.environment is not None
+    assert resolution.environment.environment_scope is requested_scope
+    assert resolution.environment.lesson_owner_id == expected_owner
+    assert provider.operations.index("delete:101") < provider.operations.index(
+        "allocate_vmid"
+    )
 
 
 def test_environment_scope_lesson_confirmed_replacement_destroys_before_create(
@@ -610,17 +715,27 @@ def test_environment_scope_course_reuse_binds_legacy_scope_after_reconciliation(
     assert persisted_attempt.environment_scope is EnvironmentScope.COURSE
 
 
-def test_environment_scope_none_override_leaves_course_environment_untouched(
+@pytest.mark.parametrize(
+    ("retained_scope", "lesson_owner_id"),
+    [
+        (EnvironmentScope.COURSE, None),
+        (EnvironmentScope.LESSON, "earlier"),
+    ],
+)
+def test_environment_scope_none_leaves_existing_environment_untouched(
     store: StateStore,
     profile_fixture: Callable[..., ProxmoxProfile],
     tmp_path: Path,
+    retained_scope: EnvironmentScope,
+    lesson_owner_id: str | None,
 ) -> None:
     seed_environment(
         store,
         environment_id="env-course",
         vmid=101,
         node="pve02",
-        environment_scope=EnvironmentScope.COURSE,
+        environment_scope=retained_scope,
+        lesson_owner_id=lesson_owner_id,
     )
     before = store.get_environment("env-course")
 
@@ -1047,6 +1162,45 @@ def test_start_failure_retains_redacted_partial_environment(
     )
 
 
+@pytest.mark.parametrize(
+    ("interrupt_on", "expected_vmid", "expected_clone_uncertain"),
+    [
+        ("allocate_vmid", None, False),
+        ("wait:clone", 102, True),
+        ("wait:start", 102, False),
+    ],
+)
+def test_provisioning_interrupt_retains_partial_state_with_destroy_guidance(
+    store: StateStore,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+    interrupt_on: str,
+    expected_vmid: int | None,
+    expected_clone_uncertain: bool,
+) -> None:
+    provider = InterruptingProvisionProvider(interrupt_on)
+
+    with pytest.raises(ProvisioningInterrupted) as caught:
+        LifecycleService(
+            store,
+            provider,
+            tmp_path,
+            secrets={"interrupt-private-value"},
+        ).start(start_request(profile_fixture(node="pve02")))
+
+    [record] = store.list_environments()
+    assert record.phase is EnvironmentPhase.FAILED
+    assert record.vmid == expected_vmid
+    assert record.clone_uncertain is expected_clone_uncertain
+    assert record.error_summary == PROVISIONING_INTERRUPTED_GUIDANCE
+    assert str(caught.value) == PROVISIONING_INTERRUPTED_GUIDANCE
+    assert "interrupt-private-value" not in record.error_summary
+    assert "interrupt-private-value" not in str(caught.value)
+    assert not any(
+        operation.startswith(("stop:", "delete:")) for operation in provider.operations
+    )
+
+
 def test_start_failure_bounds_retained_error_summary(
     store: StateStore,
     failing_provider: RecordingProvider,
@@ -1167,8 +1321,10 @@ def test_render_ssh_command_shell_quotes_isolated_paths(
     )
 
     assert command == (
-        "ssh -i '/keys/student key' -o "
-        "'UserKnownHostsFile=/state env/known_hosts' student@192.0.2.10"
+        "ssh -i '/keys/student key' -o BatchMode=yes -o "
+        "StrictHostKeyChecking=yes -o "
+        "'UserKnownHostsFile=/state env/known_hosts' -o "
+        "GlobalKnownHostsFile=/dev/null student@192.0.2.10"
     )
 
 

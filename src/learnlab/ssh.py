@@ -2,19 +2,30 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import ipaddress
 import os
 import shlex
 import subprocess
+import tempfile
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, cast
+from typing import BinaryIO, Protocol, cast
 
 from learnlab.errors import LearnLabError, redact
 
 _CONNECT_TIMEOUT_SECONDS = 10
 _MAX_CAPTURED_OUTPUT_BYTES = 8 * 1024
+_MAX_HOST_KEY_SCAN_BYTES = 64 * 1024
+_PROCESS_TERMINATION_GRACE_SECONDS = 1.0
+_PROCESS_READ_CHUNK_BYTES = 64 * 1024
 _REDACTION_MARKER = "[REDACTED]"
+
+ProcessFactory = Callable[..., subprocess.Popen[bytes]]
 
 
 @dataclass(frozen=True)
@@ -28,6 +39,19 @@ class RemoteCommandResult:
 
 class SshCommandTimeout(LearnLabError):
     """Raised when a remote verification command exceeds its deadline."""
+
+
+class SshHostKeyError(LearnLabError):
+    """Raised when an isolated SSH host key cannot be safely enrolled."""
+
+
+@dataclass(frozen=True)
+class HostKeyPresentation:
+    """The target and key identities that require explicit learner trust."""
+
+    target: str
+    identities: tuple[tuple[str, str], ...]
+    connection_command: str
 
 
 class RemoteEnvironment(Protocol):
@@ -58,15 +82,85 @@ class SshExecutor:
         state_root: Path,
         *,
         runner: Callable[..., subprocess.CompletedProcess[bytes]] | None = None,
+        process_factory: ProcessFactory | None = None,
         secrets: set[str] | None = None,
     ) -> None:
+        if runner is not None and process_factory is not None:
+            raise ValueError("Use runner or process_factory, not both")
         self._state_root = state_root
-        self._runner = (
-            runner
-            if runner is not None
-            else cast(Callable[..., subprocess.CompletedProcess[bytes]], subprocess.run)
+        self._runner = runner
+        self._process_factory = (
+            process_factory
+            if process_factory is not None
+            else cast(ProcessFactory, subprocess.Popen)
         )
-        self._secrets = secrets or set()
+        self._secrets = secrets if secrets is not None else set()
+
+    def enroll_host_key(
+        self,
+        profile: SshProfile,
+        environment: RemoteEnvironment,
+        confirm: Callable[[HostKeyPresentation], bool],
+    ) -> bool:
+        """Confirm and pin a stable presented key in one isolated environment."""
+        known_hosts = _isolated_known_hosts_path(self._state_root, environment.id)
+        if environment.ip_address is None:
+            raise ValueError("Remote environment does not have an IP address")
+        if known_hosts.is_symlink():
+            raise SshHostKeyError("Refusing a non-isolated SSH host-key file")
+        if known_hosts.exists() and known_hosts.stat().st_size > 0:
+            known_hosts.chmod(0o600)
+            return False
+
+        known_hosts = create_known_hosts(self._state_root, environment.id)
+        first_lines, first_identities = self._scan_host_keys(environment.ip_address)
+        presentation = HostKeyPresentation(
+            target=f"{profile.ssh_user}@{environment.ip_address}",
+            identities=first_identities,
+            connection_command=render_ssh_command(
+                profile, environment.ip_address, known_hosts
+            ),
+        )
+        if not confirm(presentation):
+            raise SshHostKeyError("SSH host-key enrollment was declined")
+
+        second_lines, second_identities = self._scan_host_keys(environment.ip_address)
+        if second_lines != first_lines or second_identities != first_identities:
+            raise SshHostKeyError("Presented SSH host key changed during confirmation")
+        _replace_private_file(
+            known_hosts, "".join(f"{line}\n" for line in second_lines)
+        )
+        return True
+
+    def _scan_host_keys(
+        self, target: str
+    ) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
+        """Acquire public keys without consulting or changing user SSH state."""
+        try:
+            ipaddress.ip_address(target)
+        except ValueError:
+            raise SshHostKeyError(
+                "Environment SSH target is not an IP address"
+            ) from None
+        argv = [
+            "ssh-keyscan",
+            "-T",
+            str(_CONNECT_TIMEOUT_SECONDS),
+            "-t",
+            "ed25519,ecdsa,rsa",
+            target,
+        ]
+        try:
+            completed = self._execute(
+                argv,
+                _CONNECT_TIMEOUT_SECONDS + 2,
+                capture_limit=_MAX_HOST_KEY_SCAN_BYTES,
+            )
+        except subprocess.TimeoutExpired:
+            raise SshHostKeyError("Timed out acquiring the SSH host key") from None
+        if completed.returncode != 0:
+            raise SshHostKeyError("Unable to acquire the SSH host key")
+        return _parse_scanned_host_keys(completed.stdout, target)
 
     def run(
         self,
@@ -98,13 +192,7 @@ class SshExecutor:
             command,
         ]
         try:
-            completed = self._runner(
-                argv,
-                capture_output=True,
-                text=False,
-                timeout=timeout,
-                check=False,
-            )
+            completed = self._execute(argv, timeout)
         except subprocess.TimeoutExpired as error:
             raise SshCommandTimeout(
                 f"Remote command timed out after {error.timeout} seconds"
@@ -116,10 +204,132 @@ class SshExecutor:
             stderr=_safe_output(completed.stderr, self._secrets),
         )
 
+    def _execute(
+        self,
+        argv: list[str],
+        timeout: float,
+        *,
+        capture_limit: int = _MAX_CAPTURED_OUTPUT_BYTES,
+    ) -> subprocess.CompletedProcess[bytes]:
+        """Run through the bounded production path or an isolated test runner."""
+        if self._runner is not None:
+            completed = self._runner(
+                argv,
+                capture_output=True,
+                text=False,
+                timeout=timeout,
+                check=False,
+            )
+            return subprocess.CompletedProcess(
+                argv,
+                completed.returncode,
+                (completed.stdout or b"")[:capture_limit],
+                (completed.stderr or b"")[:capture_limit],
+            )
+        return _run_bounded_process(
+            self._process_factory,
+            argv,
+            timeout,
+            capture_limit,
+        )
+
+
+def _run_bounded_process(
+    process_factory: ProcessFactory,
+    argv: list[str],
+    timeout: float,
+    capture_limit: int,
+) -> subprocess.CompletedProcess[bytes]:
+    """Drain both pipes fully while retaining only a fixed prefix of each."""
+    process = process_factory(
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        shell=False,
+        start_new_session=True,
+    )
+    if process.stdout is None or process.stderr is None:
+        process.kill()
+        process.wait()
+        raise LearnLabError("SSH process did not expose captured output")
+
+    stdout = bytearray()
+    stderr = bytearray()
+    drain_errors: list[BaseException] = []
+    readers = (
+        threading.Thread(
+            target=_drain_stream,
+            args=(process.stdout, stdout, capture_limit, drain_errors),
+            daemon=True,
+        ),
+        threading.Thread(
+            target=_drain_stream,
+            args=(process.stderr, stderr, capture_limit, drain_errors),
+            daemon=True,
+        ),
+    )
+    for reader in readers:
+        reader.start()
+
+    timed_out = False
+    try:
+        return_code = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        return_code = _terminate_and_reap(process)
+    finally:
+        for reader in readers:
+            reader.join()
+
+    if drain_errors:
+        error = drain_errors[0]
+        raise LearnLabError(f"Unable to capture SSH output: {type(error).__name__}")
+    if timed_out:
+        raise subprocess.TimeoutExpired(argv, timeout)
+    return subprocess.CompletedProcess(argv, return_code, bytes(stdout), bytes(stderr))
+
+
+def _drain_stream(
+    stream: BinaryIO,
+    captured: bytearray,
+    capture_limit: int,
+    errors: list[BaseException],
+) -> None:
+    try:
+        while chunk := stream.read(_PROCESS_READ_CHUNK_BYTES):
+            remaining = capture_limit - len(captured)
+            if remaining > 0:
+                captured.extend(chunk[:remaining])
+    except BaseException as error:
+        errors.append(error)
+
+
+def _terminate_and_reap(process: subprocess.Popen[bytes]) -> int:
+    """Terminate a timed-out SSH process, escalating once, and always reap it."""
+    try:
+        process.terminate()
+    except ProcessLookupError:
+        return process.wait()
+    try:
+        return process.wait(timeout=_PROCESS_TERMINATION_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        return process.wait()
+
 
 def _safe_output(output: bytes, secrets: set[str]) -> str:
     """Decode, redact, and byte-bound captured SSH output."""
-    redacted = redact(output.decode("utf-8", errors="replace"), secrets)
+    decoded = output.decode("utf-8", errors="replace")
+    partial_secret_start = _partial_secret_start(decoded, secrets)
+    redacted = (
+        redact(decoded, secrets)
+        if partial_secret_start is None
+        else redact(decoded[:partial_secret_start], secrets) + _REDACTION_MARKER
+    )
     encoded = redacted.encode("utf-8")
     if len(encoded) <= _MAX_CAPTURED_OUTPUT_BYTES:
         return redacted
@@ -138,6 +348,18 @@ def _safe_output(output: bytes, secrets: set[str]) -> str:
     ):
         before_marker = before_marker[:-1]
     return before_marker + _REDACTION_MARKER
+
+
+def _partial_secret_start(text: str, secrets: set[str]) -> int | None:
+    """Find a captured suffix that is only the beginning of a configured secret."""
+    starts: list[int] = []
+    for secret in secrets:
+        maximum = min(len(text), len(secret) - 1)
+        for length in range(maximum, 0, -1):
+            if text.endswith(secret[:length]):
+                starts.append(len(text) - length)
+                break
+    return min(starts) if starts else None
 
 
 def _partial_redaction_start(text: str) -> int | None:
@@ -161,18 +383,78 @@ def _isolated_known_hosts_path(state_root: Path, environment_id: str) -> Path:
 
 def create_known_hosts(state_root: Path, environment_id: str) -> Path:
     """Create an empty, private host-key file for one environment."""
-    environment_dir = state_root / "environments" / environment_id
-    environment_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    known_hosts = _isolated_known_hosts_path(state_root, environment_id)
+    environment_dir = known_hosts.parent
+    environments_dir = environment_dir.parent
+    environments_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if environments_dir.is_symlink() or not environments_dir.is_dir():
+        raise SshHostKeyError("Refusing a non-isolated SSH environments directory")
+    environment_dir.mkdir(exist_ok=True, mode=0o700)
+    if environment_dir.is_symlink() or not environment_dir.is_dir():
+        raise SshHostKeyError("Refusing a non-isolated SSH environment directory")
     environment_dir.chmod(0o700)
-    known_hosts = environment_dir / "known_hosts"
+    if known_hosts.is_symlink():
+        raise SshHostKeyError("Refusing a non-isolated SSH host-key file")
     descriptor = os.open(
         known_hosts,
-        os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
         0o600,
     )
+    os.fchmod(descriptor, 0o600)
     os.close(descriptor)
-    known_hosts.chmod(0o600)
     return known_hosts
+
+
+def _parse_scanned_host_keys(
+    output: bytes, target: str
+) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
+    """Validate keyscan output and derive OpenSSH-style SHA256 identities."""
+    lines: list[str] = []
+    identities: list[tuple[str, str]] = []
+    expected_hosts = {target, f"[{target}]:22"}
+    for raw_line in output.decode("utf-8", errors="strict").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) != 3 or parts[0] not in expected_hosts:
+            raise SshHostKeyError("SSH host-key scan returned an unexpected target")
+        algorithm, encoded_key = parts[1], parts[2]
+        if not algorithm.startswith(("ssh-", "ecdsa-")):
+            raise SshHostKeyError("SSH host-key scan returned an unsupported key")
+        try:
+            key_blob = base64.b64decode(encoded_key, validate=True)
+        except (binascii.Error, ValueError):
+            raise SshHostKeyError("SSH host-key scan returned an invalid key") from None
+        fingerprint = base64.b64encode(hashlib.sha256(key_blob).digest()).decode()
+        lines.append(" ".join(parts))
+        identities.append((algorithm, f"SHA256:{fingerprint.rstrip('=')}"))
+    if not lines:
+        raise SshHostKeyError("SSH host-key scan returned no keys")
+    return tuple(lines), tuple(identities)
+
+
+def _replace_private_file(path: Path, content: str) -> None:
+    """Atomically replace one isolated host-key file with private permissions."""
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=".known_hosts-", dir=path.parent
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+            file.write(content)
+            file.flush()
+            os.fsync(file.fileno())
+        temporary_path.replace(path)
+        path.chmod(0o600)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def render_ssh_command(profile: SshProfile, ip: str, known_hosts: Path) -> str:
@@ -183,7 +465,13 @@ def render_ssh_command(profile: SshProfile, ip: str, known_hosts: Path) -> str:
             "-i",
             str(profile.ssh_identity_file),
             "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
             f"UserKnownHostsFile={known_hosts}",
+            "-o",
+            "GlobalKnownHostsFile=/dev/null",
             f"{profile.ssh_user}@{ip}",
         ]
     )

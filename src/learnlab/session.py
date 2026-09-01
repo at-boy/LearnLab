@@ -8,16 +8,25 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
-from learnlab.curriculum import Course, EnvironmentScope, Lesson, Step, Verification
+from learnlab.curriculum import (
+    Course,
+    EnvironmentPolicy,
+    EnvironmentScope,
+    Lesson,
+    Step,
+    Verification,
+    VerificationType,
+)
 from learnlab.errors import redact
 from learnlab.lifecycle import (
     EnvironmentResolution,
     LifecycleService,
+    ProvisioningInterrupted,
     StartProfile,
     StartRequest,
 )
 from learnlab.providers.base import Provider
-from learnlab.ssh import SshExecutor
+from learnlab.ssh import HostKeyPresentation, SshExecutor
 from learnlab.state import (
     CompletionSource,
     StateStore,
@@ -42,6 +51,7 @@ class SessionAction(StrEnum):
     REVIEW = "review"
     EXIT = "exit"
     ERROR = "error"
+    PROVISIONING_INTERRUPTED = "provisioning-interrupted"
 
 
 @dataclass(frozen=True)
@@ -53,6 +63,23 @@ class SessionOutcome:
     lesson_completed: bool = False
     course_completed: bool = False
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class SessionDependencies:
+    """Dependencies permitted for one effective lesson environment policy."""
+
+    lifecycle: LifecycleService
+    profile: StartProfile | None = None
+    provider_type: str | None = None
+    provider: Provider | None = None
+    ssh_executor: SshExecutor | None = None
+
+
+class SessionDependencyResolver(Protocol):
+    """Lazily resolve dependencies for one effective curriculum policy."""
+
+    def resolve(self, policy: EnvironmentPolicy) -> SessionDependencies: ...
 
 
 class SessionPrompt(ValidationPrompt, Protocol):
@@ -102,7 +129,7 @@ class CourseSession:
         *,
         course: Course,
         store: StateStore,
-        lifecycle: LifecycleService,
+        lifecycle: LifecycleService | None,
         validators: ValidatorRegistry,
         prompt: SessionPrompt,
         profile: StartProfile | None = None,
@@ -110,6 +137,7 @@ class CourseSession:
         provider: Provider | None = None,
         ssh_executor: SshExecutor | None = None,
         secrets: set[str] | None = None,
+        dependency_resolver: SessionDependencyResolver | None = None,
     ) -> None:
         self._course = course
         self._store = store
@@ -120,7 +148,9 @@ class CourseSession:
         self._provider_type = provider_type
         self._provider = provider
         self._ssh_executor = ssh_executor
-        self._secrets = secrets or set()
+        self._secrets = secrets if secrets is not None else set()
+        self._dependency_resolver = dependency_resolver
+        self._dependency_cache: dict[EnvironmentPolicy, SessionDependencies] = {}
         self._current_lesson_id: str | None = None
         self._current_step_id: str | None = None
         self._current_verification_id: str | None = None
@@ -134,6 +164,12 @@ class CourseSession:
         """Start or resume at the first incomplete stable curriculum ID."""
         try:
             return self._run_session(lesson_id, review_completed)
+        except ProvisioningInterrupted as error:
+            return SessionOutcome(
+                SessionAction.PROVISIONING_INTERRUPTED,
+                self._current_lesson_id,
+                error=redact(str(error), self._secrets),
+            )
         except KeyboardInterrupt:
             return SessionOutcome(
                 SessionAction.SAVE_AND_EXIT,
@@ -207,20 +243,22 @@ class CourseSession:
         self._current_step_id = None
         self._current_verification_id = None
         policy = self._course.effective_environment(lesson)
+        dependencies = self._dependencies_for_policy(policy)
+        profile = self._profile_for_policy(policy.scope, dependencies)
         request = StartRequest(
             course=self._course,
             lesson=lesson,
-            profile=self._profile_for_policy(policy.scope),
-            provider_type=self._provider_type_for_policy(policy.scope),
+            profile=profile,
+            provider_type=self._provider_type_for_policy(policy.scope, dependencies),
         )
-        resolution = self._lifecycle.ensure_environment(request, policy)
+        resolution = dependencies.lifecycle.ensure_environment(request, policy)
         if resolution.replacement_required or resolution.recreation_required:
             if not self._prompt.confirm_environment_change(resolution, lesson):
                 return SessionOutcome(
                     SessionAction.SAVE_AND_EXIT,
                     lesson.id,
                 )
-            resolution = self._lifecycle.ensure_environment(
+            resolution = dependencies.lifecycle.ensure_environment(
                 request,
                 policy,
                 replace_confirmed=True,
@@ -272,10 +310,13 @@ class CourseSession:
                 )
                 if action is SessionAction.SAVE_AND_EXIT:
                     return SessionOutcome(action, lesson.id)
+                if verification.type is VerificationType.REMOTE_COMMAND:
+                    self._enroll_host_key(profile, resolution, dependencies)
                 while True:
                     result = self._safe_result(
                         self._validators.validate(
-                            self._validation_context(resolution), verification
+                            self._validation_context(resolution, dependencies),
+                            verification,
                         )
                     )
                     self._store.record_verification_result(
@@ -348,6 +389,22 @@ class CourseSession:
         summary = redact(str(error), self._secrets) or "session operation failed"
         return f"{'; '.join(context)}: {summary}"[:500]
 
+    def _enroll_host_key(
+        self,
+        profile: StartProfile,
+        resolution: EnvironmentResolution,
+        dependencies: SessionDependencies,
+    ) -> None:
+        if dependencies.ssh_executor is None or resolution.environment is None:
+            raise ValueError("Remote command validation requires SSH dependencies")
+        dependencies.ssh_executor.enroll_host_key(
+            profile,
+            resolution.environment,
+            lambda presentation: self._prompt.confirm(
+                _host_key_confirmation(presentation)
+            ),
+        )
+
     def _first_incomplete_lesson(self) -> Lesson | None:
         completed_ids = self._store.completed_lessons(
             self._course.collection_id, self._course.id
@@ -380,29 +437,63 @@ class CourseSession:
             is CompletionSource.LEGACY
         )
 
-    def _profile_for_policy(self, scope: EnvironmentScope) -> StartProfile:
-        if self._profile is not None:
-            return self._profile
+    def _dependencies_for_policy(
+        self, policy: EnvironmentPolicy
+    ) -> SessionDependencies:
+        try:
+            return self._dependency_cache[policy]
+        except KeyError:
+            pass
+        dependencies = (
+            self._dependency_resolver.resolve(policy)
+            if self._dependency_resolver is not None
+            else self._fixed_dependencies()
+        )
+        if policy.scope is EnvironmentScope.NONE:
+            dependencies = SessionDependencies(lifecycle=dependencies.lifecycle)
+        self._dependency_cache[policy] = dependencies
+        return dependencies
+
+    def _fixed_dependencies(self) -> SessionDependencies:
+        if self._lifecycle is None:
+            raise ValueError("Session lifecycle dependencies are unavailable")
+        return SessionDependencies(
+            lifecycle=self._lifecycle,
+            profile=self._profile,
+            provider_type=self._provider_type,
+            provider=self._provider,
+            ssh_executor=self._ssh_executor,
+        )
+
+    def _profile_for_policy(
+        self, scope: EnvironmentScope, dependencies: SessionDependencies
+    ) -> StartProfile:
+        if dependencies.profile is not None:
+            return dependencies.profile
         if scope is EnvironmentScope.NONE:
             return _NoEnvironmentProfile()
         raise ValueError("A provider profile is required for this lesson")
 
-    def _provider_type_for_policy(self, scope: EnvironmentScope) -> str:
-        if self._provider_type is not None:
-            return self._provider_type
+    def _provider_type_for_policy(
+        self, scope: EnvironmentScope, dependencies: SessionDependencies
+    ) -> str:
+        if dependencies.provider_type is not None:
+            return dependencies.provider_type
         if scope is EnvironmentScope.NONE:
             return "none"
         raise ValueError("A provider type is required for this lesson")
 
     def _validation_context(
-        self, resolution: EnvironmentResolution
+        self,
+        resolution: EnvironmentResolution,
+        dependencies: SessionDependencies,
     ) -> ValidationContext:
         return ValidationContext(
             state_store=self._store,
-            profile=self._profile,
+            profile=dependencies.profile,
             environment=resolution.environment,
-            ssh_executor=self._ssh_executor,
-            provider=self._provider,
+            ssh_executor=dependencies.ssh_executor,
+            provider=dependencies.provider,
             prompt=self._prompt,
         )
 
@@ -413,3 +504,15 @@ class _NoEnvironmentProfile:
     node: str = ""
     ssh_user: str = ""
     ssh_identity_file: Path = Path()
+
+
+def _host_key_confirmation(presentation: HostKeyPresentation) -> str:
+    keys = "\n".join(
+        f"Presented host key: {algorithm} {fingerprint}"
+        for algorithm, fingerprint in presentation.identities
+    )
+    return (
+        f"SSH target: {presentation.target}\n{keys}\n"
+        f"Strict connection command: {presentation.connection_command}\n"
+        "Trust this key for this isolated LearnLab environment?"
+    )

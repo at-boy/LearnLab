@@ -460,6 +460,11 @@ def _parse_verification(
             failure_message=failure_message,
             prompt=_required_string(value, "prompt", path),
         )
+    if environment.scope is EnvironmentScope.NONE:
+        raise CurriculumError(
+            f"{path}: verification {verification_id}: provider-check requires a "
+            "provider and is forbidden for none environment scope"
+        )
     return Verification(
         id=verification_id,
         type=verification_type,

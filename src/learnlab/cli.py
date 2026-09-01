@@ -22,6 +22,7 @@ from learnlab.curriculum import (
     Course,
     CurriculumCatalog,
     CurriculumError,
+    EnvironmentPolicy,
     EnvironmentScope,
     Lesson,
     Step,
@@ -29,12 +30,22 @@ from learnlab.curriculum import (
     VerificationType,
 )
 from learnlab.errors import ConfigurationError, LearnLabError, redact
-from learnlab.lifecycle import EnvironmentResolution, LifecycleService
+from learnlab.lifecycle import (
+    PROVISIONING_INTERRUPTED_GUIDANCE,
+    EnvironmentResolution,
+    LifecycleService,
+)
 from learnlab.progress import ProgressEvent, ProgressKind, ProgressObserver
 from learnlab.providers.base import Provider
 from learnlab.providers.proxmox import ProxmoxProvider
 from learnlab.providers.registry import build_provider
-from learnlab.session import CourseSession, SessionAction, SessionOutcome, SessionPrompt
+from learnlab.session import (
+    CourseSession,
+    SessionAction,
+    SessionDependencies,
+    SessionOutcome,
+    SessionPrompt,
+)
 from learnlab.ssh import SshExecutor
 from learnlab.state import (
     CompletionSource,
@@ -335,6 +346,83 @@ validator_registry_factory: Callable[[], ValidatorRegistry] = (
     _default_validator_registry
 )
 
+_PROVIDER_TYPES_BY_CAPABILITY = {"proxmox.vm": "proxmox"}
+
+
+class _LazySessionDependencyResolver:
+    """Resolve provider configuration only when a provider lesson is entered."""
+
+    def __init__(
+        self,
+        *,
+        store: StateStore,
+        root: Path,
+        progress: ProgressObserver,
+        secrets: set[str],
+        provider_profile: str | None,
+    ) -> None:
+        self._store = store
+        self._root = root
+        self._progress = progress
+        self._secrets = secrets
+        self._provider_profile = provider_profile
+        self._cache: dict[EnvironmentPolicy, SessionDependencies] = {}
+        self._provider_dependencies: SessionDependencies | None = None
+
+    def resolve(self, policy: EnvironmentPolicy) -> SessionDependencies:
+        try:
+            return self._cache[policy]
+        except KeyError:
+            pass
+        if policy.scope is EnvironmentScope.NONE:
+            dependencies = SessionDependencies(
+                lifecycle=lifecycle_factory(
+                    self._store,
+                    {},
+                    self._root,
+                    secrets=self._secrets,
+                    progress=self._progress,
+                )
+            )
+            self._cache[policy] = dependencies
+            return dependencies
+
+        capability = policy.provider_capability
+        provider_type = (
+            _PROVIDER_TYPES_BY_CAPABILITY.get(capability)
+            if capability is not None
+            else None
+        )
+        if provider_type is None:
+            raise ConfigurationError(
+                f"Unsupported provider capability: {capability or 'missing'}"
+            )
+
+        if self._provider_dependencies is None:
+            settings = load_settings()
+            profile_name = self._provider_profile or settings.default_provider
+            profile = settings.provider(profile_name)
+            _render_tls_warning(profile)
+            secret = resolve_token_secret(profile)
+            self._secrets.add(secret)
+            provider = provider_factory(settings, profile_name, secret)
+            self._provider_dependencies = SessionDependencies(
+                lifecycle=lifecycle_factory(
+                    self._store,
+                    provider,
+                    self._root,
+                    secrets=self._secrets,
+                    progress=self._progress,
+                ),
+                profile=profile,
+                provider_type=provider_type,
+                provider=provider,
+                ssh_executor=SshExecutor(self._root, secrets=self._secrets),
+            )
+        dependencies = self._provider_dependencies
+        self._cache[policy] = dependencies
+        return dependencies
+
 
 def _default_catalog() -> CurriculumCatalog:
     return CurriculumCatalog(files("learnlab").joinpath("collections"))
@@ -418,40 +506,23 @@ def _run_course_session(
         typer.echo(f"Selected lesson: {lesson.title}")
         _render_environment_policy(policy.scope, policy.provider_capability)
 
-        profile: ProxmoxProfile | None = None
-        provider: Provider | None = None
-        provider_type: str | None = None
-        if policy.scope is not EnvironmentScope.NONE:
-            settings = load_settings()
-            profile_name = provider_profile or settings.default_provider
-            profile = settings.provider(profile_name)
-            _render_tls_warning(profile)
-            secret = resolve_token_secret(profile)
-            secrets.add(secret)
-            provider = provider_factory(settings, profile_name, secret)
-            provider_type = "proxmox"
-
         root = state_root()
         renderer = progress_renderer_factory()
-        lifecycle = lifecycle_factory(
-            store,
-            provider if provider is not None else {},
-            root,
-            secrets=secrets,
+        dependency_resolver = _LazySessionDependencyResolver(
+            store=store,
+            root=root,
             progress=renderer,
+            secrets=secrets,
+            provider_profile=provider_profile,
         )
-        ssh_executor = SshExecutor(root, secrets=secrets)
         session = CourseSession(
             course=course,
             store=store,
-            lifecycle=lifecycle,
+            lifecycle=None,
             validators=validator_registry_factory(),
             prompt=TyperSessionPrompt(course),
-            profile=profile,
-            provider_type=provider_type,
-            provider=provider,
-            ssh_executor=ssh_executor,
             secrets=secrets,
+            dependency_resolver=dependency_resolver,
         )
         with renderer:
             outcome = session.run(
@@ -679,6 +750,13 @@ def _render_session_outcome(
     outcome: SessionOutcome,
     secrets: set[str],
 ) -> None:
+    if outcome.action is SessionAction.PROVISIONING_INTERRUPTED:
+        message = redact(
+            outcome.error or PROVISIONING_INTERRUPTED_GUIDANCE,
+            secrets,
+        )
+        typer.echo(message)
+        raise typer.Exit(code=130)
     if outcome.action is SessionAction.ERROR:
         message = redact(outcome.error or "session operation failed", secrets)
         typer.echo(f"Error: {message}")

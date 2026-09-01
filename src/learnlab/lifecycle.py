@@ -42,10 +42,19 @@ _TASK_TIMEOUT_SECONDS = 300.0
 _GUEST_TIMEOUT_SECONDS = 300.0
 _ERROR_SUMMARY_LIMIT = 500
 _NULL_PROGRESS_OBSERVER = NullProgressObserver()
+PROVISIONING_INTERRUPTED_GUIDANCE = (
+    "Provisioning interrupted. Partial environment state was retained and may "
+    "still represent provider resources. Run learnlab destroy to reconcile and "
+    "clean it up before starting or resuming this course."
+)
 
 
 class LifecycleError(LearnLabError):
     """Raised when lifecycle orchestration cannot safely complete."""
+
+
+class ProvisioningInterrupted(LifecycleError):
+    """Raised when Ctrl-C leaves a partial environment requiring reconciliation."""
 
 
 class StartProfile(Protocol):
@@ -125,7 +134,7 @@ class LifecycleService:
         self._store = store
         self._provider = provider
         self._state_root = state_root
-        self._secrets = secrets or set()
+        self._secrets = secrets if secrets is not None else set()
         self._progress = progress
         self._clock = clock
 
@@ -143,6 +152,15 @@ class LifecycleService:
             request.course.collection_id, request.course.id
         )
         if existing is None:
+            return self._create_environment(request, policy)
+
+        if (
+            existing.environment_scope is not None
+            and existing.environment_scope is not policy.scope
+        ):
+            if not replace_confirmed:
+                return EnvironmentResolution("replacement_required", existing)
+            self.destroy_environment(existing)
             return self._create_environment(request, policy)
 
         if policy.scope is EnvironmentScope.LESSON:
@@ -420,6 +438,13 @@ class LifecycleService:
                     request.profile, ip_address, known_hosts
                 ),
             )
+        except KeyboardInterrupt:
+            self._store.transition_environment(
+                environment_id,
+                EnvironmentPhase.FAILED,
+                error_summary=PROVISIONING_INTERRUPTED_GUIDANCE,
+            )
+            raise ProvisioningInterrupted(PROVISIONING_INTERRUPTED_GUIDANCE) from None
         except Exception as error:
             summary = _safe_error_summary(error, self._secrets)
             self._store.transition_environment(
