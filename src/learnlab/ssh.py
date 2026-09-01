@@ -250,6 +250,7 @@ def _run_bounded_process(
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        bufsize=0,
         shell=False,
         start_new_session=True,
     )

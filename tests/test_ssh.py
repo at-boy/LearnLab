@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import contextlib
+import multiprocessing
+import os
 import signal
 import subprocess
+import sys
 import threading
 import time
 from collections import deque
@@ -19,6 +23,7 @@ from learnlab.ssh import (
     SshCommandTimeout,
     SshExecutor,
     SshHostKeyError,
+    _run_bounded_process,
     create_known_hosts,
 )
 from learnlab.state import EnvironmentPhase, EnvironmentRecord
@@ -160,6 +165,39 @@ class DescendantHoldingProcess(FakeProcess):
         self.stderr = DescendantHeldStream()  # type: ignore[assignment]
 
 
+def _run_real_popen_pipe_cleanup_probe(
+    holder_pid_path: Path, result_path: Path
+) -> None:
+    ssh_module._PROCESS_TERMINATION_GRACE_SECONDS = 0.05
+    ssh_module._PROCESS_READER_JOIN_GRACE_SECONDS = 0.05
+    leader_code = (
+        "import subprocess,sys,time; from pathlib import Path; "
+        "holder = subprocess.Popen("
+        "[sys.executable, '-c', 'import time; time.sleep(30)'], "
+        "stdout=sys.stdout, stderr=sys.stderr, start_new_session=True); "
+        "Path(sys.argv[1]).write_text(str(holder.pid), encoding='utf-8'); "
+        "time.sleep(30)"
+    )
+    started_at = time.monotonic()
+    try:
+        _run_bounded_process(
+            subprocess.Popen,
+            [sys.executable, "-c", leader_code, str(holder_pid_path)],
+            0.05,
+            8 * 1024,
+        )
+    except subprocess.TimeoutExpired:
+        result_path.write_text(f"{time.monotonic() - started_at:.6f}", encoding="utf-8")
+
+
+def _kill_recorded_process_group(holder_pid_path: Path) -> None:
+    if not holder_pid_path.exists():
+        return
+    holder_pid = int(holder_pid_path.read_text(encoding="utf-8"))
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(holder_pid, signal.SIGKILL)
+
+
 def test_production_process_drains_large_both_streams_with_capped_capture(
     tmp_path: Path, profile_fixture: Callable[..., ProxmoxProfile]
 ) -> None:
@@ -283,6 +321,41 @@ def test_timeout_closes_descendant_held_pipes_after_group_kill_without_hanging(
     assert process.stdout.closed_by_controller is True
     assert process.stderr.closed_by_controller is True
     assert elapsed < 0.25
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+def test_real_popen_timeout_does_not_block_on_descendant_held_pipe_locks(
+    tmp_path: Path,
+) -> None:
+    holder_pid_path = tmp_path / "holder.pid"
+    result_path = tmp_path / "result.txt"
+    process_context = multiprocessing.get_context("fork")
+    worker = process_context.Process(
+        target=_run_real_popen_pipe_cleanup_probe,
+        args=(holder_pid_path, result_path),
+    )
+    worker.start()
+
+    holder_deadline = time.monotonic() + 2.0
+    while (
+        not holder_pid_path.exists()
+        and worker.is_alive()
+        and time.monotonic() < holder_deadline
+    ):
+        time.sleep(0.01)
+
+    holder_was_ready = holder_pid_path.exists()
+    worker.join(timeout=1.0)
+    cleanup_was_bounded = not worker.is_alive()
+    _kill_recorded_process_group(holder_pid_path)
+    if worker.is_alive():
+        worker.kill()
+    worker.join(timeout=1.0)
+
+    assert holder_was_ready, "real descendant did not acquire the inherited pipes"
+    assert cleanup_was_bounded, "real buffered-pipe cleanup exceeded outer deadline"
+    assert worker.exitcode == 0
+    assert float(result_path.read_text(encoding="utf-8")) < 0.75
 
 
 def test_confirms_presented_host_key_before_writing_and_then_uses_strict_ssh(
