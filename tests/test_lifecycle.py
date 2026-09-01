@@ -222,6 +222,32 @@ class EnvironmentScopeProvider(DestroyRecordingProvider):
         return upid
 
 
+class InterruptingReplacementProvider(EnvironmentScopeProvider):
+    """Interrupt one confirmed replacement teardown boundary."""
+
+    def __init__(self, interrupt_on: str) -> None:
+        super().__init__(
+            {
+                101: VmLocation(
+                    node="pve02",
+                    status="running",
+                    name="learnlab-proxmox-admin-101",
+                )
+            }
+        )
+        self.interrupt_on = interrupt_on
+
+    def _record(self, operation: str) -> None:
+        self.operations.append(operation)
+        second_location_check = (
+            self.interrupt_on == "absence"
+            and operation == "locate:101"
+            and self.operations.count(operation) == 2
+        )
+        if operation == self.interrupt_on or second_location_check:
+            raise KeyboardInterrupt
+
+
 class InterruptingProvisionProvider(RecordingProvider):
     def __init__(self, interrupt_on: str) -> None:
         super().__init__()
@@ -539,6 +565,51 @@ def test_environment_scope_lesson_teardown_failure_retains_old_without_allocatio
 
     assert store.get_environment("env-old") is not None
     assert "allocate_vmid" not in provider.operations
+
+
+@pytest.mark.parametrize(
+    ("interrupt_on", "last_operation"),
+    [
+        ("stop:101", "stop:101"),
+        ("wait:stop", "wait:stop"),
+        ("delete:101", "delete:101"),
+        ("wait:delete", "wait:delete"),
+        ("absence", "locate:101"),
+    ],
+)
+def test_confirmed_replacement_interrupt_retains_uncertain_state_without_allocation(
+    store: StateStore,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    tmp_path: Path,
+    interrupt_on: str,
+    last_operation: str,
+) -> None:
+    seed_environment(
+        store,
+        environment_id="env-old",
+        vmid=101,
+        node="pve02",
+        environment_scope=EnvironmentScope.LESSON,
+        lesson_owner_id="api-access",
+    )
+    provider = InterruptingReplacementProvider(interrupt_on)
+
+    with pytest.raises(BaseException) as caught:
+        LifecycleService(store, provider, tmp_path).ensure_environment(
+            request_for_lesson(profile_fixture(), "storage"),
+            EnvironmentPolicy(EnvironmentScope.LESSON, "proxmox.vm"),
+            replace_confirmed=True,
+        )
+
+    retained = store.get_environment("env-old")
+    assert isinstance(caught.value, ProvisioningInterrupted)
+    assert str(caught.value) == PROVISIONING_INTERRUPTED_GUIDANCE
+    assert retained is not None
+    assert retained.phase is EnvironmentPhase.FAILED
+    assert retained.error_summary == PROVISIONING_INTERRUPTED_GUIDANCE
+    assert provider.operations[-1] == last_operation
+    assert "allocate_vmid" not in provider.operations
+    assert store.list_attempts() == []
 
 
 def test_environment_scope_course_missing_remote_requires_explicit_recreation(

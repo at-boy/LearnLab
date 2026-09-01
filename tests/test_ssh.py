@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import signal
 import subprocess
+import threading
+import time
 from collections import deque
 from collections.abc import Callable
 from io import BytesIO
@@ -9,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from learnlab import ssh as ssh_module
 from learnlab.config import ProxmoxProfile
 from learnlab.ssh import (
     HostKeyPresentation,
@@ -53,6 +57,7 @@ def private_value() -> str:
 
 
 HOST_KEY = "192.0.2.10 ssh-ed25519 aG9zdC1wdWJsaWMta2V5"
+ECDSA_HOST_KEY = "192.0.2.10 ecdsa-sha2-nistp256 ZWNkc2EtaG9zdC1rZXk="
 CHANGED_HOST_KEY = "192.0.2.10 ssh-ed25519 Y2hhbmdlZC1ob3N0LWtleQ=="
 
 
@@ -117,6 +122,44 @@ class FakeProcess:
         self.killed = True
 
 
+class InterruptingWaitProcess(FakeProcess):
+    pid = 43101
+
+    def __init__(self) -> None:
+        super().__init__(b"stdout", b"stderr", time_out=True, ignore_terminate=True)
+        self._interrupt_pending = True
+
+    def wait(self, timeout: float | None = None) -> int:
+        if self._interrupt_pending:
+            self._interrupt_pending = False
+            self.wait_calls.append(timeout)
+            raise KeyboardInterrupt
+        return super().wait(timeout)
+
+
+class DescendantHeldStream:
+    def __init__(self) -> None:
+        self._released = threading.Event()
+        self.closed_by_controller = False
+
+    def read(self, size: int = -1) -> bytes:
+        self._released.wait(timeout=0.5)
+        return b""
+
+    def close(self) -> None:
+        self.closed_by_controller = True
+        self._released.set()
+
+
+class DescendantHoldingProcess(FakeProcess):
+    pid = 43102
+
+    def __init__(self) -> None:
+        super().__init__(b"", b"", time_out=True, ignore_terminate=True)
+        self.stdout = DescendantHeldStream()  # type: ignore[assignment]
+        self.stderr = DescendantHeldStream()  # type: ignore[assignment]
+
+
 def test_production_process_drains_large_both_streams_with_capped_capture(
     tmp_path: Path, profile_fixture: Callable[..., ProxmoxProfile]
 ) -> None:
@@ -166,6 +209,80 @@ def test_production_timeout_terminates_kills_and_reaps_process(
     assert process.killed is True
     assert process.reaped is True
     assert process.wait_calls[0] == 0.01
+
+
+def test_keyboard_interrupt_cleans_process_group_and_reaps_before_reraising(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile_fixture: Callable[..., ProxmoxProfile],
+) -> None:
+    process = InterruptingWaitProcess()
+    group_signals: list[tuple[int, signal.Signals]] = []
+
+    def signal_group(pid: int, sent_signal: signal.Signals) -> None:
+        group_signals.append((pid, sent_signal))
+        if sent_signal is signal.SIGTERM:
+            process.terminate()
+        elif sent_signal is signal.SIGKILL:
+            process.kill()
+
+    monkeypatch.setattr(ssh_module.os, "killpg", signal_group)
+    monkeypatch.setattr(ssh_module, "_PROCESS_TERMINATION_GRACE_SECONDS", 0.01)
+    executor = SshExecutor(
+        tmp_path,
+        process_factory=lambda argv, **kwargs: process,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        executor.run(profile_fixture(), make_environment(), "long-command", timeout=30)
+
+    assert group_signals == [
+        (process.pid, signal.SIGTERM),
+        (process.pid, signal.SIGKILL),
+    ]
+    assert process.reaped is True
+
+
+def test_timeout_closes_descendant_held_pipes_after_group_kill_without_hanging(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    profile_fixture: Callable[..., ProxmoxProfile],
+) -> None:
+    process = DescendantHoldingProcess()
+    group_signals: list[tuple[int, signal.Signals]] = []
+
+    def signal_group(pid: int, sent_signal: signal.Signals) -> None:
+        group_signals.append((pid, sent_signal))
+        if sent_signal is signal.SIGTERM:
+            process.terminate()
+        elif sent_signal is signal.SIGKILL:
+            process.kill()
+
+    monkeypatch.setattr(ssh_module.os, "killpg", signal_group)
+    monkeypatch.setattr(ssh_module, "_PROCESS_TERMINATION_GRACE_SECONDS", 0.01)
+    monkeypatch.setattr(
+        ssh_module, "_PROCESS_READER_JOIN_GRACE_SECONDS", 0.01, raising=False
+    )
+    executor = SshExecutor(
+        tmp_path,
+        process_factory=lambda argv, **kwargs: process,
+    )
+
+    started_at = time.monotonic()
+    with pytest.raises(SshCommandTimeout):
+        executor.run(
+            profile_fixture(), make_environment(), "long-command", timeout=0.01
+        )
+    elapsed = time.monotonic() - started_at
+
+    assert group_signals == [
+        (process.pid, signal.SIGTERM),
+        (process.pid, signal.SIGKILL),
+    ]
+    assert process.reaped is True
+    assert process.stdout.closed_by_controller is True
+    assert process.stderr.closed_by_controller is True
+    assert elapsed < 0.25
 
 
 def test_confirms_presented_host_key_before_writing_and_then_uses_strict_ssh(
@@ -219,6 +336,85 @@ def test_confirms_presented_host_key_before_writing_and_then_uses_strict_ssh(
     assert "StrictHostKeyChecking=yes" in strict_argv
     assert f"UserKnownHostsFile={known_hosts}" in strict_argv
     assert strict_kwargs.get("shell", False) is False
+
+
+def test_reversed_multi_algorithm_scans_enroll_canonical_keys_for_strict_ssh(
+    tmp_path: Path, profile_fixture: Callable[..., ProxmoxProfile]
+) -> None:
+    known_hosts = create_known_hosts(tmp_path, "env-1")
+    captured: list[tuple[list[str], dict[str, Any]]] = []
+    presentations: list[HostKeyPresentation] = []
+    runner = queued_runner(
+        [
+            subprocess.CompletedProcess(
+                [], 0, f"{HOST_KEY}\n{ECDSA_HOST_KEY}\n".encode(), b""
+            ),
+            subprocess.CompletedProcess(
+                [], 0, f"{ECDSA_HOST_KEY}\n{HOST_KEY}\n".encode(), b""
+            ),
+            subprocess.CompletedProcess([], 0, b"strict connection worked", b""),
+        ],
+        captured,
+    )
+    executor = SshExecutor(tmp_path, runner=runner)
+
+    enrolled = executor.enroll_host_key(
+        profile_fixture(),
+        make_environment(),
+        lambda presentation: presentations.append(presentation) or True,
+    )
+    result = executor.run(profile_fixture(), make_environment(), "true", timeout=15)
+
+    assert enrolled is True
+    assert presentations[0].identities == (
+        (
+            "ecdsa-sha2-nistp256",
+            "SHA256:wFbCFYpC/3/eqItH2/i1w99qr86UggCPqsoNZRNimHM",
+        ),
+        (
+            "ssh-ed25519",
+            "SHA256:hXBw+k0I59jZzDV4ZC5NNDnXbG6HjQJobltlAdMlBms",
+        ),
+    )
+    assert known_hosts.read_text(encoding="utf-8") == (
+        f"{ECDSA_HOST_KEY}\n{HOST_KEY}\n"
+    )
+    assert result.stdout == "strict connection worked"
+    strict_argv, strict_kwargs = captured[-1]
+    assert "StrictHostKeyChecking=yes" in strict_argv
+    assert f"UserKnownHostsFile={known_hosts}" in strict_argv
+    assert strict_kwargs.get("shell", False) is False
+
+
+@pytest.mark.parametrize(
+    ("scan", "message"),
+    [
+        (f"{HOST_KEY}\n{HOST_KEY}\n".encode(), "duplicate"),
+        (f"{HOST_KEY}\n{CHANGED_HOST_KEY}\n".encode(), "conflicting"),
+        (b"192.0.2.10 ssh-ed25519 \xff\n", "invalid"),
+    ],
+)
+def test_rejects_ambiguous_or_malformed_host_key_scans_without_writing(
+    tmp_path: Path,
+    profile_fixture: Callable[..., ProxmoxProfile],
+    scan: bytes,
+    message: str,
+) -> None:
+    known_hosts = create_known_hosts(tmp_path, "env-1")
+    executor = SshExecutor(
+        tmp_path,
+        runner=queued_runner(
+            [subprocess.CompletedProcess([], 0, scan, b"")],
+            [],
+        ),
+    )
+
+    with pytest.raises(SshHostKeyError, match=message):
+        executor.enroll_host_key(
+            profile_fixture(), make_environment(), lambda presentation: True
+        )
+
+    assert known_hosts.read_text(encoding="utf-8") == ""
 
 
 def test_declined_host_key_is_not_written(

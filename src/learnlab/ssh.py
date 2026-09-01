@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
 import hashlib
 import ipaddress
 import os
 import shlex
+import signal
 import subprocess
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Protocol, cast
+from typing import IO, Protocol, cast
 
 from learnlab.errors import LearnLabError, redact
 
@@ -22,6 +25,7 @@ _CONNECT_TIMEOUT_SECONDS = 10
 _MAX_CAPTURED_OUTPUT_BYTES = 8 * 1024
 _MAX_HOST_KEY_SCAN_BYTES = 64 * 1024
 _PROCESS_TERMINATION_GRACE_SECONDS = 1.0
+_PROCESS_READER_JOIN_GRACE_SECONDS = 0.5
 _PROCESS_READ_CHUNK_BYTES = 64 * 1024
 _REDACTION_MARKER = "[REDACTED]"
 
@@ -250,10 +254,13 @@ def _run_bounded_process(
         start_new_session=True,
     )
     if process.stdout is None or process.stderr is None:
-        process.kill()
-        process.wait()
+        streams = tuple(
+            stream for stream in (process.stdout, process.stderr) if stream is not None
+        )
+        _cleanup_process(process, (), streams)
         raise LearnLabError("SSH process did not expose captured output")
 
+    streams = (process.stdout, process.stderr)
     stdout = bytearray()
     stderr = bytearray()
     drain_errors: list[BaseException] = []
@@ -269,29 +276,34 @@ def _run_bounded_process(
             daemon=True,
         ),
     )
-    for reader in readers:
-        reader.start()
-
-    timed_out = False
+    started_readers: list[threading.Thread] = []
     try:
-        return_code = process.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        return_code = _terminate_and_reap(process)
-    finally:
         for reader in readers:
-            reader.join()
+            reader.start()
+            started_readers.append(reader)
+        return_code = process.wait(timeout=timeout)
+    except BaseException:
+        _cleanup_process(process, tuple(started_readers), streams)
+        raise
+
+    try:
+        readers_finished = _join_readers_bounded(tuple(started_readers))
+    except BaseException:
+        _cleanup_process(process, tuple(started_readers), streams)
+        raise
+    if not readers_finished:
+        _cleanup_process(process, tuple(started_readers), streams)
+        raise LearnLabError("SSH output streams did not close")
+    _close_streams(streams)
 
     if drain_errors:
         error = drain_errors[0]
         raise LearnLabError(f"Unable to capture SSH output: {type(error).__name__}")
-    if timed_out:
-        raise subprocess.TimeoutExpired(argv, timeout)
     return subprocess.CompletedProcess(argv, return_code, bytes(stdout), bytes(stderr))
 
 
 def _drain_stream(
-    stream: BinaryIO,
+    stream: IO[bytes],
     captured: bytearray,
     capture_limit: int,
     errors: list[BaseException],
@@ -305,20 +317,82 @@ def _drain_stream(
         errors.append(error)
 
 
-def _terminate_and_reap(process: subprocess.Popen[bytes]) -> int:
-    """Terminate a timed-out SSH process, escalating once, and always reap it."""
+def _cleanup_process(
+    process: subprocess.Popen[bytes],
+    readers: tuple[threading.Thread, ...],
+    streams: tuple[IO[bytes], ...],
+) -> None:
+    """Best-effort bounded cleanup that preserves the original exception."""
+    forced_kill = False
+    with contextlib.suppress(BaseException):
+        _, forced_kill = _terminate_and_reap(process)
+
+    if not forced_kill:
+        readers_finished = False
+        with contextlib.suppress(BaseException):
+            readers_finished = _join_readers_bounded(readers)
+        if not readers_finished:
+            with contextlib.suppress(BaseException):
+                _kill_group_and_reap(process)
+
+    _close_streams(streams)
+    with contextlib.suppress(BaseException):
+        _join_readers_bounded(readers)
+
+
+def _join_readers_bounded(readers: tuple[threading.Thread, ...]) -> bool:
+    """Wait only a fixed grace period for all output drain threads."""
+    deadline = time.monotonic() + _PROCESS_READER_JOIN_GRACE_SECONDS
+    for reader in readers:
+        reader.join(timeout=max(0.0, deadline - time.monotonic()))
+    return all(not reader.is_alive() for reader in readers)
+
+
+def _close_streams(streams: tuple[IO[bytes], ...]) -> None:
+    """Close captured pipes so inherited writer descriptors cannot block return."""
+    for stream in streams:
+        with contextlib.suppress(BaseException):
+            stream.close()
+
+
+def _terminate_and_reap(
+    process: subprocess.Popen[bytes],
+) -> tuple[int, bool]:
+    """Terminate the SSH process group, escalate after a grace, and reap."""
+    _signal_process_group(process, signal.SIGTERM)
     try:
-        process.terminate()
-    except ProcessLookupError:
-        return process.wait()
-    try:
-        return process.wait(timeout=_PROCESS_TERMINATION_GRACE_SECONDS)
+        return process.wait(timeout=_PROCESS_TERMINATION_GRACE_SECONDS), False
     except subprocess.TimeoutExpired:
+        return _kill_group_and_reap(process), True
+
+
+def _kill_group_and_reap(process: subprocess.Popen[bytes]) -> int:
+    """Kill the SSH process group and reap its leader within a bounded grace."""
+    _signal_process_group(process, signal.SIGKILL)
+    return process.wait(timeout=_PROCESS_TERMINATION_GRACE_SECONDS)
+
+
+def _signal_process_group(
+    process: subprocess.Popen[bytes], sent_signal: signal.Signals
+) -> None:
+    """Signal the POSIX session created for SSH, with a portable leader fallback."""
+    pid = getattr(process, "pid", None)
+    killpg = getattr(os, "killpg", None)
+    if os.name == "posix" and isinstance(pid, int) and callable(killpg):
         try:
-            process.kill()
+            killpg(pid, sent_signal)
         except ProcessLookupError:
+            return
+        except OSError:
             pass
-        return process.wait()
+        else:
+            return
+
+    action = process.terminate if sent_signal is signal.SIGTERM else process.kill
+    try:
+        action()
+    except ProcessLookupError:
+        pass
 
 
 def _safe_output(output: bytes, secrets: set[str]) -> str:
@@ -409,10 +483,16 @@ def _parse_scanned_host_keys(
     output: bytes, target: str
 ) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
     """Validate keyscan output and derive OpenSSH-style SHA256 identities."""
-    lines: list[str] = []
-    identities: list[tuple[str, str]] = []
+    try:
+        decoded = output.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        raise SshHostKeyError("SSH host-key scan returned invalid key data") from None
+
+    records: list[tuple[str, str, bytes]] = []
+    seen_records: set[tuple[str, str]] = set()
+    keys_by_algorithm: dict[str, str] = {}
     expected_hosts = {target, f"[{target}]:22"}
-    for raw_line in output.decode("utf-8", errors="strict").splitlines():
+    for raw_line in decoded.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
@@ -426,11 +506,26 @@ def _parse_scanned_host_keys(
             key_blob = base64.b64decode(encoded_key, validate=True)
         except (binascii.Error, ValueError):
             raise SshHostKeyError("SSH host-key scan returned an invalid key") from None
-        fingerprint = base64.b64encode(hashlib.sha256(key_blob).digest()).decode()
-        lines.append(" ".join(parts))
-        identities.append((algorithm, f"SHA256:{fingerprint.rstrip('=')}"))
-    if not lines:
+
+        record = (algorithm, encoded_key)
+        if record in seen_records:
+            raise SshHostKeyError("SSH host-key scan returned a duplicate key")
+        if algorithm in keys_by_algorithm:
+            raise SshHostKeyError(
+                "SSH host-key scan returned conflicting keys for one algorithm"
+            )
+        seen_records.add(record)
+        keys_by_algorithm[algorithm] = encoded_key
+        records.append((algorithm, encoded_key, key_blob))
+    if not records:
         raise SshHostKeyError("SSH host-key scan returned no keys")
+
+    lines: list[str] = []
+    identities: list[tuple[str, str]] = []
+    for algorithm, encoded_key, key_blob in sorted(records):
+        fingerprint = base64.b64encode(hashlib.sha256(key_blob).digest()).decode()
+        lines.append(f"{target} {algorithm} {encoded_key}")
+        identities.append((algorithm, f"SHA256:{fingerprint.rstrip('=')}"))
     return tuple(lines), tuple(identities)
 
 

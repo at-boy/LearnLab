@@ -280,6 +280,22 @@ class ReplacingLifecycle:
         return EnvironmentResolution("created")
 
 
+class InterruptedReplacementLifecycle:
+    def __init__(self) -> None:
+        self.calls: list[bool] = []
+
+    def ensure_environment(
+        self,
+        request: StartRequest,
+        policy: EnvironmentPolicy,
+        replace_confirmed: bool = False,
+    ) -> EnvironmentResolution:
+        self.calls.append(replace_confirmed)
+        if not replace_confirmed:
+            return EnvironmentResolution("replacement_required")
+        raise ProvisioningInterrupted(PROVISIONING_INTERRUPTED_GUIDANCE)
+
+
 class NavigationPrompt:
     def __init__(self, lesson_actions: dict[str, SessionAction]) -> None:
         self.lesson_actions = lesson_actions
@@ -1119,6 +1135,53 @@ def test_provisioning_interrupt_is_distinct_from_resumable_lesson_interrupt(
     assert outcome == SessionOutcome(
         SessionAction.PROVISIONING_INTERRUPTED,
         "basics",
+        error=PROVISIONING_INTERRUPTED_GUIDANCE,
+    )
+    assert store.lesson_statuses(*COURSE_PATH) == {}
+    assert store.session_cursor(COURSE_PATH) is None
+
+
+def test_confirmed_replacement_interruption_maps_to_recovery_outcome(
+    tmp_path: Path,
+) -> None:
+    course = Course(
+        collection_id=COURSE_PATH[0],
+        id=COURSE_PATH[1],
+        title="Operations",
+        lessons=(
+            Lesson(
+                id="second",
+                title="Second",
+                steps=(
+                    Step(
+                        id="inspect",
+                        title="Inspect",
+                        instructions="Inspect the system.",
+                        verifications=(verification("resume-check"),),
+                    ),
+                ),
+            ),
+        ),
+        environment=EnvironmentPolicy(EnvironmentScope.LESSON, "demo.vm"),
+    )
+    store = StateStore(tmp_path / "state.db")
+    store.initialize()
+    lifecycle = InterruptedReplacementLifecycle()
+
+    outcome = CourseSession(
+        course=course,
+        store=store,
+        lifecycle=lifecycle,  # type: ignore[arg-type]
+        validators=ScriptedRegistry({"resume-check": [True]}),
+        prompt=ReplacementPrompt({}),
+        profile=FakeProfile(),
+        provider_type="fake",
+    ).run()
+
+    assert lifecycle.calls == [False, True]
+    assert outcome == SessionOutcome(
+        SessionAction.PROVISIONING_INTERRUPTED,
+        "second",
         error=PROVISIONING_INTERRUPTED_GUIDANCE,
     )
     assert store.lesson_statuses(*COURSE_PATH) == {}

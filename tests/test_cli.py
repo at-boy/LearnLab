@@ -245,6 +245,19 @@ class ReplacementSessionLifecycle(SessionLifecycle):
         return EnvironmentResolution("created")
 
 
+class InterruptedReplacementSessionLifecycle(ReplacementSessionLifecycle):
+    def ensure_environment(
+        self,
+        request: StartRequest,
+        policy: EnvironmentPolicy,
+        replace_confirmed: bool = False,
+    ) -> EnvironmentResolution:
+        self.calls.append((request.lesson.id, policy.scope, replace_confirmed))
+        if not replace_confirmed:
+            return EnvironmentResolution("replacement_required", self.existing)
+        raise ProvisioningInterrupted(PROVISIONING_INTERRUPTED_GUIDANCE)
+
+
 class BlockingSessionLifecycle(SessionLifecycle):
     def __init__(
         self,
@@ -1048,6 +1061,62 @@ def test_provisioning_interrupt_prints_destroy_guidance_without_resume_claim(
     assert "learnlab resume" not in result.stdout
     assert "secret" not in result.stdout
     assert store.lesson_statuses("proxmox", "proxmox-admin") == {}
+
+
+def test_replacement_interrupt_prints_destroy_guidance_without_resume_claim(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+) -> None:
+    from learnlab import cli
+
+    existing = EnvironmentRecord(
+        id="env-first",
+        collection_id="proxmox",
+        course_id="proxmox-admin",
+        lesson_id="first",
+        attempt_id=None,
+        profile_name="home-proxmox",
+        provider_type="proxmox",
+        phase=EnvironmentPhase.RUNNING,
+        vmid=117,
+        node="pve",
+        provider_endpoint="https://proxmox.example.test:8006",
+        provider_fingerprint="test-fingerprint",
+        expected_vm_name="learnlab-proxmox-admin-117",
+        environment_scope=EnvironmentScope.LESSON,
+        lesson_owner_id="first",
+    )
+    lifecycle = InterruptedReplacementSessionLifecycle(existing)
+    store, _ = install_session_cli(
+        monkeypatch,
+        tmp_xdg,
+        session_course(
+            EnvironmentScope.LESSON,
+            lessons=(session_lesson("second", "Second Lesson"),),
+        ),
+        lambda *args, **kwargs: lifecycle,
+    )
+    store.create_environment(existing)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["start", "proxmox/proxmox-admin"],
+        input="\ny\n",
+    )
+
+    assert result.exit_code == 130
+    assert PROVISIONING_INTERRUPTED_GUIDANCE in result.stdout
+    assert "learnlab destroy" in result.stdout
+    assert "Progress saved" not in result.stdout
+    assert "learnlab resume" not in result.stdout
+    assert lifecycle.calls == [
+        ("second", EnvironmentScope.LESSON, False),
+        ("second", EnvironmentScope.LESSON, True),
+    ]
+    retained = store.get_environment("env-first")
+    assert retained is not None
+    assert retained.vmid == 117
+    assert retained.phase is EnvironmentPhase.RUNNING
 
 
 def test_continue_emits_life_sign_while_second_lesson_provisioning_blocks(

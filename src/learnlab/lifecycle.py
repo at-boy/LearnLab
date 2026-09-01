@@ -201,6 +201,14 @@ class LifecycleService:
         """Destroy one confirmed record without erasing progress or attempts."""
         try:
             self._destroy_environment(confirmed_record)
+        except KeyboardInterrupt:
+            if self._store.get_environment(confirmed_record.id) is not None:
+                self._store.transition_environment(
+                    confirmed_record.id,
+                    EnvironmentPhase.FAILED,
+                    error_summary=PROVISIONING_INTERRUPTED_GUIDANCE,
+                )
+            raise ProvisioningInterrupted(PROVISIONING_INTERRUPTED_GUIDANCE) from None
         except Exception as error:
             summary = _safe_error_summary(error, self._secrets)
             if self._store.get_environment(confirmed_record.id) is not None:
