@@ -103,6 +103,13 @@ You may also resume an existing course explicitly:
 learnlab resume proxmox/proxmox-admin --provider home-proxmox
 ```
 
+While `start` or `resume` provisions or waits for an environment, LearnLab
+emits immediate lifecycle feedback. In an interactive terminal, one spinner
+line updates with the current stage, each polling retry attempt, elapsed time,
+and the ready result. In non-TTY output, it writes deterministic,
+newline-delimited stage messages and retry attempt numbers instead of spinner
+animation.
+
 Use `learnlab progress` to view the recorded lesson state. During a session,
 press `q` at a verification prompt, or choose save and exit after a lesson, to
 persist every completed check and leave safely. Run `start` or `resume` later

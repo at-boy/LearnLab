@@ -23,6 +23,20 @@ def test_authoring_and_packaged_curriculum_trees_are_byte_identical() -> None:
     )
 
 
+def test_readme_documents_interactive_lifecycle_feedback() -> None:
+    readme = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
+
+    for concept in (
+        "lifecycle feedback",
+        "retry attempt",
+        "elapsed time",
+        "ready",
+        "interactive terminal",
+        "newline-delimited",
+    ):
+        assert concept in readme
+
+
 def test_built_wheel_installs_with_curriculum_resources(tmp_path: Path) -> None:
     root = Path(__file__).parents[1]
     wheel_dir = tmp_path / "wheel"
