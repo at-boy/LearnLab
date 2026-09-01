@@ -179,6 +179,24 @@ class FakeSshRunner:
         return subprocess.CompletedProcess(argv, return_code, stdout, stderr)
 
 
+class FlushPublishingStream:
+    """Expose writes only after the renderer explicitly flushes them."""
+
+    def __init__(self) -> None:
+        self._staged = StringIO()
+        self._published = StringIO()
+
+    def write(self, value: str) -> int:
+        return self._staged.write(value)
+
+    def flush(self) -> None:
+        self._published.write(self._staged.getvalue())
+        self._staged = StringIO()
+
+    def getvalue(self) -> str:
+        return self._published.getvalue()
+
+
 @pytest.fixture
 def isolated_xdg(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     roots = {
@@ -292,7 +310,7 @@ def install_public_cli_fakes(
     provider: FakeProvider,
     ssh_runner: FakeSshRunner,
     *,
-    progress_output: StringIO | None = None,
+    progress_output: FlushPublishingStream | None = None,
 ) -> None:
     from learnlab import cli
 
@@ -343,7 +361,7 @@ def test_public_course_workflow_resumes_reuses_and_preserves_validated_state(
     )
     ssh_runner.set_results("check-service", (0, b"service ready", b""))
     ssh_runner.set_results("check-reused-system", (0, b"same system", b""))
-    progress_output = StringIO()
+    progress_output = FlushPublishingStream()
     install_public_cli_fakes(
         monkeypatch,
         full_course(),
@@ -486,17 +504,25 @@ def test_public_course_workflow_resumes_reuses_and_preserves_validated_state(
         verification_count = connection.execute(
             "SELECT count(*) FROM verification_progress WHERE status = 'passed'"
         ).fetchone()
+        step_rows = connection.execute(
+            "SELECT lesson_id, step_id, status, completed_at IS NOT NULL "
+            "FROM step_progress ORDER BY lesson_id, step_id"
+        ).fetchall()
     assert progress_rows == [
         ("first", "completed", "validated"),
         ("second", "completed", "validated"),
     ]
     assert verification_count == (5,)
+    assert step_rows == [
+        ("first", "prove-system", "completed", 1),
+        ("second", "reuse-system", "completed", 1),
+    ]
 
     combined_output = (
         progress_output.getvalue()
-        + start_result.stdout
-        + resume_result.stdout
-        + destroy_result.stdout
+        + start_result.output
+        + resume_result.output
+        + destroy_result.output
     )
     assert SECRET not in combined_output
     assert "[REDACTED]" in combined_output
