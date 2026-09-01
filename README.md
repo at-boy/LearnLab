@@ -87,17 +87,91 @@ template, storage, and network, but it cannot prove mutation-only permissions.
 learnlab provider test home-proxmox
 ```
 
-Start the included course and select a lesson at the prompt:
+## Learn through an interactive course session
+
+Start begins a new session or resumes saved local progress. It selects the
+first incomplete lesson by default and remains open while it guides you through
+each step and its checks:
 
 ```bash
 learnlab start proxmox/proxmox-admin --provider home-proxmox
 ```
 
-When a lesson is complete, record it explicitly:
+You may also resume an existing course explicitly:
+
+```bash
+learnlab resume proxmox/proxmox-admin --provider home-proxmox
+```
+
+Use `learnlab progress` to view the recorded lesson state. During a session,
+press `q` at a verification prompt, or choose save and exit after a lesson, to
+persist every completed check and leave safely. Run `start` or `resume` later
+to continue at the first incomplete verification; earlier passed checks remain
+recorded.
+
+### Environment scopes and safe replacement
+
+Curriculum chooses one environment scope rather than reading provider details
+from lesson files:
+
+- `course` creates one disposable environment and reuses it for the course.
+- `lesson` gives each lesson its own environment; moving to another lesson
+  displays the exact recorded VM and requires confirmation before replacement.
+- `none` skips provider configuration and secret resolution entirely.
+
+The included `proxmox/proxmox-admin` course uses `course` scope. Its shared VM
+is limited to read-only system inspection; the token lessons are conceptual.
+Course content never supplies a provider profile, endpoint, VMID, template,
+node, token, or other deployment value.
+
+For any VM scope, LearnLab reuses an environment only after its recorded
+profile, provider fingerprint, endpoint, VMID, and expected VM name all match.
+A mismatch fails closed and directs you to the destroy/recovery path. A
+lesson-scoped replacement is never implicit: declining its confirmation keeps
+the existing VM and your progress unchanged.
+
+### Verification progress
+
+Every step has a nonempty, ordered list of verifications. All are required: a
+step completes only after every check passes in the order shown. A course can
+combine repeated validator types, including the two read-only remote checks and
+two read-only provider checks in the included course. The supported types are:
+
+- `remote-command`: runs the curriculum-authored command non-interactively over
+  SSH and passes only on exit status zero.
+- `text-evidence`: compares your bounded response against a configured exact
+  value or regular expression.
+- `manual-confirmation`: records a clearly labeled self-attestation; it is not
+  objective verification.
+- `provider-check`: invokes a named read-only provider inspection and never
+  creates, starts, stops, reconfigures, or deletes infrastructure.
+
+LearnLab uses the configured SSH user and identity file with a per-environment
+`known_hosts` file, batch mode, and connection and command timeouts. It never
+disables host-key checking or writes to your normal SSH host-key database.
+Remote commands come from reviewed curriculum and are passed as one remote
+argument; LearnLab never turns learner text into a shell command.
+
+### Administrative progress override
+
+`progress complete` is an administrative override for exceptional recovery or
+course administration, not the normal learner flow. It asks for confirmation,
+records its provenance as `manual_override`, and reports that normal learners
+should use `start` or `resume`:
 
 ```bash
 learnlab progress complete proxmox/proxmox-admin/api-access
 ```
+
+Deliberate automation can bypass only that confirmation with `--yes`:
+
+```bash
+learnlab progress complete proxmox/proxmox-admin/api-access --yes
+```
+
+The override does not manufacture validator evidence or turn a self-attestation
+into an objective result. Review the recorded provenance when assessing course
+progress.
 
 Reset only the desired scope. Reset refuses to proceed if the scope still has
 an environment that must first be destroyed:

@@ -185,7 +185,10 @@ def test_step_accepts_repeated_validator_types_in_order(course):
     assert [item.type for item in checks] == [
         VerificationType.REMOTE_COMMAND,
         VerificationType.REMOTE_COMMAND,
+        VerificationType.PROVIDER_CHECK,
+        VerificationType.PROVIDER_CHECK,
         VerificationType.TEXT_EVIDENCE,
+        VerificationType.MANUAL_CONFIRMATION,
     ]
 
 

@@ -4,26 +4,41 @@ steps:
   - id: understand-api
     title: Understand the API boundary
     instructions: >-
-      An API lets a program request information or actions through a defined
-      interface. Treat it as a deliberate boundary with its own permissions,
-      audit trail, and documentation.
+      Use the shared disposable learning VM only for the read-only inspection
+      below. An API lets a program request information or actions through a
+      defined interface. Treat it as a deliberate boundary with its own
+      permissions, audit trail, and documentation.
     verifications:
-      - id: api-release
+      - id: operating-system-present
         type: remote-command
-        command: test -f /etc/os-release
-      - id: api-ssh
+        command: test -r /etc/os-release
+        failure_message: The learning VM must expose its operating-system metadata.
+      - id: ssh-service-active
         type: remote-command
         command: systemctl is-active --quiet sshd
+        failure_message: The SSH service must be active before remote inspection.
+      - id: learning-vm-running
+        type: provider-check
+        check: vm-running
+        failure_message: Wait for the disposable learning VM to report as running.
+      - id: learning-vm-agent-ready
+        type: provider-check
+        check: guest-agent-ready
+        failure_message: Wait for the disposable learning VM guest agent to respond.
       - id: explain-api
         type: text-evidence
         prompt: What does an API provide to a program?
         matches: '(?i)interface|boundary'
+      - id: reviewed-system-state
+        type: manual-confirmation
+        prompt: Confirm that you reviewed the read-only system checks and their output.
   - id: locate-endpoint
     title: Locate the documented interface
     instructions: >-
       Before automating, identify the API interface from your administrator's
       documentation and confirm which actions your learning exercise is meant
-      to discuss. Do not copy connection details into course notes.
+      to discuss. Do not copy connection details, token values, or other
+      deployment data into course notes.
     verifications:
       - id: reviewed-endpoint-guidance
         type: manual-confirmation

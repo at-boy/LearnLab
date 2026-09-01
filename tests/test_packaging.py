@@ -7,6 +7,22 @@ import zipfile
 from pathlib import Path
 
 
+def _curriculum_files(root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def test_authoring_and_packaged_curriculum_trees_are_byte_identical() -> None:
+    root = Path(__file__).parents[1]
+
+    assert _curriculum_files(root / "collections") == _curriculum_files(
+        root / "src" / "learnlab" / "collections"
+    )
+
+
 def test_built_wheel_installs_with_curriculum_resources(tmp_path: Path) -> None:
     root = Path(__file__).parents[1]
     wheel_dir = tmp_path / "wheel"
@@ -39,8 +55,12 @@ def test_built_wheel_installs_with_curriculum_resources(tmp_path: Path) -> None:
     [wheel] = wheel_dir.glob("learnlab-*.whl")
     with zipfile.ZipFile(wheel) as archive:
         names = set(archive.namelist())
+        archive.extractall(tmp_path / "extracted")  # noqa: S202 - test wheel only
     assert "learnlab/collections/proxmox/collection.yaml" in names
     assert "learnlab/collections/proxmox/courses/proxmox-admin/course.yaml" in names
+    assert _curriculum_files(root / "collections") == _curriculum_files(
+        tmp_path / "extracted" / "learnlab" / "collections"
+    )
 
     installed = tmp_path / "installed"
     subprocess.run(  # noqa: S603 - fixed interpreter and wheel path
@@ -66,9 +86,13 @@ def test_built_wheel_installs_with_curriculum_resources(tmp_path: Path) -> None:
             sys.executable,
             "-c",
             (
-                "from learnlab.cli import _default_catalog; "
-                "course = _default_catalog().load_course('proxmox/proxmox-admin'); "
-                "print(course.id, course.requirements)"
+                "from learnlab.curriculum import CurriculumCatalog; "
+                "from importlib.resources import files; "
+                "course = CurriculumCatalog(files('learnlab') / 'collections')"
+                ".load_course('proxmox/proxmox-admin'); "
+                "print(course.environment.scope.value); "
+                "print(','.join(check.type.value for check in "
+                "course.lessons[0].steps[0].verifications))"
             ),
         ],
         check=True,
@@ -77,4 +101,8 @@ def test_built_wheel_installs_with_curriculum_resources(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
     )
-    assert result.stdout.strip() == "proxmox-admin ('proxmox.api',)"
+    assert result.stdout.splitlines() == [
+        "course",
+        "remote-command,remote-command,provider-check,provider-check,"
+        "text-evidence,manual-confirmation",
+    ]

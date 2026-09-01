@@ -37,6 +37,7 @@ from learnlab.providers.registry import build_provider
 from learnlab.session import CourseSession, SessionAction, SessionOutcome, SessionPrompt
 from learnlab.ssh import SshExecutor
 from learnlab.state import (
+    CompletionSource,
     ProgressStatus,
     StateConflictError,
     StateStore,
@@ -626,8 +627,11 @@ def reset_scope(
 
 
 @progress_app.command("complete")
-def progress_complete(lesson_path: str) -> None:
-    """Explicitly mark one known curriculum lesson completed."""
+def progress_complete(
+    lesson_path: str,
+    yes: bool = typer.Option(False, "--yes"),
+) -> None:
+    """Administratively override one known curriculum lesson as completed."""
     try:
         collection_id, course_id, lesson_id = _split_lesson_path(lesson_path)
         course = catalog_factory().load_course(f"{collection_id}/{course_id}")
@@ -635,7 +639,19 @@ def progress_complete(lesson_path: str) -> None:
             raise CurriculumError(f"Unknown lesson: {lesson_id}")
         store = state_store_factory()
         store.initialize()
-        store.complete_lesson(collection_id, course_id, lesson_id)
+        typer.echo(
+            "This is an administrative override, not verified learning progress."
+        )
+        typer.echo("Normal learners should complete lessons through start or resume.")
+        if not yes and not typer.confirm(f"Mark {lesson_path} as completed?"):
+            typer.echo("Cancelled.")
+            return
+        store.complete_lesson(
+            collection_id,
+            course_id,
+            lesson_id,
+            source=CompletionSource.MANUAL_OVERRIDE,
+        )
     except LearnLabError as error:
         _exit_with_error(error)
 

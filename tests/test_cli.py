@@ -31,6 +31,7 @@ from learnlab.progress import ProgressEvent, ProgressKind
 from learnlab.providers.base import ProviderCheck, ProviderHealth
 from learnlab.session import SessionAction, SessionOutcome
 from learnlab.state import (
+    CompletionSource,
     EnvironmentPhase,
     EnvironmentRecord,
     ProgressStatus,
@@ -1176,11 +1177,35 @@ def test_start_warns_when_tls_verification_is_disabled_before_connection_details
     assert result.stdout.index(warning) < result.stdout.index("Lesson: API Access")
 
 
-def test_progress_complete_advances_later_start_default(
+def test_progress_complete_requires_administrative_override_confirmation(
+    app_harness: AppHarness,
+) -> None:
+    cancelled = app_harness.invoke(
+        ["progress", "complete", "proxmox/proxmox-admin/api-access"], input="n\n"
+    )
+
+    assert cancelled.exit_code == 0
+    assert "administrative override" in cancelled.stdout
+    assert app_harness.store.completed_lessons("proxmox", "proxmox-admin") == set()
+
+    confirmed = app_harness.invoke(
+        ["progress", "complete", "proxmox/proxmox-admin/api-access"], input="y\n"
+    )
+
+    assert confirmed.exit_code == 0
+    assert "Normal learners should complete lessons through start or resume" in (
+        confirmed.stdout
+    )
+    assert app_harness.store.lesson_completion_source(
+        ("proxmox", "proxmox-admin", "api-access")
+    ) is CompletionSource.MANUAL_OVERRIDE
+
+
+def test_progress_complete_yes_advances_later_start_default(
     app_harness: AppHarness,
 ) -> None:
     completed = app_harness.invoke(
-        ["progress", "complete", "proxmox/proxmox-admin/api-access"]
+        ["progress", "complete", "proxmox/proxmox-admin/api-access", "--yes"]
     )
     started = app_harness.invoke(
         ["start", "proxmox/proxmox-admin"],
