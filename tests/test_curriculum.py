@@ -194,6 +194,40 @@ def test_list_courses_reports_malformed_collection(tmp_path: Path) -> None:
         CurriculumCatalog(collections).list_courses()
 
 
+def test_list_courses_reports_missing_collections_directory(tmp_path: Path) -> None:
+    collections = tmp_path / "missing"
+
+    with pytest.raises(CurriculumError, match=r"missing.*directory"):
+        CurriculumCatalog(collections).list_courses()
+
+
+@pytest.mark.parametrize("courses_entry", ["missing", "file"])
+def test_list_courses_reports_invalid_courses_directory(
+    tmp_path: Path, courses_entry: str
+) -> None:
+    collections = tmp_path / "collections"
+    collection = collections / "alpha"
+    collection.mkdir(parents=True)
+    (collection / "collection.yaml").write_text(
+        "id: alpha\ntitle: Alpha\n", encoding="utf-8"
+    )
+    if courses_entry == "file":
+        (collection / "courses").write_text("not a directory", encoding="utf-8")
+
+    with pytest.raises(CurriculumError, match=r"alpha/courses.*directory"):
+        CurriculumCatalog(collections).list_courses()
+
+
+def test_list_courses_reports_malformed_course(tmp_path: Path) -> None:
+    collections = tmp_path / "collections"
+    _write_discovery_course(collections, "alpha", "bad", "Bad")
+    course_file = collections / "alpha" / "courses" / "bad" / "course.yaml"
+    course_file.write_text("id: bad\ntitle: Bad\n", encoding="utf-8")
+
+    with pytest.raises(CurriculumError, match=r"bad/course\.yaml"):
+        CurriculumCatalog(collections).list_courses()
+
+
 @pytest.fixture
 def course(collections_dir: Path):
     return CurriculumCatalog(collections_dir).load_course("proxmox/proxmox-admin")

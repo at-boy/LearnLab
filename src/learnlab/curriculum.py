@@ -147,7 +147,7 @@ class CurriculumCatalog:
         """Return every valid course in stable collection and course order."""
         summaries: list[CourseSummary] = []
         collection_dirs = sorted(
-            (child for child in self.collections_dir.iterdir() if child.is_dir()),
+            _directory_children(self.collections_dir),
             key=lambda child: child.name,
         )
         for collection_dir in collection_dirs:
@@ -158,7 +158,7 @@ class CurriculumCatalog:
                 )
             courses_dir = collection_dir / "courses"
             course_dirs = sorted(
-                (child for child in courses_dir.iterdir() if child.is_dir()),
+                _directory_children(courses_dir),
                 key=lambda child: child.name,
             )
             for course_dir in course_dirs:
@@ -267,6 +267,13 @@ class CurriculumCatalog:
             steps=steps,
             environment=environment,
         )
+
+
+def _directory_children(path: Traversable) -> tuple[Traversable, ...]:
+    try:
+        return tuple(child for child in path.iterdir() if child.is_dir())
+    except OSError as error:
+        raise CurriculumError(f"{path}: expected a directory") from error
 
 
 def _load_mapping(path: Traversable) -> dict[str, Any]:
