@@ -31,6 +31,8 @@ _PROFILE_KEYS = {
     "ssh_identity_file",
     "tls_verify",
 }
+_PROFILE_OPTIONAL_KEYS = {"template_capabilities"}
+_CAPABILITY_ID = re.compile(r"[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*\Z")
 _HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 
 
@@ -48,6 +50,7 @@ class ProxmoxProfile:
     ssh_user: str
     ssh_identity_file: Path
     tls_verify: bool
+    template_capabilities: tuple[str, ...] = ()
 
     @property
     def fingerprint(self) -> str:
@@ -201,9 +204,10 @@ def _requested_profile_result(
 
 
 def _parse_proxmox_profile(name: str, data: dict[str, Any]) -> ProxmoxProfile:
-    if set(data) != _PROFILE_KEYS:
+    allowed_keys = _PROFILE_KEYS | _PROFILE_OPTIONAL_KEYS
+    if not _PROFILE_KEYS.issubset(data) or not set(data).issubset(allowed_keys):
         missing = sorted(_PROFILE_KEYS - set(data))
-        unknown = sorted(set(data) - _PROFILE_KEYS)
+        unknown = sorted(set(data) - allowed_keys)
         details = []
         if missing:
             details.append(f"missing keys: {', '.join(missing)}")
@@ -232,6 +236,9 @@ def _parse_proxmox_profile(name: str, data: dict[str, Any]) -> ProxmoxProfile:
         raise ConfigurationError(
             f"Provider profile {name} tls_verify must be a boolean"
         )
+    template_capabilities = _capability_list(
+        data.get("template_capabilities", []), "template_capabilities", name
+    )
 
     return ProxmoxProfile(
         name=name,
@@ -248,7 +255,28 @@ def _parse_proxmox_profile(name: str, data: dict[str, Any]) -> ProxmoxProfile:
             _required_string(data, "ssh_identity_file", name)
         ).expanduser(),
         tls_verify=tls_verify,
+        template_capabilities=template_capabilities,
     )
+
+
+def _capability_list(value: object, key: str, profile_name: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ConfigurationError(
+            f"Provider profile {profile_name} {key} must be an explicit list"
+        )
+    capabilities = tuple(value)
+    if not all(
+        isinstance(capability, str) and _CAPABILITY_ID.fullmatch(capability)
+        for capability in capabilities
+    ):
+        raise ConfigurationError(
+            f"Provider profile {profile_name} {key} entries must be capability IDs"
+        )
+    if len(set(capabilities)) != len(capabilities):
+        raise ConfigurationError(
+            f"Provider profile {profile_name} has duplicate {key} IDs"
+        )
+    return capabilities
 
 
 def _required_string(data: dict[str, Any], key: str, profile_name: str) -> str:

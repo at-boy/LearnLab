@@ -26,6 +26,8 @@ ssh_identity_file = "~/.ssh/learning-platform"
 tls_verify = true
 """
 
+CAPABILITIES = 'template_capabilities = ["os.debian.13", "tool.curl"]\n'
+
 
 def test_loads_named_proxmox_profile(tmp_path):
     config = tmp_path / "config.toml"
@@ -39,6 +41,37 @@ def test_loads_named_proxmox_profile(tmp_path):
     assert profile.api_url == "https://proxmox.example.test:8006"
     assert profile.tls_verify is True
     assert profile.ssh_identity_file.name == "learning-platform"
+    assert profile.template_capabilities == ()
+
+
+def test_profile_loads_template_capabilities(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text(CONFIG + CAPABILITIES, encoding="utf-8")
+
+    profile = load_settings(config).provider("home-proxmox")
+
+    assert profile.template_capabilities == ("os.debian.13", "tool.curl")
+
+
+@pytest.mark.parametrize(
+    "capabilities",
+    [
+        '"os.nixos"',
+        '["OS.nixos"]',
+        '["os/debian/13"]',
+        '["os.nixos", "os.nixos"]',
+    ],
+)
+def test_profile_rejects_invalid_template_capabilities(
+    tmp_path, capabilities: str
+) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(
+        CONFIG + f"template_capabilities = {capabilities}\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ConfigurationError, match="template_capabilities"):
+        load_settings(config)
 
 
 def test_secret_is_resolved_only_from_named_environment(

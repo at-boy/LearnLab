@@ -14,7 +14,8 @@ import yaml
 from learnlab.errors import LearnLabError
 
 _STABLE_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
-_CAPABILITY_ID = re.compile(r"[a-z][a-z0-9]*(?:[.-][a-z][a-z0-9]*)*\Z")
+_CAPABILITY_ID = re.compile(r"[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*\Z")
+_REQUIREMENTS_WARNING = "requirements is deprecated; use environment.guest_capabilities"
 MAX_EVIDENCE_BYTES = 8 * 1024
 
 
@@ -43,6 +44,7 @@ class VerificationType(StrEnum):
 class EnvironmentPolicy:
     scope: EnvironmentScope
     provider_capability: str | None = None
+    guest_capabilities: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,7 @@ class Course:
     lessons: tuple[Lesson, ...]
     requirements: tuple[str, ...] = ()
     environment: EnvironmentPolicy = EnvironmentPolicy(EnvironmentScope.NONE)
+    curriculum_warnings: tuple[str, ...] = ()
 
     def effective_environment(self, lesson: Lesson) -> EnvironmentPolicy:
         """Return the lesson override when present, otherwise the course policy."""
@@ -194,8 +197,26 @@ class CurriculumCatalog:
             raise CurriculumError(f"{course_file}: ID does not match directory")
         title = _required_string(course_data, "title", course_file)
         lesson_ids = _required_id_list(course_data, "lessons", course_file)
-        requirements = _optional_capabilities(course_data, course_file)
         environment = _required_environment(course_data, course_file)
+        requirements = _optional_capabilities(course_data, course_file)
+        curriculum_warnings: tuple[str, ...] = ()
+        if "requirements" in course_data:
+            if environment.scope is EnvironmentScope.NONE:
+                raise CurriculumError(
+                    f"{course_file}: requirements is forbidden for none "
+                    "environment scope"
+                )
+            if "guest_capabilities" in course_data["environment"]:
+                raise CurriculumError(
+                    f"{course_file}: requirements cannot be combined with "
+                    "environment.guest_capabilities"
+                )
+            environment = EnvironmentPolicy(
+                scope=environment.scope,
+                provider_capability=environment.provider_capability,
+                guest_capabilities=requirements,
+            )
+            curriculum_warnings = (_REQUIREMENTS_WARNING,)
 
         lessons = tuple(
             self._load_lesson(course_dir, lesson_id, environment)
@@ -208,6 +229,7 @@ class CurriculumCatalog:
             lessons=lessons,
             requirements=requirements,
             environment=environment,
+            curriculum_warnings=curriculum_warnings,
         )
 
     def _split_course_path(self, course_path: str) -> tuple[str, str]:
@@ -392,6 +414,8 @@ def _parse_environment(value: object, path: Traversable) -> EnvironmentPolicy:
     keys = {"scope"}
     if "provider_capability" in value:
         keys.add("provider_capability")
+    if "guest_capabilities" in value:
+        keys.add("guest_capabilities")
     _require_exact_keys(value, keys, path)
     scope_value = _required_string(value, "scope", path)
     try:
@@ -404,6 +428,10 @@ def _parse_environment(value: object, path: Traversable) -> EnvironmentPolicy:
             raise CurriculumError(
                 f"{path}: provider_capability is forbidden for none environment scope"
             )
+        if "guest_capabilities" in value:
+            raise CurriculumError(
+                f"{path}: guest_capabilities is forbidden for none environment scope"
+            )
         return EnvironmentPolicy(scope=scope)
     capability = value.get("provider_capability")
     if not isinstance(capability, str) or not _CAPABILITY_ID.fullmatch(capability):
@@ -411,7 +439,14 @@ def _parse_environment(value: object, path: Traversable) -> EnvironmentPolicy:
             f"{path}: provider_capability must be a capability ID for "
             f"{scope.value} environment scope"
         )
-    return EnvironmentPolicy(scope=scope, provider_capability=capability)
+    guest_capabilities = _capability_list(
+        value.get("guest_capabilities", ()), "guest_capabilities", path
+    )
+    return EnvironmentPolicy(
+        scope=scope,
+        provider_capability=capability,
+        guest_capabilities=guest_capabilities,
+    )
 
 
 def _required_verifications(
@@ -554,15 +589,18 @@ def _validate_id(value: object, key: str, path: Traversable) -> str:
 def _optional_capabilities(
     data: Mapping[str, Any], path: Traversable
 ) -> tuple[str, ...]:
-    value = data.get("requirements", ())
+    return _capability_list(data.get("requirements", ()), "requirements", path)
+
+
+def _capability_list(value: object, key: str, path: Traversable) -> tuple[str, ...]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
-        raise CurriculumError(f"{path}: requirements must be an explicit list")
-    requirements = tuple(value)
+        raise CurriculumError(f"{path}: {key} must be an explicit list")
+    capabilities = tuple(value)
     if not all(
-        isinstance(requirement, str) and _CAPABILITY_ID.fullmatch(requirement)
-        for requirement in requirements
+        isinstance(capability, str) and _CAPABILITY_ID.fullmatch(capability)
+        for capability in capabilities
     ):
-        raise CurriculumError(f"{path}: requirements entries must be capability IDs")
-    if len(set(requirements)) != len(requirements):
-        raise CurriculumError(f"{path}: duplicate requirements IDs")
-    return requirements
+        raise CurriculumError(f"{path}: {key} entries must be capability IDs")
+    if len(set(capabilities)) != len(capabilities):
+        raise CurriculumError(f"{path}: duplicate {key} IDs")
+    return capabilities

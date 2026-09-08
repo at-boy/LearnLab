@@ -65,10 +65,11 @@ class CurriculumBuilder:
         self.course_data["environment"] = environment
         return self
 
-    def scope(self, scope: str) -> CurriculumBuilder:
+    def scope(self, scope: str, **environment_values: object) -> CurriculumBuilder:
         environment: dict[str, Any] = {"scope": scope}
         if scope != "none":
             environment["provider_capability"] = "proxmox.vm"
+        environment.update(environment_values)
         return self.course_environment(environment)
 
     def lesson_environment(self, environment: dict[str, Any]) -> CurriculumBuilder:
@@ -255,6 +256,100 @@ def test_first_incomplete_returns_first_lesson_when_all_are_completed(course):
 
 def test_course_loads_abstract_capability_requirements(course):
     assert course.requirements == ("proxmox.api",)
+
+
+def test_legacy_requirements_become_guest_capabilities_and_warn_once(course):
+    assert course.environment.guest_capabilities == ("proxmox.api",)
+    assert course.curriculum_warnings == (
+        "requirements is deprecated; use environment.guest_capabilities",
+    )
+
+
+def test_vm_environment_loads_guest_capabilities(
+    curriculum_builder: CurriculumBuilder,
+) -> None:
+    curriculum_builder.scope("course", guest_capabilities=["os.debian.13", "tool.curl"])
+
+    loaded = curriculum_builder.load()
+
+    assert loaded.environment.guest_capabilities == ("os.debian.13", "tool.curl")
+    assert loaded.curriculum_warnings == ()
+
+
+def test_lesson_environment_override_replaces_guest_capabilities(
+    curriculum_builder: CurriculumBuilder,
+) -> None:
+    curriculum_builder.scope("course", guest_capabilities=["os.nixos"])
+    curriculum_builder.lesson_environment(
+        {
+            "scope": "lesson",
+            "provider_capability": "proxmox.vm",
+            "guest_capabilities": ["os.debian.13", "tool.curl"],
+        }
+    )
+
+    loaded = curriculum_builder.load()
+
+    assert loaded.effective_environment(loaded.lessons[0]).guest_capabilities == (
+        "os.debian.13",
+        "tool.curl",
+    )
+
+
+def test_vm_environment_allows_missing_os_capability(
+    curriculum_builder: CurriculumBuilder,
+) -> None:
+    curriculum_builder.scope("course", guest_capabilities=["tool.curl"])
+
+    assert curriculum_builder.load().environment.guest_capabilities == ("tool.curl",)
+
+
+def test_none_environment_rejects_guest_capabilities(
+    curriculum_builder: CurriculumBuilder,
+) -> None:
+    curriculum_builder.scope("none", guest_capabilities=["os.nixos"])
+
+    with pytest.raises(CurriculumError, match="forbidden"):
+        curriculum_builder.load()
+
+
+@pytest.mark.parametrize(
+    "guest_capabilities",
+    [
+        "os.nixos",
+        ["OS.nixos"],
+        ["os/debian/13"],
+        ["os.nixos", "os.nixos"],
+    ],
+)
+def test_vm_environment_rejects_invalid_guest_capabilities(
+    curriculum_builder: CurriculumBuilder, guest_capabilities: object
+) -> None:
+    curriculum_builder.scope("course", guest_capabilities=guest_capabilities)
+
+    with pytest.raises(CurriculumError, match="guest_capabilities"):
+        curriculum_builder.load()
+
+
+def test_course_rejects_requirements_with_guest_capabilities(
+    curriculum_builder: CurriculumBuilder,
+) -> None:
+    curriculum_builder.course_data["requirements"] = ["os.nixos"]
+    curriculum_builder.scope("course", guest_capabilities=["os.nixos"])
+
+    with pytest.raises(CurriculumError, match="requirements.*guest_capabilities"):
+        curriculum_builder.load()
+
+
+def test_none_environment_rejects_legacy_requirements(
+    curriculum_builder: CurriculumBuilder,
+) -> None:
+    curriculum_builder.course_data["requirements"] = ["os.nixos"]
+    curriculum_builder.scope("none")
+    curriculum_builder.verifications([TEXT_EVIDENCE])
+
+    with pytest.raises(CurriculumError, match="requirements.*forbidden"):
+        curriculum_builder.load()
 
 
 def test_lesson_environment_override_wins_over_course(tmp_curriculum):
