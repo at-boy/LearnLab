@@ -25,6 +25,14 @@ from learnlab.providers.base import ProviderCheck, ProviderHealth, VmLocation
 from learnlab.state import EnvironmentRecord
 
 _PROXMOX_NODE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+_KNOWN_PROVIDER_CHECKS = frozenset(
+    {"api-reachable", "template-visible", "vm-running", "guest-agent-ready"}
+)
+
+
+def known_provider_checks() -> frozenset[str]:
+    """Return supported read-only checks without constructing a provider."""
+    return _KNOWN_PROVIDER_CHECKS
 
 
 class ProxmoxProvider:
@@ -188,13 +196,7 @@ class ProxmoxProvider:
         self, check: str, environment: EnvironmentRecord | None
     ) -> ProviderCheck:
         """Run one explicitly named provider check without changing state."""
-        known_checks = {
-            "api-reachable",
-            "template-visible",
-            "vm-running",
-            "guest-agent-ready",
-        }
-        if check not in known_checks:
+        if check not in _KNOWN_PROVIDER_CHECKS:
             raise ValueError(f"Unknown provider check: {check}")
         if check in {"vm-running", "guest-agent-ready"} and environment is None:
             raise ValueError(f"Provider check {check} requires an environment")
