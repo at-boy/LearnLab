@@ -15,14 +15,6 @@ def _curriculum_files(root: Path) -> dict[str, bytes]:
     }
 
 
-def test_authoring_and_packaged_curriculum_trees_are_byte_identical() -> None:
-    root = Path(__file__).parents[1]
-
-    assert _curriculum_files(root / "collections") == _curriculum_files(
-        root / "src" / "learnlab" / "collections"
-    )
-
-
 def test_readme_documents_interactive_lifecycle_feedback() -> None:
     readme = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
 
@@ -72,8 +64,10 @@ def test_built_wheel_installs_with_curriculum_resources(tmp_path: Path) -> None:
         archive.extractall(tmp_path / "extracted")  # noqa: S202 - test wheel only
     assert "learnlab/collections/proxmox/collection.yaml" in names
     assert "learnlab/collections/proxmox/courses/proxmox-admin/course.yaml" in names
-    assert _curriculum_files(root / "collections") == _curriculum_files(
-        tmp_path / "extracted" / "learnlab" / "collections"
+    canonical_curriculum = root / "src" / "learnlab" / "collections"
+    installed_curriculum = tmp_path / "extracted" / "learnlab" / "collections"
+    assert _curriculum_files(canonical_curriculum) == _curriculum_files(
+        installed_curriculum
     )
 
     installed = tmp_path / "installed"

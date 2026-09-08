@@ -129,8 +129,48 @@ class Collection:
 
 
 @dataclass(frozen=True)
+class CourseSummary:
+    collection_id: str
+    course_id: str
+    title: str
+
+    @property
+    def path(self) -> str:
+        return f"{self.collection_id}/{self.course_id}"
+
+
+@dataclass(frozen=True)
 class CurriculumCatalog:
     collections_dir: Traversable
+
+    def list_courses(self) -> tuple[CourseSummary, ...]:
+        """Return every valid course in stable collection and course order."""
+        summaries: list[CourseSummary] = []
+        collection_dirs = sorted(
+            (child for child in self.collections_dir.iterdir() if child.is_dir()),
+            key=lambda child: child.name,
+        )
+        for collection_dir in collection_dirs:
+            collection = self._load_collection(collection_dir / "collection.yaml")
+            if collection.id != collection_dir.name:
+                raise CurriculumError(
+                    f"{collection_dir / 'collection.yaml'}: ID does not match directory"
+                )
+            courses_dir = collection_dir / "courses"
+            course_dirs = sorted(
+                (child for child in courses_dir.iterdir() if child.is_dir()),
+                key=lambda child: child.name,
+            )
+            for course_dir in course_dirs:
+                course = self.load_course(f"{collection.id}/{course_dir.name}")
+                summaries.append(
+                    CourseSummary(
+                        collection_id=collection.id,
+                        course_id=course.id,
+                        title=course.title,
+                    )
+                )
+        return tuple(summaries)
 
     def load_course(self, course_path: str) -> Course:
         """Load one collection/course path with its explicitly ordered lessons."""

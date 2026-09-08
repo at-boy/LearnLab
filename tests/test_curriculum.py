@@ -112,7 +112,86 @@ def tmp_curriculum(curriculum_builder: CurriculumBuilder):
 
 @pytest.fixture
 def collections_dir() -> Path:
-    return Path(__file__).parents[1] / "collections"
+    return Path(__file__).parents[1] / "src" / "learnlab" / "collections"
+
+
+def _write_discovery_course(
+    collections_dir: Path, collection_id: str, course_id: str, title: str
+) -> None:
+    collection_dir = collections_dir / collection_id
+    course_dir = collection_dir / "courses" / course_id
+    course_dir.mkdir(parents=True)
+    (collection_dir / "collection.yaml").write_text(
+        yaml.safe_dump(
+            {"id": collection_id, "title": collection_id.title()}, sort_keys=False
+        ),
+        encoding="utf-8",
+    )
+    (course_dir / "course.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "id": course_id,
+                "title": title,
+                "lessons": ["first"],
+                "environment": {"scope": "none"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    lesson_dir = course_dir / "lessons" / "00-first"
+    lesson_dir.mkdir(parents=True)
+    (lesson_dir / "lesson.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "id": "first",
+                "title": "First",
+                "steps": [
+                    {
+                        "id": "read",
+                        "title": "Read",
+                        "instructions": "Read this.",
+                        "verifications": [
+                            {
+                                "id": "confirm",
+                                "type": "manual-confirmation",
+                                "prompt": "Done?",
+                            }
+                        ],
+                    }
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_list_courses_is_complete_and_stably_sorted(tmp_path: Path) -> None:
+    collections = tmp_path / "collections"
+    _write_discovery_course(collections, "zeta", "last", "Last")
+    _write_discovery_course(collections, "alpha", "two", "Two")
+    _write_discovery_course(collections, "alpha", "one", "One")
+    (collections / "ignored.txt").write_text("ignored", encoding="utf-8")
+
+    catalog = CurriculumCatalog(collections)
+
+    assert [item.path for item in catalog.list_courses()] == [
+        "alpha/one",
+        "alpha/two",
+        "zeta/last",
+    ]
+    assert [item.title for item in catalog.list_courses()] == ["One", "Two", "Last"]
+
+
+def test_list_courses_reports_malformed_collection(tmp_path: Path) -> None:
+    collections = tmp_path / "collections"
+    bad_collection = collections / "bad"
+    bad_collection.mkdir(parents=True)
+    (bad_collection / "collection.yaml").write_text("title: Bad\n", encoding="utf-8")
+
+    with pytest.raises(CurriculumError, match=r"bad/collection\.yaml"):
+        CurriculumCatalog(collections).list_courses()
 
 
 @pytest.fixture
