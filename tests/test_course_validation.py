@@ -115,6 +115,7 @@ def test_validation_isolates_lesson_layout_errors_from_other_courses(
         "demo/bad-layout",
         "demo/bad-schema",
     ]
+    assert report.errors[0].source_path == "demo/courses/bad-layout/lessons"
     assert [(finding.course_path, finding.code) for finding in report.warnings] == [
         ("demo/linted", "broad-yes-no-regex")
     ]

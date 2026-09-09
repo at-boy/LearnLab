@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 from importlib.resources.abc import Traversable
+from pathlib import Path
 
 from learnlab.curriculum import (
     Course,
@@ -399,6 +400,16 @@ def _course_source(course_path: str) -> str:
 def _source_from_error(
     error: CurriculumError | OSError, root: Traversable, default: str
 ) -> str:
+    if isinstance(error, OSError):
+        if not isinstance(error.filename, str):
+            return default
+        try:
+            relative = Path(error.filename).relative_to(Path(str(root)))
+        except ValueError:
+            return default
+        if not relative.parts or ".." in relative.parts:
+            return default
+        return relative.as_posix()
     message = str(error)
     root_text = str(root).rstrip("/")
     marker = f"{root_text}/"
