@@ -21,7 +21,13 @@ from learnlab.config import (
     resolve_token_secret,
     state_dir,
 )
-from learnlab.course_validation import ValidationReport, validate_catalog
+from learnlab.course_validation import (
+    CurriculumFinding,
+    FindingSeverity,
+    ValidationReport,
+    validate_catalog,
+    validate_profile_compatibility,
+)
 from learnlab.curriculum import (
     Course,
     CurriculumCatalog,
@@ -455,18 +461,76 @@ def validate_curriculum(
     output_format: ValidationOutputFormat = typer.Option(  # noqa: B008
         ValidationOutputFormat.HUMAN, "--format"
     ),
+    provider_profile: str | None = typer.Option(None, "--provider"),
 ) -> None:
-    """Validate curriculum locally without configuration or provider access."""
+    """Validate curriculum, optionally checking one provider read-only."""
     if course_path is not None and not _COURSE_PATH.fullmatch(course_path):
         raise typer.BadParameter(
             "must be a collection/course path using stable lowercase IDs",
             param_hint="COURSE",
         )
 
+    if provider_profile is not None and not provider_profile.strip():
+        raise typer.BadParameter(
+            "must be a non-empty profile name", param_hint="--provider"
+        )
+
     report = validate_catalog(catalog_factory(), course_path)
+    if not report.ok:
+        _render_validation_report(report, output_format)
+        raise typer.Exit(code=1)
+
+    if provider_profile is not None:
+        try:
+            loaded = load_requested_profiles([provider_profile])
+            if provider_profile in loaded.errors:
+                raise ConfigurationError("Selected provider profile is invalid")
+            profile = loaded.settings.provider(provider_profile)
+            secret = resolve_token_secret(profile)
+            provider = provider_factory(
+                loaded.settings, provider_profile, secret
+            )
+            health = provider.health_check()
+            report = validate_profile_compatibility(report, profile, health)
+        except Exception:
+            report = _provider_validation_failure(report)
+
     _render_validation_report(report, output_format)
+    if report.operational_failure:
+        raise typer.Exit(code=3)
     if not report.ok:
         raise typer.Exit(code=1)
+
+
+def _provider_validation_failure(report: ValidationReport) -> ValidationReport:
+    """Return a generic operational finding without exposing exception content."""
+    finding = CurriculumFinding(
+        FindingSeverity.ERROR,
+        "",
+        ".",
+        "provider-validation-failed",
+        "Provider validation could not complete.",
+        "Check the selected profile, secret environment, and provider access, "
+        "then retry.",
+    )
+    return ValidationReport(
+        findings=tuple(
+            sorted((*report.findings, finding), key=_validation_finding_key)
+        ),
+        courses=report.courses,
+        operational_failure=True,
+    )
+
+
+def _validation_finding_key(
+    finding: CurriculumFinding,
+) -> tuple[str, str, str, str]:
+    return (
+        finding.course_path,
+        finding.source_path,
+        finding.code,
+        finding.message,
+    )
 
 
 def _render_validation_report(

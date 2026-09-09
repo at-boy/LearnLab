@@ -7,6 +7,7 @@ import threading
 from dataclasses import dataclass, field
 from io import StringIO
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 from typer.testing import CliRunner
@@ -1864,6 +1865,201 @@ def test_validate_human_output_has_deterministic_actionable_fields() -> None:
     assert "Message:" in first.stdout
     assert "Remedy:" in first.stdout
     assert str(Path.cwd()) not in first.stdout
+
+
+def test_validate_provider_loads_only_requested_profile_and_calls_only_health(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from learnlab import cli
+    from learnlab.config import ProxmoxProfile, RequestedProfiles, Settings
+
+    profile = ProxmoxProfile(
+        "lab", "https://example.test", "token", "SECRET", 9000, "template",
+        "node", "storage", "vmbr0", "student", tmp_path / "key", True,
+        ("proxmox.api",),
+    )
+    settings = Settings("lab", MappingProxyType({"lab": profile}))
+    calls: list[object] = []
+
+    class ReadOnlyProvider:
+        def health_check(self) -> ProviderHealth:
+            calls.append("health_check")
+            return ProviderHealth((ProviderCheck("API", True, "reachable"),))
+
+        def __getattr__(self, name: str):
+            pytest.fail(f"validation accessed provider operation {name}")
+
+    def load_profiles(names):
+        calls.append(tuple(names))
+        return RequestedProfiles(settings, MappingProxyType({}))
+
+    monkeypatch.setattr(cli, "load_requested_profiles", load_profiles)
+    monkeypatch.setattr(
+        cli,
+        "load_settings",
+        lambda: pytest.fail("must load requested only"),
+    )
+    monkeypatch.setattr(cli, "resolve_token_secret", lambda selected: "resolved-secret")
+    monkeypatch.setattr(
+        cli,
+        "provider_factory",
+        lambda selected, name, secret: (
+            calls.append((selected, name, secret)) or ReadOnlyProvider()
+        ),
+    )
+
+    result = CliRunner().invoke(
+        cli.app, ["validate", "proxmox/proxmox-admin", "--provider", "lab"]
+    )
+
+    assert result.exit_code == 0
+    assert calls == [
+        ("lab",),
+        (settings, "lab", "resolved-secret"),
+        "health_check",
+    ]
+
+
+def test_validate_provider_stops_after_offline_errors_and_json_reports_not_ok(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from learnlab import cli
+
+    monkeypatch.setattr(
+        cli,
+        "load_requested_profiles",
+        lambda names: pytest.fail("offline errors must prevent provider access"),
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["validate", "demo/unknown", "--provider", "lab", "--format", "json"],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout)["ok"] is False
+
+
+def test_validate_provider_health_failure_is_safe_json_and_exit_three(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from learnlab import cli
+    from learnlab.config import ProxmoxProfile, RequestedProfiles, Settings
+
+    sensitive_value = "SUPER-SECRET-provider-payload"
+    profile = ProxmoxProfile(
+        "lab", "https://example.test", "token", "SECRET", 9000, "template",
+        "node", "storage", "vmbr0", "student", tmp_path / "key", True,
+        ("proxmox.api",),
+    )
+    settings = Settings("lab", MappingProxyType({"lab": profile}))
+    monkeypatch.setattr(
+        cli,
+        "load_requested_profiles",
+        lambda names: RequestedProfiles(settings, MappingProxyType({})),
+    )
+    monkeypatch.setattr(
+        cli, "resolve_token_secret", lambda selected: sensitive_value
+    )
+    monkeypatch.setattr(
+        cli,
+        "provider_factory",
+        lambda settings, name, resolved: FailedHealthProvider(
+            ProviderHealth(
+                (ProviderCheck("Authentication", False, sensitive_value),),
+                warnings=(sensitive_value,),
+                provider_error=True,
+            )
+        ),
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["validate", "proxmox/proxmox-admin", "--provider", "lab", "--format", "json"],
+    )
+
+    assert result.exit_code == 3
+    payload = json.loads(result.stdout)
+    assert tuple(payload) == ("schema_version", "ok", "findings")
+    assert payload["ok"] is False
+    assert sensitive_value not in result.stdout
+    assert payload["findings"][0]["code"] == "provider-health-failed"
+
+
+def test_validate_rejects_empty_provider_name_as_usage_error() -> None:
+    from learnlab.cli import app
+
+    result = CliRunner().invoke(app, ["validate", "--provider", ""])
+
+    assert result.exit_code == 2
+
+
+@pytest.mark.parametrize(
+    "failure_stage",
+    ["profile", "secret", "provider", "health"],
+)
+def test_validate_provider_operational_exceptions_are_redacted_and_exit_three(
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+    tmp_path: Path,
+) -> None:
+    from learnlab import cli
+    from learnlab.config import ProxmoxProfile, RequestedProfiles, Settings
+    from learnlab.errors import ConfigurationError, ProviderError
+
+    sensitive_value = f"SUPER-SECRET-{failure_stage}"
+    profile = ProxmoxProfile(
+        "lab", "https://example.test", "token", "SECRET", 9000, "template",
+        "node", "storage", "vmbr0", "student", tmp_path / "key", True,
+        ("proxmox.api",),
+    )
+    settings = Settings("lab", MappingProxyType({"lab": profile}))
+
+    def fail(error_type):
+        raise error_type(sensitive_value)
+
+    if failure_stage == "profile":
+        loaded = RequestedProfiles(
+            Settings("", MappingProxyType({})),
+            MappingProxyType({"lab": ConfigurationError(sensitive_value)}),
+        )
+    else:
+        loaded = RequestedProfiles(settings, MappingProxyType({}))
+    monkeypatch.setattr(cli, "load_requested_profiles", lambda names: loaded)
+    monkeypatch.setattr(
+        cli,
+        "resolve_token_secret",
+        lambda selected: fail(ConfigurationError)
+        if failure_stage == "secret"
+        else sensitive_value,
+    )
+
+    class HealthProvider:
+        def health_check(self) -> ProviderHealth:
+            if failure_stage == "health":
+                fail(ProviderError)
+            return ProviderHealth(())
+
+    monkeypatch.setattr(
+        cli,
+        "provider_factory",
+        lambda selected, name, secret: fail(ProviderError)
+        if failure_stage == "provider"
+        else HealthProvider(),
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["validate", "proxmox/proxmox-admin", "--provider", "lab", "--format", "json"],
+    )
+
+    assert result.exit_code == 3
+    assert sensitive_value not in result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["findings"][0]["code"] == "provider-validation-failed"
 
 
 def test_reset_course_lists_scope_and_counts_before_confirmation(

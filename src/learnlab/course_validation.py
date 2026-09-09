@@ -8,6 +8,7 @@ from enum import StrEnum
 from importlib.resources.abc import Traversable
 from pathlib import Path
 
+from learnlab.config import ProxmoxProfile
 from learnlab.curriculum import (
     Course,
     CurriculumCatalog,
@@ -16,6 +17,7 @@ from learnlab.curriculum import (
     EnvironmentScope,
     VerificationType,
 )
+from learnlab.providers.base import ProviderHealth
 from learnlab.providers.proxmox import known_provider_checks
 
 _SUPPORTED_PROVIDER_CAPABILITIES = frozenset({"proxmox.vm"})
@@ -51,6 +53,7 @@ class ValidationReport:
 
     findings: tuple[CurriculumFinding, ...] = ()
     courses: tuple[Course, ...] = ()
+    operational_failure: bool = False
 
     @property
     def errors(self) -> tuple[CurriculumFinding, ...]:
@@ -71,6 +74,82 @@ class ValidationReport:
     @property
     def ok(self) -> bool:
         return not self.errors
+
+
+def validate_profile_compatibility(
+    report: ValidationReport,
+    profile: ProxmoxProfile,
+    health: ProviderHealth,
+) -> ValidationReport:
+    """Add safe, read-only profile compatibility findings to a static report."""
+    findings = list(report.findings)
+    available = frozenset(profile.template_capabilities)
+    for course in report.courses:
+        required = frozenset(
+            capability
+            for lesson in course.lessons
+            for capability in course.effective_environment(lesson).guest_capabilities
+        )
+        course_path = f"{course.collection_id}/{course.id}"
+        for capability in sorted(required - available):
+            findings.append(
+                _finding(
+                    FindingSeverity.ERROR,
+                    course_path,
+                    _course_source(course_path),
+                    "missing-guest-capability",
+                    f"The provider template does not declare {capability!r}.",
+                    "Add the capability to the selected profile's "
+                    "template_capabilities or select a compatible profile.",
+                )
+            )
+
+    failed_checks = tuple(
+        check for check in health.checks if check.required and not check.ok
+    )
+    operational_failure = report.operational_failure or bool(
+        health.provider_error or failed_checks
+    )
+    for check in failed_checks:
+        findings.append(
+            _finding(
+                FindingSeverity.ERROR,
+                "",
+                ".",
+                "provider-health-failed",
+                f"Provider prerequisite {_safe_health_label(check.name)!r} failed.",
+                "Check the selected profile and provider access, then retry.",
+            )
+        )
+    if health.provider_error and not failed_checks:
+        findings.append(
+            _finding(
+                FindingSeverity.ERROR,
+                "",
+                ".",
+                "provider-health-failed",
+                "The provider health check could not complete.",
+                "Check the selected profile and provider access, then retry.",
+            )
+        )
+
+    return ValidationReport(
+        findings=tuple(sorted(set(findings), key=_finding_key)),
+        courses=report.courses,
+        operational_failure=operational_failure,
+    )
+
+
+def _safe_health_label(name: str) -> str:
+    labels = {
+        "API": "API",
+        "Authentication": "Authentication",
+        "Node": "Node",
+        "Template identity": "Template identity",
+        "Storage": "Storage",
+        "Network": "Network",
+    }
+    return labels.get(name, "Provider prerequisite")
 
 
 def validate_catalog(

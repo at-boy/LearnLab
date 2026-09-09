@@ -6,12 +6,15 @@ from pathlib import Path
 import pytest
 import yaml
 
+from learnlab.config import ProxmoxProfile
 from learnlab.course_validation import (
     FindingSeverity,
     known_provider_checks,
     validate_catalog,
+    validate_profile_compatibility,
 )
 from learnlab.curriculum import CurriculumCatalog
+from learnlab.providers.base import ProviderCheck, ProviderHealth
 
 
 def _write_course(
@@ -304,4 +307,75 @@ def test_unsupported_provider_capability_is_an_error(tmp_path: Path) -> None:
 
     assert [finding.code for finding in report.errors] == [
         "unsupported-provider-capability"
+    ]
+
+
+def test_profile_validation_uses_union_of_effective_lesson_capabilities(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "collections"
+    course = _write_course(
+        root,
+        "mixed",
+        environment={
+            "scope": "course",
+            "provider_capability": "proxmox.vm",
+            "guest_capabilities": ["os.debian.13"],
+        },
+    )
+    lesson_path = course / "lessons" / "00-first" / "lesson.yaml"
+    lesson = yaml.safe_load(lesson_path.read_text(encoding="utf-8"))
+    lesson["environment"] = {
+        "scope": "lesson",
+        "provider_capability": "proxmox.vm",
+        "guest_capabilities": ["os.debian.13", "tool.curl"],
+    }
+    lesson_path.write_text(yaml.safe_dump(lesson), encoding="utf-8")
+    report = validate_catalog(CurriculumCatalog(root))
+    profile = ProxmoxProfile(
+        "lab", "https://example.test", "token", "SECRET", 9000, "template",
+        "node", "storage", "vmbr0", "student", tmp_path / "key", True,
+        ("os.debian.13",),
+    )
+
+    checked = validate_profile_compatibility(
+        report,
+        profile,
+        ProviderHealth((ProviderCheck("API", True, "secret response"),)),
+    )
+
+    assert [finding.code for finding in checked.errors] == [
+        "missing-guest-capability"
+    ]
+    assert "tool.curl" in checked.errors[0].message
+    assert checked.operational_failure is False
+
+
+def test_profile_validation_marks_failed_required_health_as_operational(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "collections"
+    _write_course(root, "offline")
+    report = validate_catalog(CurriculumCatalog(root))
+    profile = ProxmoxProfile(
+        "lab", "https://example.test", "token", "SECRET", 9000, "template",
+        "node", "storage", "vmbr0", "student", tmp_path / "key", True,
+    )
+    sensitive_value = "SUPER-SECRET-health-payload"
+
+    checked = validate_profile_compatibility(
+        report,
+        profile,
+        ProviderHealth(
+            (ProviderCheck("Authentication", False, sensitive_value),),
+            warnings=(sensitive_value,),
+            provider_error=True,
+        ),
+    )
+
+    assert checked.operational_failure is True
+    rendered = repr(checked.findings)
+    assert sensitive_value not in rendered
+    assert [finding.code for finding in checked.errors] == [
+        "provider-health-failed"
     ]
