@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -114,3 +115,44 @@ def test_built_wheel_installs_with_curriculum_resources(tmp_path: Path) -> None:
         "remote-command,remote-command,provider-check,provider-check,"
         "text-evidence,manual-confirmation",
     ]
+
+    cli_environment = smoke_environment.copy()
+    cli_environment["PATH"] = os.pathsep.join(
+        (str(installed / "bin"), cli_environment.get("PATH", ""))
+    )
+    help_result = subprocess.run(  # noqa: S603 - installed test artifact only
+        [str(installed / "bin" / "learnlab"), "validate", "--help"],
+        check=True,
+        cwd=tmp_path,
+        env=cli_environment,
+        capture_output=True,
+        text=True,
+    )
+    assert "Validate curriculum" in help_result.stdout
+    assert "--provider" in help_result.stdout
+    assert "--format" in help_result.stdout
+
+    validation_result = subprocess.run(  # noqa: S603 - installed artifact only
+        [str(installed / "bin" / "learnlab"), "validate", "--format", "json"],
+        check=True,
+        cwd=tmp_path,
+        env=cli_environment,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(validation_result.stdout)
+    assert set(payload) == {"schema_version", "ok", "findings"}
+    assert payload["schema_version"] == 1
+    assert payload["ok"] is True
+    assert all(
+        set(finding)
+        == {
+            "severity",
+            "course_path",
+            "source_path",
+            "code",
+            "message",
+            "remedy",
+        }
+        for finding in payload["findings"]
+    )

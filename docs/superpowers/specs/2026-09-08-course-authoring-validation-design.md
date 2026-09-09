@@ -1,6 +1,6 @@
 # Course Authoring and Validation Design
 
-**Status:** Proposed for review
+**Status:** Implemented and verified offline; no live acceptance claim
 
 ## Purpose
 

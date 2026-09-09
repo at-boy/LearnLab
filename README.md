@@ -52,6 +52,7 @@ network = "vmbr0"
 ssh_user = "student"
 ssh_identity_file = "~/.ssh/learning-platform"
 tls_verify = true
+template_capabilities = ["os.nixos", "tool.curl"]
 ```
 
 Save it as `~/.config/learnlab/config.toml` (or the equivalent XDG path). The
@@ -77,6 +78,10 @@ The Checkpoint 05 profile also required the token's `SDN.Use` permission scoped
 to `/sdn/zones/localnetwork/vmbr0`. That path was an environment-specific
 discovery, not a general default: grant only the permissions and resource scope
 required by your configured network.
+
+`template_capabilities` declares what the configured template is expected to
+provide. These provider-neutral IDs are checked against course requirements;
+they are profile assertions and do not probe installed guest software.
 
 ## Check and use a profile
 
@@ -231,6 +236,57 @@ empty, so LearnLab retains the environment and refuses remote stop/delete rather
 than guessing ownership. Reconcile such infrastructure manually against the
 recorded profile, VMID, node, and provider inventory; preserve the databases
 while doing so and never delete a VM solely because its VMID matches.
+
+## Author and validate curriculum
+
+Maintain courses only under `src/learnlab/collections/`. The installed wheel
+uses this same canonical tree. Validate the complete catalog or one
+`collection/course` without loading settings, state, secrets, SSH, or providers:
+
+```bash
+learnlab validate
+learnlab validate proxmox/proxmox-admin
+learnlab validate proxmox/proxmox-admin --format json
+```
+
+Warnings are advisory and exit successfully. Exit code `0` means there are no
+curriculum errors, though warnings may be present; `1` means curriculum or
+capability errors; `2` means invalid command usage; and `3` means a provider or
+operational failure in online mode. Schema-v1 JSON has exactly
+`schema_version`, `ok`, and `findings`; each finding has `severity`,
+`course_path`, `source_path`, `code`, `message`, and `remedy`.
+
+VM environments may declare optional provider-neutral requirements:
+
+```yaml
+environment:
+  scope: course
+  provider_capability: proxmox.vm
+  guest_capabilities:
+    - os.nixos
+    - tool.curl
+```
+
+A lesson environment replaces the whole course policy rather than merging with
+it. The legacy top-level `requirements` list is temporarily mapped to
+`environment.guest_capabilities`, emits a validation warning, and is planned
+for removal. New curriculum should use `guest_capabilities` directly. Never put
+profile names, URLs, VMIDs, template names, nodes, storage, networks, SSH paths,
+token identities, or secrets in curriculum.
+
+Online validation runs offline checks first, then resolves only the explicit
+profile, compares declared capabilities, and invokes the read-only provider
+health check:
+
+```bash
+learnlab validate proxmox/proxmox-admin --provider home-proxmox
+```
+
+It never creates, starts, modifies, or deletes infrastructure. Passing proves
+only that declared capabilities match and health checks succeeded; it does not
+prove guest contents, live lesson behavior, acceptance, or certification. See
+`docs/LearnLab-Course-Authoring-Guide.md` for the full schema and authoring
+workflow.
 
 ## Live Proxmox acceptance test
 

@@ -33,7 +33,7 @@
 - Produces: `CourseSummary(collection_id: str, course_id: str, title: str)`.
 - Produces: `CurriculumCatalog.list_courses() -> tuple[CourseSummary, ...]`.
 
-- [ ] **Step 1: Write failing discovery tests**
+- [x] **Step 1: Write failing discovery tests**
 
 ```python
 def test_list_courses_is_complete_and_stably_sorted(catalog):
@@ -46,13 +46,13 @@ def test_list_courses_reports_malformed_collection(catalog_with_bad_entry):
         catalog_with_bad_entry.list_courses()
 ```
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run: `.venv/bin/python -m pytest tests/test_curriculum.py -k list_courses -q`
 
 Expected: failures because `CourseSummary` and `list_courses` do not exist.
 
-- [ ] **Step 3: Implement discovery and migrate the tree**
+- [x] **Step 3: Implement discovery and migrate the tree**
 
 Implement `CourseSummary.path` as `f"{collection_id}/{course_id}"`. Enumerate
 only directories, validate every `collection.yaml` and `course.yaml` through the
@@ -60,7 +60,7 @@ existing strict loader, and sort by IDs. Move all curriculum into
 `src/learnlab/collections/`; remove the duplicate-tree equality test and retain
 wheel-content/install tests against the canonical tree.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 Run: `.venv/bin/python -m pytest tests/test_curriculum.py tests/test_packaging.py -q`
 
@@ -85,7 +85,7 @@ git commit -m "refactor: make packaged curriculum canonical"
 - Produces: `ProxmoxProfile.template_capabilities: tuple[str, ...]`.
 - Produces: `Course.curriculum_warnings: tuple[str, ...]` during the legacy migration.
 
-- [ ] **Step 1: Write strict schema and compatibility tests**
+- [x] **Step 1: Write strict schema and compatibility tests**
 
 ```python
 def test_vm_environment_loads_guest_capabilities(course):
@@ -102,18 +102,18 @@ def test_profile_loads_template_capabilities(settings_file):
     )
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `.venv/bin/python -m pytest tests/test_curriculum.py tests/test_config.py -k capabilities -q`
 
-- [ ] **Step 3: Implement immutable capability parsing**
+- [x] **Step 3: Implement immutable capability parsing**
 
 Use the existing capability-ID grammar, reject duplicates and unknown keys, and
 require at least one `os.*` capability for VM scopes. Accept legacy
 `requirements` only when `guest_capabilities` is absent, normalize it, and attach
 the warning `requirements is deprecated; use environment.guest_capabilities`.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run: `.venv/bin/python -m pytest tests/test_curriculum.py tests/test_config.py -q`
 
@@ -136,7 +136,7 @@ git commit -m "feat: declare guest template capabilities"
 - Produces: `validate_catalog(catalog, course_path=None) -> ValidationReport`.
 - Produces: `known_provider_checks() -> frozenset[str]` without constructing a provider.
 
-- [ ] **Step 1: Write aggregation and lint tests**
+- [x] **Step 1: Write aggregation and lint tests**
 
 ```python
 def test_validation_aggregates_independent_findings(broken_catalog):
@@ -150,7 +150,7 @@ def test_offline_validation_flags_unanchored_yes_no_regex(catalog):
     assert finding.code == "broad-yes-no-regex"
 ```
 
-- [ ] **Step 2: Verify RED and implement findings**
+- [x] **Step 2: Verify RED and implement findings**
 
 Run: `.venv/bin/python -m pytest tests/test_course_validation.py -q`
 
@@ -158,7 +158,7 @@ Findings are frozen dataclasses sorted by course path, source path, code, and
 message. Catch errors per discoverable course so one malformed course does not
 hide findings from another. Implement only the lint checks listed in the spec.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 Run: `.venv/bin/python -m pytest tests/test_course_validation.py tests/providers/test_proxmox.py -q`
 
@@ -180,7 +180,7 @@ git commit -m "feat: validate complete curriculum catalogs"
 - Produces: `learnlab validate [COURSE] [--format human|json]`.
 - JSON root: `{"schema_version": 1, "ok": bool, "findings": [...]}`.
 
-- [ ] **Step 1: Write CLI isolation and output tests**
+- [x] **Step 1: Write CLI isolation and output tests**
 
 ```python
 def test_validate_all_is_offline(runner, monkeypatch):
@@ -195,14 +195,14 @@ def test_validate_json_is_versioned_and_deterministic(runner):
     assert first.stdout == second.stdout
 ```
 
-- [ ] **Step 2: Verify RED and implement the command**
+- [x] **Step 2: Verify RED and implement the command**
 
 Run: `.venv/bin/python -m pytest tests/test_cli.py -k validate -q`
 
 Render source-relative paths, course path, severity, code, message, and remedy.
 Map errors to exit 1 and Typer usage errors to exit 2.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 Run: `.venv/bin/python -m pytest tests/test_cli.py tests/test_course_validation.py -q`
 
@@ -225,7 +225,7 @@ git commit -m "feat: add offline curriculum validation command"
 - Produces: `validate_profile_compatibility(report, profile, health) -> ValidationReport`.
 - Extends: `learnlab validate [COURSE] --provider PROFILE`.
 
-- [ ] **Step 1: Write capability and read-only tests**
+- [x] **Step 1: Write capability and read-only tests**
 
 ```python
 def test_profile_validation_reports_missing_capability(report, profile, health):
@@ -239,7 +239,7 @@ def test_provider_mode_performs_no_mutation(provider_spy, runner):
     assert provider_spy.mutations == []
 ```
 
-- [ ] **Step 2: Verify RED and implement online validation**
+- [x] **Step 2: Verify RED and implement online validation**
 
 Run: `.venv/bin/python -m pytest tests/test_course_validation.py tests/test_cli.py -k provider -q`
 
@@ -247,7 +247,7 @@ Run offline validation first. Resolve the explicit profile and secret only if it
 passes sufficiently to identify capabilities, call `health_check()`, redact all
 errors, and map operational failure to exit 3.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 Run: `.venv/bin/python -m pytest tests/test_course_validation.py tests/test_cli.py tests/providers/test_proxmox.py -q`
 
@@ -265,12 +265,12 @@ git commit -m "feat: validate configured course templates"
 - Modify: `docs/LearnLab-Course-Authoring-Guide.md`
 - Modify: `tests/test_packaging.py`
 
-- [ ] **Step 1: Update documentation with exact commands and migration**
+- [x] **Step 1: Update documentation with exact commands and migration**
 
 Document the canonical path, offline/online validation, exit codes, JSON mode,
 guest capabilities, legacy `requirements` warning, and the read-only boundary.
 
-- [ ] **Step 2: Run the full verification gate**
+- [x] **Step 2: Run the full verification gate**
 
 Run: `.venv/bin/python -m pytest -m 'not live' -q`
 
@@ -282,7 +282,7 @@ Run: `git diff --check`
 
 Expected: every command succeeds; no live Proxmox test runs.
 
-- [ ] **Step 3: Commit documentation**
+- [x] **Step 3: Commit documentation**
 
 ```bash
 git add README.md docs/LearnLab-Course-Authoring-Guide.md tests/test_packaging.py
