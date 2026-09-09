@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+import re
 import sys
 import time
 from collections.abc import Callable, Mapping
+from enum import StrEnum
 from importlib.resources import files
 from pathlib import Path
 from types import TracebackType
@@ -18,6 +21,7 @@ from learnlab.config import (
     resolve_token_secret,
     state_dir,
 )
+from learnlab.course_validation import ValidationReport, validate_catalog
 from learnlab.curriculum import (
     Course,
     CurriculumCatalog,
@@ -65,6 +69,15 @@ from learnlab.validation import (
 
 CatalogFactory = Callable[[], CurriculumCatalog]
 StateStoreFactory = Callable[[], StateStore]
+
+_COURSE_PATH = re.compile(
+    r"[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+
+
+class ValidationOutputFormat(StrEnum):
+    HUMAN = "human"
+    JSON = "json"
 
 
 class ProviderFactory(Protocol):
@@ -434,6 +447,62 @@ def _default_state_store() -> StateStore:
 
 catalog_factory: CatalogFactory = _default_catalog
 state_store_factory: StateStoreFactory = _default_state_store
+
+
+@app.command("validate")
+def validate_curriculum(
+    course_path: str | None = typer.Argument(None, metavar="COURSE"),
+    output_format: ValidationOutputFormat = typer.Option(  # noqa: B008
+        ValidationOutputFormat.HUMAN, "--format"
+    ),
+) -> None:
+    """Validate curriculum locally without configuration or provider access."""
+    if course_path is not None and not _COURSE_PATH.fullmatch(course_path):
+        raise typer.BadParameter(
+            "must be a collection/course path using stable lowercase IDs",
+            param_hint="COURSE",
+        )
+
+    report = validate_catalog(catalog_factory(), course_path)
+    _render_validation_report(report, output_format)
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+def _render_validation_report(
+    report: ValidationReport, output_format: ValidationOutputFormat
+) -> None:
+    """Render a validation report without configuration or operational data."""
+    if output_format is ValidationOutputFormat.JSON:
+        payload = {
+            "schema_version": 1,
+            "ok": report.ok,
+            "findings": [
+                {
+                    "severity": finding.severity.value,
+                    "course_path": finding.course_path,
+                    "source_path": finding.source_path,
+                    "code": finding.code,
+                    "message": finding.message,
+                    "remedy": finding.remedy,
+                }
+                for finding in report.findings
+            ],
+        }
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+
+    if not report.findings:
+        typer.echo("Validation passed with no findings.")
+        return
+    for index, finding in enumerate(report.findings):
+        if index:
+            typer.echo()
+        typer.echo(f"{finding.severity.value.upper()} {finding.code}")
+        typer.echo(f"  Course: {finding.course_path or '-'}")
+        typer.echo(f"  Source: {finding.source_path}")
+        typer.echo(f"  Message: {finding.message}")
+        typer.echo(f"  Remedy: {finding.remedy}")
 
 
 @provider_app.command("test")

@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "findings": [
+    {
+      "severity": "warning",
+      "course_path": "proxmox/proxmox-admin",
+      "source_path": "proxmox/courses/proxmox-admin/course.yaml",
+      "code": "deprecated-requirements",
+      "message": "requirements is deprecated; use environment.guest_capabilities",
+      "remedy": "Move requirements to environment.guest_capabilities."
+    },
+    {
+      "severity": "warning",
+      "course_path": "proxmox/proxmox-admin",
+      "source_path": "proxmox/courses/proxmox-admin/course.yaml",
+      "code": "missing-os-capability",
+      "message": "A VM environment does not declare an OS guest capability.",
+      "remedy": "Declare the required os.* capability for the effective environment."
+    },
+    {
+      "severity": "warning",
+      "course_path": "proxmox/proxmox-admin",
+      "source_path": "proxmox/courses/proxmox-admin/lessons/00-api-access/lesson.yaml",
+      "code": "manual-confirmation-with-objective-check",
+      "message": "Manual confirmation duplicates an objective check in this step.",
+      "remedy": "Remove the redundant attestation or place it in a distinct step."
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import sqlite3
 import threading
@@ -86,6 +87,8 @@ ssh_user = "student"
 ssh_identity_file = "~/.ssh/learning-platform"
 tls_verify = true
 """
+
+SNAPSHOTS = Path(__file__).parent / "snapshots"
 
 
 class FakeHealthProvider:
@@ -1774,6 +1777,93 @@ def test_destroy_interactive_policy_flags_are_rejected_without_yes(
     assert app_harness.lifecycle.destroy_choices == []
     assert app_harness.provider_profiles == []
     assert app_harness.store.get_environment("env-1") is not None
+
+
+def test_validate_all_is_offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    from learnlab import cli
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("offline validation must not access runtime dependencies")
+
+    for dependency in (
+        "load_settings",
+        "load_requested_profiles",
+        "resolve_token_secret",
+        "state_store_factory",
+        "provider_factory",
+        "lifecycle_factory",
+        "validator_registry_factory",
+        "SshExecutor",
+    ):
+        monkeypatch.setattr(cli, dependency, forbidden)
+
+    result = CliRunner().invoke(cli.app, ["validate"])
+
+    assert result.exit_code == 0
+    assert "WARNING" in result.stdout
+
+
+def test_validate_json_is_versioned_deterministic_and_matches_snapshot() -> None:
+    from learnlab.cli import app
+
+    first = CliRunner().invoke(app, ["validate", "--format", "json"])
+    second = CliRunner().invoke(app, ["validate", "--format", "json"])
+
+    assert first.exit_code == 0
+    assert first.stdout == second.stdout
+    assert first.stdout == (SNAPSHOTS / "validate-report-v1.json").read_text(
+        encoding="utf-8"
+    )
+    payload = json.loads(first.stdout)
+    assert tuple(payload) == ("schema_version", "ok", "findings")
+    assert payload["schema_version"] == 1
+    assert payload["ok"] is True
+
+
+def test_validate_one_unknown_well_formed_course_is_a_finding() -> None:
+    from learnlab.cli import app
+
+    result = CliRunner().invoke(app, ["validate", "demo/unknown"])
+
+    assert result.exit_code == 1
+    assert "ERROR" in result.stdout
+    assert "demo/unknown" in result.stdout
+    assert "invalid-curriculum" in result.stdout
+    assert "Remedy:" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["validate", "demo"],
+        ["validate", "demo/course/extra"],
+        ["validate", "Demo/course"],
+        ["validate", "--format", "yaml"],
+        ["validate", "demo/course", "unexpected"],
+    ],
+)
+def test_validate_rejects_invalid_command_usage(arguments: list[str]) -> None:
+    from learnlab.cli import app
+
+    result = CliRunner().invoke(app, arguments)
+
+    assert result.exit_code == 2
+
+
+def test_validate_human_output_has_deterministic_actionable_fields() -> None:
+    from learnlab.cli import app
+
+    first = CliRunner().invoke(app, ["validate"])
+    second = CliRunner().invoke(app, ["validate"])
+
+    assert first.exit_code == 0
+    assert first.stdout == second.stdout
+    assert "WARNING deprecated-requirements" in first.stdout
+    assert "Course: proxmox/proxmox-admin" in first.stdout
+    assert "Source: proxmox/courses/proxmox-admin/course.yaml" in first.stdout
+    assert "Message:" in first.stdout
+    assert "Remedy:" in first.stdout
+    assert str(Path.cwd()) not in first.stdout
 
 
 def test_reset_course_lists_scope_and_counts_before_confirmation(
