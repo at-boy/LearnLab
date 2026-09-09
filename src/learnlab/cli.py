@@ -39,7 +39,7 @@ from learnlab.curriculum import (
     Verification,
     VerificationType,
 )
-from learnlab.errors import ConfigurationError, LearnLabError, redact
+from learnlab.errors import ConfigurationError, LearnLabError, ProviderError, redact
 from learnlab.lifecycle import (
     PROVISIONING_INTERRUPTED_GUIDANCE,
     EnvironmentResolution,
@@ -492,7 +492,7 @@ def validate_curriculum(
             )
             health = provider.health_check()
             report = validate_profile_compatibility(report, profile, health)
-        except Exception:
+        except (ConfigurationError, ProviderError):
             report = _provider_validation_failure(report)
 
     _render_validation_report(report, output_format)

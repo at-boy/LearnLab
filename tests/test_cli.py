@@ -2062,6 +2062,48 @@ def test_validate_provider_operational_exceptions_are_redacted_and_exit_three(
     assert payload["findings"][0]["code"] == "provider-validation-failed"
 
 
+def test_validate_provider_does_not_hide_unexpected_internal_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from learnlab import cli
+    from learnlab.config import ProxmoxProfile, RequestedProfiles, Settings
+
+    profile = ProxmoxProfile(
+        "lab", "https://example.test", "token", "SECRET", 9000, "template",
+        "node", "storage", "vmbr0", "student", tmp_path / "key", True,
+        ("proxmox.api",),
+    )
+    settings = Settings("lab", MappingProxyType({"lab": profile}))
+    monkeypatch.setattr(
+        cli,
+        "load_requested_profiles",
+        lambda names: RequestedProfiles(settings, MappingProxyType({})),
+    )
+    monkeypatch.setattr(cli, "resolve_token_secret", lambda selected: "value")
+    monkeypatch.setattr(
+        cli,
+        "provider_factory",
+        lambda selected, name, secret: FakeHealthProvider(),
+    )
+    monkeypatch.setattr(
+        cli,
+        "validate_profile_compatibility",
+        lambda report, selected, health: (_ for _ in ()).throw(
+            RuntimeError("unexpected compatibility bug")
+        ),
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["validate", "proxmox/proxmox-admin", "--provider", "lab"],
+    )
+
+    assert isinstance(result.exception, RuntimeError)
+    assert str(result.exception) == "unexpected compatibility bug"
+    assert "provider-validation-failed" not in result.stdout
+
+
 def test_reset_course_lists_scope_and_counts_before_confirmation(
     app_harness: AppHarness,
 ) -> None:
