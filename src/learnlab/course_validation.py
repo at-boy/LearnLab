@@ -89,7 +89,7 @@ def validate_catalog(
     for candidate, default_source in candidates:
         try:
             course = catalog.load_course(candidate)
-        except CurriculumError as error:
+        except (CurriculumError, OSError) as error:
             findings.append(
                 _finding(
                     FindingSeverity.ERROR,
@@ -336,7 +336,40 @@ def _is_broad_yes_no(pattern: str) -> bool:
     without_flags = re.sub(r"^(?:\(\?[aiLmsux-]+\))*", "", pattern)
     anchored_start = without_flags.startswith("^") or without_flags.startswith(r"\A")
     anchored_end = without_flags.endswith("$") or without_flags.endswith(r"\Z")
-    return has_yes_no and not (anchored_start and anchored_end)
+    if not (anchored_start and anchored_end):
+        return has_yes_no
+    start_length = 2 if without_flags.startswith(r"\A") else 1
+    end_length = 2 if without_flags.endswith(r"\Z") else 1
+    body = without_flags[start_length:-end_length]
+    return has_yes_no and _has_top_level_alternation(body)
+
+
+def _has_top_level_alternation(pattern: str) -> bool:
+    depth = 0
+    in_character_class = False
+    escaped = False
+    for character in pattern:
+        if escaped:
+            escaped = False
+            continue
+        if character == "\\":
+            escaped = True
+            continue
+        if character == "[":
+            in_character_class = True
+            continue
+        if character == "]" and in_character_class:
+            in_character_class = False
+            continue
+        if in_character_class:
+            continue
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth = max(0, depth - 1)
+        elif character == "|" and depth == 0:
+            return True
+    return False
 
 
 def _lesson_source(root: Traversable, course: Course, lesson_id: str) -> str:
@@ -364,7 +397,7 @@ def _course_source(course_path: str) -> str:
 
 
 def _source_from_error(
-    error: CurriculumError, root: Traversable, default: str
+    error: CurriculumError | OSError, root: Traversable, default: str
 ) -> str:
     message = str(error)
     root_text = str(root).rstrip("/")
@@ -375,7 +408,7 @@ def _source_from_error(
     return candidate or default
 
 
-def _relative_message(error: CurriculumError, root: Traversable) -> str:
+def _relative_message(error: CurriculumError | OSError, root: Traversable) -> str:
     return str(error).replace(f"{str(root).rstrip('/')}/", "")
 
 

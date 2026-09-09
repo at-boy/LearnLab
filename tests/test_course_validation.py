@@ -86,6 +86,41 @@ def test_validation_aggregates_errors_from_independently_discoverable_courses(
     assert report.courses == ()
 
 
+def test_validation_isolates_lesson_layout_errors_from_other_courses(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "collections"
+    missing_lessons = _write_course(root, "bad-layout")
+    invalid = _write_course(root, "bad-schema")
+    _write_course(
+        root,
+        "linted",
+        verifications=[
+            {
+                "id": "answer",
+                "type": "text-evidence",
+                "prompt": "Yes or no?",
+                "matches": "yes|no",
+            }
+        ],
+    )
+    (missing_lessons / "lessons" / "00-first" / "lesson.yaml").unlink()
+    (missing_lessons / "lessons" / "00-first").rmdir()
+    (missing_lessons / "lessons").rmdir()
+    (invalid / "course.yaml").write_text("id: bad-schema\n", encoding="utf-8")
+
+    report = validate_catalog(CurriculumCatalog(root))
+
+    assert [finding.course_path for finding in report.errors] == [
+        "demo/bad-layout",
+        "demo/bad-schema",
+    ]
+    assert [(finding.course_path, finding.code) for finding in report.warnings] == [
+        ("demo/linted", "broad-yes-no-regex")
+    ]
+    assert [course.id for course in report.courses] == ["linted"]
+
+
 def test_validation_reports_missing_catalog_as_a_finding(tmp_path: Path) -> None:
     report = validate_catalog(CurriculumCatalog(tmp_path / "missing"))
 
@@ -218,6 +253,32 @@ def test_findings_are_deterministic_immutable_and_source_relative(
     )
     with pytest.raises(FrozenInstanceError):
         first.findings[0].code = "changed"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("pattern", "warns"),
+    [("^yes|no$", True), ("^(?:yes|no)$", False)],
+)
+def test_yes_no_regex_requires_anchors_around_the_complete_alternation(
+    tmp_path: Path, pattern: str, warns: bool
+) -> None:
+    root = tmp_path / "collections"
+    _write_course(
+        root,
+        "regex",
+        verifications=[
+            {
+                "id": "answer",
+                "type": "text-evidence",
+                "prompt": "Yes or no?",
+                "matches": pattern,
+            }
+        ],
+    )
+
+    report = validate_catalog(CurriculumCatalog(root))
+
+    assert ("broad-yes-no-regex" in {item.code for item in report.warnings}) is warns
 
 
 def test_provider_check_registry_is_static_and_matches_runtime() -> None:
