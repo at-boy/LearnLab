@@ -21,6 +21,7 @@ from learnlab.config import (
     resolve_token_secret,
     state_dir,
 )
+from learnlab.course_certification import CourseMaturity
 from learnlab.course_validation import (
     CurriculumFinding,
     FindingSeverity,
@@ -600,9 +601,15 @@ def provider_test(profile_name: str) -> None:
 def start_course(
     course_path: str,
     provider_profile: str | None = typer.Option(None, "--provider"),
+    include_drafts: bool = typer.Option(False, "--include-drafts"),
 ) -> None:
     """Start or resume an interactive course session."""
-    _run_course_session(course_path, provider_profile, require_existing=False)
+    _run_course_session(
+        course_path,
+        provider_profile,
+        require_existing=False,
+        include_drafts=include_drafts,
+    )
 
 
 @app.command("resume")
@@ -611,7 +618,12 @@ def resume_course(
     provider_profile: str | None = typer.Option(None, "--provider"),
 ) -> None:
     """Resume a course that already has local progress or environment state."""
-    _run_course_session(course_path, provider_profile, require_existing=True)
+    _run_course_session(
+        course_path,
+        provider_profile,
+        require_existing=True,
+        include_drafts=False,
+    )
 
 
 def _run_course_session(
@@ -619,11 +631,21 @@ def _run_course_session(
     provider_profile: str | None,
     *,
     require_existing: bool,
+    include_drafts: bool,
 ) -> None:
     """Construct terminal adapters and delegate course behavior to CourseSession."""
     secrets: set[str] = set()
     try:
         course = catalog_factory().load_course(course_path)
+        if (
+            not require_existing
+            and course.maturity is not CourseMaturity.LIVE_VALIDATED
+            and not include_drafts
+        ):
+            raise ConfigurationError(
+                f"Course {course_path} is {course.maturity.value}, not live-validated; "
+                "pass --include-drafts to start it explicitly"
+            )
         store = state_store_factory()
         store.initialize()
         if require_existing and not _course_has_state(store, course):

@@ -4,7 +4,7 @@ import json
 import shutil
 import sqlite3
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from io import StringIO
 from pathlib import Path
 from types import MappingProxyType
@@ -12,6 +12,7 @@ from types import MappingProxyType
 import pytest
 from typer.testing import CliRunner
 
+from learnlab.course_certification import CourseMaturity
 from learnlab.curriculum import (
     Course,
     CurriculumError,
@@ -463,6 +464,7 @@ def app_harness(monkeypatch: pytest.MonkeyPatch, tmp_xdg: Path) -> AppHarness:
             ),
         ),
         environment=EnvironmentPolicy(EnvironmentScope.COURSE, "proxmox.vm"),
+        maturity=CourseMaturity.LIVE_VALIDATED,
     )
     catalog = RecordingCatalog(course)
     store = StateStore(tmp_xdg / "state" / "learnlab" / "state.db")
@@ -541,6 +543,7 @@ def session_course(
             scope,
             "proxmox.vm" if scope is not EnvironmentScope.NONE else None,
         ),
+        maturity=CourseMaturity.LIVE_VALIDATED,
     )
 
 
@@ -742,6 +745,61 @@ def test_none_scoped_start_skips_provider_config_and_runs_interactive_session(
     assert store.completed_lessons("proxmox", "proxmox-admin") == {"basics"}
 
 
+def test_start_blocks_draft_before_state_or_provider_access(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+) -> None:
+    from learnlab import cli
+
+    draft = replace(
+        session_course(EnvironmentScope.NONE), maturity=CourseMaturity.DRAFT
+    )
+    monkeypatch.setattr(cli, "catalog_factory", lambda: RecordingCatalog(draft))
+    monkeypatch.setattr(
+        cli,
+        "state_store_factory",
+        lambda: pytest.fail("draft gate must run before state access"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "load_settings",
+        lambda: pytest.fail("draft gate must run before provider settings"),
+    )
+
+    result = CliRunner().invoke(cli.app, ["start", "proxmox/proxmox-admin"])
+
+    assert result.exit_code == 2
+    assert "not live-validated" in result.stdout
+    assert "--include-drafts" in result.stdout
+
+
+def test_start_include_drafts_allows_explicit_draft_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+) -> None:
+    from learnlab import cli
+
+    lifecycle = SessionLifecycle()
+    draft = replace(
+        session_course(EnvironmentScope.NONE), maturity=CourseMaturity.DRAFT
+    )
+    store, _ = install_session_cli(
+        monkeypatch,
+        tmp_xdg,
+        draft,
+        lambda *args, **kwargs: lifecycle,
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["start", "proxmox/proxmox-admin", "--include-drafts"],
+        input="\n\ny\nq\n",
+    )
+
+    assert result.exit_code == 0
+    assert store.completed_lessons("proxmox", "proxmox-admin") == {"basics"}
+
+
 def test_none_to_provider_transition_resolves_configuration_only_when_entered(
     monkeypatch: pytest.MonkeyPatch,
     tmp_xdg: Path,
@@ -808,6 +866,7 @@ def test_incompatible_provider_capability_fails_before_config_or_mutation(
         title="Unsupported Provider Course",
         lessons=(session_lesson(),),
         environment=EnvironmentPolicy(EnvironmentScope.COURSE, "other.vm"),
+        maturity=CourseMaturity.LIVE_VALIDATED,
     )
     lifecycle = SessionLifecycle()
     store, providers = install_session_cli(
@@ -2280,7 +2339,7 @@ def test_start_migrates_legacy_default_db_and_resumes_active_environment(
 
     result = CliRunner().invoke(
         cli.app,
-        ["start", "proxmox/proxmox-admin"],
+        ["start", "proxmox/proxmox-admin", "--include-drafts"],
         input="\nq\n",
     )
 
@@ -2332,7 +2391,7 @@ def test_start_migrates_legacy_default_db_and_resumes_active_environment(
 @pytest.mark.parametrize(
     ("arguments", "user_input"),
     [
-        (["start", "proxmox/proxmox-admin"], "\n"),
+        (["start", "proxmox/proxmox-admin", "--include-drafts"], "\n"),
         (["destroy", "--yes", "--preserve-progress"], None),
         (["reset", "proxmox/proxmox-admin", "--yes"], None),
         (["progress", "complete", "proxmox/proxmox-admin/api-access"], None),

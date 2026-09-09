@@ -11,6 +11,11 @@ from typing import Any
 
 import yaml
 
+from learnlab.course_certification import (
+    CertificationRegistry,
+    CourseMaturity,
+    course_digest,
+)
 from learnlab.errors import LearnLabError
 
 _STABLE_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
@@ -110,6 +115,7 @@ class Course:
     requirements: tuple[str, ...] = ()
     environment: EnvironmentPolicy = EnvironmentPolicy(EnvironmentScope.NONE)
     curriculum_warnings: tuple[str, ...] = ()
+    maturity: CourseMaturity = CourseMaturity.DRAFT
 
     def effective_environment(self, lesson: Lesson) -> EnvironmentPolicy:
         """Return the lesson override when present, otherwise the course policy."""
@@ -136,6 +142,7 @@ class CourseSummary:
     collection_id: str
     course_id: str
     title: str
+    maturity: CourseMaturity = CourseMaturity.DRAFT
 
     @property
     def path(self) -> str:
@@ -171,6 +178,7 @@ class CurriculumCatalog:
                         collection_id=collection.id,
                         course_id=course.id,
                         title=course.title,
+                        maturity=course.maturity,
                     )
                 )
         return tuple(summaries)
@@ -222,6 +230,10 @@ class CurriculumCatalog:
             self._load_lesson(course_dir, lesson_id, environment)
             for lesson_id in lesson_ids
         )
+        registry = CertificationRegistry.load(
+            self.collections_dir / "certifications.yaml"
+        )
+        maturity = registry.status(course_path, course_digest(course_dir))
         return Course(
             collection_id=collection.id,
             id=parsed_course_id,
@@ -230,6 +242,7 @@ class CurriculumCatalog:
             requirements=requirements,
             environment=environment,
             curriculum_warnings=curriculum_warnings,
+            maturity=maturity,
         )
 
     def _split_course_path(self, course_path: str) -> tuple[str, str]:

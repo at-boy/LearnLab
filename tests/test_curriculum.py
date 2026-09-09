@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 import yaml
 
+from learnlab.course_certification import CourseMaturity, course_digest
 from learnlab.curriculum import (
     MAX_EVIDENCE_BYTES,
     CurriculumCatalog,
@@ -183,6 +184,42 @@ def test_list_courses_is_complete_and_stably_sorted(tmp_path: Path) -> None:
         "zeta/last",
     ]
     assert [item.title for item in catalog.list_courses()] == ["One", "Two", "Last"]
+
+
+def test_catalog_marks_only_exact_live_digest_ready(tmp_path: Path) -> None:
+    collections = tmp_path / "collections"
+    _write_discovery_course(collections, "demo", "admin", "Administration")
+    course_dir = collections / "demo" / "courses" / "admin"
+    (collections / "certifications.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "certifications": [
+                    {
+                        "path": "demo/admin",
+                        "digest": course_digest(course_dir),
+                        "status": "live-validated",
+                        "validated_at": "2026-09-09",
+                        "learnlab_revision": "09fe71f",
+                        "guest_capabilities": [],
+                        "note": "Completed the acceptance checklist.",
+                    }
+                ]
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    catalog = CurriculumCatalog(collections)
+
+    assert catalog.load_course("demo/admin").maturity is CourseMaturity.LIVE_VALIDATED
+    assert catalog.list_courses()[0].maturity is CourseMaturity.LIVE_VALIDATED
+
+    course_file = course_dir / "course.yaml"
+    changed = yaml.safe_load(course_file.read_text(encoding="utf-8"))
+    changed["title"] = "Changed administration"
+    course_file.write_text(yaml.safe_dump(changed, sort_keys=False), encoding="utf-8")
+    assert catalog.load_course("demo/admin").maturity is CourseMaturity.DRAFT
 
 
 def test_list_courses_reports_malformed_collection(tmp_path: Path) -> None:

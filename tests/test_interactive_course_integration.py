@@ -14,6 +14,7 @@ import pytest
 from typer.testing import CliRunner
 
 from learnlab.config import state_dir
+from learnlab.course_certification import CourseMaturity
 from learnlab.curriculum import (
     Course,
     EnvironmentPolicy,
@@ -281,6 +282,7 @@ def full_course() -> Course:
             Lesson(id="second", title="Second Lesson", steps=(second_step,)),
         ),
         environment=EnvironmentPolicy(EnvironmentScope.COURSE, "proxmox.vm"),
+        maturity=CourseMaturity.LIVE_VALIDATED,
     )
 
 
@@ -315,6 +317,7 @@ def two_lesson_course(scope: EnvironmentScope) -> Course:
             simple_lesson("second", "Second Lesson"),
         ),
         environment=EnvironmentPolicy(scope, "proxmox.vm"),
+        maturity=CourseMaturity.LIVE_VALIDATED,
     )
 
 
@@ -733,6 +736,7 @@ def test_none_scope_completes_without_loading_provider_configuration(
         title="Provider-Free Course",
         lessons=(simple_lesson("only", "Only Lesson"),),
         environment=EnvironmentPolicy(EnvironmentScope.NONE),
+        maturity=CourseMaturity.LIVE_VALIDATED,
     )
     monkeypatch.setattr(cli, "catalog_factory", lambda: FakeCatalog(course))
     monkeypatch.setattr(
