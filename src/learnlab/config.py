@@ -183,7 +183,7 @@ def _load_config_data(path: Path | None) -> dict[str, Any]:
     try:
         with config_file.open("rb") as file:
             return tomllib.load(file)
-    except (OSError, tomllib.TOMLDecodeError) as error:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         raise ConfigurationError(
             f"Unable to load configuration: {config_file}"
         ) from error

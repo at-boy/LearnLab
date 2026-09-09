@@ -89,6 +89,38 @@ def test_validation_aggregates_errors_from_independently_discoverable_courses(
     assert report.courses == ()
 
 
+def test_validation_aggregates_malformed_utf8_with_independent_findings(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "collections"
+    malformed = _write_course(root, "bad-encoding")
+    invalid = _write_course(root, "bad-schema")
+    _write_course(
+        root,
+        "linted",
+        verifications=[
+            {
+                "id": "answer",
+                "type": "text-evidence",
+                "prompt": "Yes or no?",
+                "matches": "yes|no",
+            }
+        ],
+    )
+    (malformed / "course.yaml").write_bytes(b"\xff")
+    (invalid / "course.yaml").write_text("id: bad-schema\n", encoding="utf-8")
+
+    report = validate_catalog(CurriculumCatalog(root))
+
+    assert [finding.course_path for finding in report.errors] == [
+        "demo/bad-encoding",
+        "demo/bad-schema",
+    ]
+    assert [(finding.course_path, finding.code) for finding in report.warnings] == [
+        ("demo/linted", "broad-yes-no-regex")
+    ]
+
+
 def test_validation_isolates_lesson_layout_errors_from_other_courses(
     tmp_path: Path,
 ) -> None:

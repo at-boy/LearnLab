@@ -44,6 +44,29 @@ def test_loads_named_proxmox_profile(tmp_path):
     assert profile.template_capabilities == ()
 
 
+def test_load_settings_normalizes_malformed_utf8(tmp_path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_bytes(b"\xff")
+
+    with pytest.raises(ConfigurationError, match="Unable to load configuration"):
+        load_settings(config)
+
+
+def test_load_settings_preserves_unexpected_parser_exceptions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(CONFIG, encoding="utf-8")
+
+    def fail_unexpectedly(*args: object, **kwargs: object) -> dict[str, object]:
+        raise RuntimeError("unexpected parser failure")
+
+    monkeypatch.setattr(config_module.tomllib, "load", fail_unexpectedly)
+
+    with pytest.raises(RuntimeError, match="unexpected parser failure"):
+        load_settings(config)
+
+
 def test_profile_loads_template_capabilities(tmp_path):
     config = tmp_path / "config.toml"
     config.write_text(CONFIG + CAPABILITIES, encoding="utf-8")

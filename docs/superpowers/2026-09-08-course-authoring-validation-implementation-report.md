@@ -23,6 +23,10 @@ course certification was run or claimed.
   warning and cannot be mixed with `guest_capabilities`.
 - The wheel smoke installs the artifact and exercises installed curriculum,
   `validate --help`, and schema-v1 JSON validation.
+- Curriculum and configuration loaders normalize malformed UTF-8 into their
+  existing `CurriculumError` and `ConfigurationError` boundaries. This keeps
+  offline aggregation and JSON output safe, makes provider configuration
+  failures exit 3, and still lets unexpected programming exceptions propagate.
 
 ## Preserved rulings
 
@@ -43,7 +47,7 @@ On 2026-09-09:
 
 ```text
 /home/at-boy/Projects/codex/LearnLab/.venv/bin/python -m pytest -m 'not live' -q
-396 passed, 1 deselected in 26.42s
+405 passed, 1 deselected in 26.50s
 
 /home/at-boy/Projects/codex/LearnLab/.venv/bin/ruff check .
 All checks passed!

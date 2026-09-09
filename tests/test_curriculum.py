@@ -229,6 +229,39 @@ def test_list_courses_reports_malformed_course(tmp_path: Path) -> None:
         CurriculumCatalog(collections).list_courses()
 
 
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "demo/collection.yaml",
+        "demo/courses/admin/course.yaml",
+        "demo/courses/admin/lessons/00-first/lesson.yaml",
+    ],
+)
+def test_loader_normalizes_malformed_utf8_at_each_curriculum_boundary(
+    curriculum_builder: CurriculumBuilder, relative_path: str
+) -> None:
+    curriculum_builder.load()
+    malformed = curriculum_builder.collections_dir / relative_path
+    malformed.write_bytes(b"\xff")
+
+    with pytest.raises(CurriculumError, match=relative_path):
+        CurriculumCatalog(curriculum_builder.collections_dir).load_course("demo/admin")
+
+
+def test_loader_preserves_unexpected_parser_exceptions(
+    monkeypatch: pytest.MonkeyPatch, curriculum_builder: CurriculumBuilder
+) -> None:
+    curriculum_builder.load()
+
+    def fail_unexpectedly(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("unexpected parser failure")
+
+    monkeypatch.setattr(yaml, "safe_load", fail_unexpectedly)
+
+    with pytest.raises(RuntimeError, match="unexpected parser failure"):
+        CurriculumCatalog(curriculum_builder.collections_dir).load_course("demo/admin")
+
+
 @pytest.fixture
 def course(collections_dir: Path):
     return CurriculumCatalog(collections_dir).load_course("proxmox/proxmox-admin")

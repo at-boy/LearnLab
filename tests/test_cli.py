@@ -1821,6 +1821,44 @@ def test_validate_json_is_versioned_deterministic_and_matches_snapshot() -> None
     assert payload["ok"] is True
 
 
+def test_validate_malformed_utf8_is_safe_offline_json_and_exit_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from learnlab import cli
+    from learnlab.curriculum import CurriculumCatalog
+
+    collections = tmp_path / "collections"
+    collection = collections / "demo"
+    course = collection / "courses" / "broken"
+    course.mkdir(parents=True)
+    (collection / "collection.yaml").write_text(
+        "id: demo\ntitle: Demo\n", encoding="utf-8"
+    )
+    (course / "course.yaml").write_bytes(b"\xff")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("offline validation must not access runtime dependencies")
+
+    for dependency in (
+        "load_settings",
+        "load_requested_profiles",
+        "resolve_token_secret",
+        "state_store_factory",
+        "provider_factory",
+    ):
+        monkeypatch.setattr(cli, dependency, forbidden)
+    monkeypatch.setattr(cli, "catalog_factory", lambda: CurriculumCatalog(collections))
+
+    result = CliRunner().invoke(cli.app, ["validate", "--format", "json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert tuple(payload) == ("schema_version", "ok", "findings")
+    assert payload["schema_version"] == 1
+    assert payload["ok"] is False
+    assert payload["findings"][0]["code"] == "invalid-curriculum"
+
+
 def test_validate_one_unknown_well_formed_course_is_a_finding() -> None:
     from learnlab.cli import app
 
@@ -1939,6 +1977,41 @@ def test_validate_provider_stops_after_offline_errors_and_json_reports_not_ok(
 
     assert result.exit_code == 1
     assert json.loads(result.stdout)["ok"] is False
+
+
+def test_validate_provider_malformed_utf8_config_is_safe_json_and_exit_three(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from learnlab import cli
+
+    config_dir = tmp_path / "config" / "learnlab"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_bytes(b"\xff")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setattr(
+        cli,
+        "resolve_token_secret",
+        lambda selected: pytest.fail("invalid config must not resolve secrets"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "provider_factory",
+        lambda *args: pytest.fail("invalid config must not construct a provider"),
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["validate", "--provider", "lab", "--format", "json"],
+    )
+
+    assert result.exit_code == 3
+    payload = json.loads(result.stdout)
+    assert tuple(payload) == ("schema_version", "ok", "findings")
+    assert payload["schema_version"] == 1
+    assert payload["ok"] is False
+    assert "provider-validation-failed" in {
+        finding["code"] for finding in payload["findings"]
+    }
 
 
 def test_validate_provider_health_failure_is_safe_json_and_exit_three(

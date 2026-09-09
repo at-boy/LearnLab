@@ -302,7 +302,7 @@ def _load_mapping(path: Traversable) -> dict[str, Any]:
     try:
         with path.open("r", encoding="utf-8") as file:
             value = yaml.safe_load(file)
-    except (OSError, yaml.YAMLError) as error:
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as error:
         raise CurriculumError(f"{path}: unable to load curriculum") from error
     if not isinstance(value, dict):
         raise CurriculumError(f"{path}: expected a mapping root")
