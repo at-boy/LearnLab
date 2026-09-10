@@ -14,9 +14,8 @@ steps:
     failure_message: nginx is not active. Run `sudo nixos-rebuild switch` after saving your edit.
   - id: explain-the-apply-command
     type: text-evidence
-    prompt: Which single command builds, activates, and sets your edited configuration.nix as the new
-      boot default?
-    matches: (?i)nixos-rebuild switch
+    prompt: Enter the command that builds and activates the new boot default (omit sudo and timeout).
+    matches: ^\s*nixos-rebuild switch\s*$
 - id: confirm-a-response
   title: Prove the running config matches what you declared
   instructions: |-

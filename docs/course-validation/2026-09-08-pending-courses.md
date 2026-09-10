@@ -55,7 +55,7 @@ Maturity: **draft**.
 
 Canonical course directory: `src/learnlab/collections/nginx/courses/nginx-basics/`.
 
-`course_digest`: `c27c99fbf95e67021e3612b4ad09ec012459693c1443d16fa451a838dd7fc931`
+`course_digest`: `69bb8d33b123916521b67904be8a2976e464f639df14e718cb4ac9a3d5c0d7aa`
 
 Declared capabilities: `os.debian.13`, `tool.curl`.
 
@@ -74,7 +74,7 @@ Maturity: **draft**.
 
 Canonical course directory: `src/learnlab/collections/nginx-nixos/courses/nginx-basics/`.
 
-`course_digest`: `3f8e24095a209ff1190085294b2703df5a7a57ccbf352ce128b8d68f0782ea4f`
+`course_digest`: `bc735b5d3c29f132ea9d42e60b1fe37baec5c07044f3336aab1cbc96a01b779b`
 
 Declared capabilities: `os.nixos`, `tool.curl`.
 

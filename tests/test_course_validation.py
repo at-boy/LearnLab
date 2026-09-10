@@ -411,3 +411,42 @@ def test_profile_validation_marks_failed_required_health_as_operational(
     assert [finding.code for finding in checked.errors] == [
         "provider-health-failed"
     ]
+
+
+@pytest.mark.parametrize("failure", ["registry", "digest"])
+def test_certification_failure_is_relative_finding(tmp_path, monkeypatch, failure):
+    root = tmp_path / "collections"
+    course = _write_course(root, "valid")
+    if failure == "registry":
+        (root / "certifications.yaml").write_text("certifications: [")
+        source = "certifications.yaml"
+    else:
+        original = Path.open
+
+        def fail_read(path, mode="r", *args, **kwargs):
+            if path == course / "course.yaml" and mode == "rb":
+                raise OSError("injected digest read failure")
+            return original(path, mode, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", fail_read)
+        source = "demo/courses/valid"
+    report = validate_catalog(CurriculumCatalog(root))
+    assert not report.ok
+    finding = report.errors[0]
+    assert finding.code == "invalid-certification"
+    assert finding.source_path == source
+    assert str(root) not in finding.message
+    assert "readable" in finding.remedy
+
+
+def test_certification_programming_error_propagates(tmp_path, monkeypatch):
+    import learnlab.curriculum as curriculum
+
+    _write_course(tmp_path, "valid")
+
+    def broken_digest(course):
+        raise RuntimeError("programming error")
+
+    monkeypatch.setattr(curriculum, "course_digest", broken_digest)
+    with pytest.raises(RuntimeError, match="programming error"):
+        validate_catalog(CurriculumCatalog(tmp_path))

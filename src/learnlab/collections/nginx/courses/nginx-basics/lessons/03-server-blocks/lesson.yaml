@@ -49,5 +49,5 @@ steps:
     failure_message: Port 8080 is not serving your new document root yet. Check the syntax and reload.
   - id: explain-symlink-choice
     type: text-evidence
-    prompt: Why enable a site by symlinking it into sites-enabled instead of copying the file?
-    matches: (?i)drift|single|one (copy|source)|sync
+    prompt: What does a symlink preserve instead of maintaining duplicate configurations? Answer single source.
+    matches: (?i)^\s*single source\s*$

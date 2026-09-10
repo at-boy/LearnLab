@@ -9,6 +9,7 @@ from importlib.resources.abc import Traversable
 from pathlib import Path
 
 from learnlab.config import ProxmoxProfile
+from learnlab.course_certification import CertificationError
 from learnlab.curriculum import (
     Course,
     CurriculumCatalog,
@@ -169,6 +170,19 @@ def validate_catalog(
     for candidate, default_source in candidates:
         try:
             course = catalog.load_course(candidate)
+        except CertificationError as error:
+            findings.append(
+                _finding(
+                    FindingSeverity.ERROR,
+                    candidate,
+                    _source_from_error(error, root, default_source),
+                    "invalid-certification",
+                    _relative_message(error, root),
+                    "Correct certifications.yaml metadata and ensure the registry "
+                    "and course files are readable, then retry offline validation.",
+                )
+            )
+            continue
         except (CurriculumError, OSError) as error:
             findings.append(
                 _finding(
@@ -454,9 +468,7 @@ def _has_top_level_alternation(pattern: str) -> bool:
 
 def _lesson_source(root: Traversable, course: Course, lesson_id: str) -> str:
     relative_base = f"{course.collection_id}/courses/{course.id}/lessons"
-    lessons_dir = (
-        root / course.collection_id / "courses" / course.id / "lessons"
-    )
+    lessons_dir = root / course.collection_id / "courses" / course.id / "lessons"
     try:
         matches = sorted(
             child.name
@@ -477,7 +489,9 @@ def _course_source(course_path: str) -> str:
 
 
 def _source_from_error(
-    error: CurriculumError | OSError, root: Traversable, default: str
+    error: CurriculumError | CertificationError | OSError,
+    root: Traversable,
+    default: str,
 ) -> str:
     if isinstance(error, OSError):
         if not isinstance(error.filename, str):
@@ -498,7 +512,9 @@ def _source_from_error(
     return candidate or default
 
 
-def _relative_message(error: CurriculumError | OSError, root: Traversable) -> str:
+def _relative_message(
+    error: CurriculumError | CertificationError | OSError, root: Traversable
+) -> str:
     return str(error).replace(f"{str(root).rstrip('/')}/", "")
 
 

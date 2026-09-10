@@ -14,8 +14,8 @@ steps:
     failure_message: /etc/nginx/nginx.conf does not resolve into /nix/store on this system.
   - id: explain-source-of-truth
     type: text-evidence
-    prompt: Where does the durable configuration for nginx actually live on a NixOS system?
-    matches: (?i)configuration\.nix|services\.nginx|module
+    prompt: Enter the main NixOS module filename containing the durable nginx declaration.
+    matches: ^\s*configuration\.nix\s*$
 - id: check-before-you-switch
   title: Build before you activate
   instructions: Run `sudo -n timeout 300 nixos-rebuild build` to evaluate and build without activation.

@@ -25,6 +25,5 @@ steps:
     failure_message: nginx is not active after your restart/reload practice.
   - id: explain-reload-vs-restart
     type: text-evidence
-    prompt: What is the key operational difference between `systemctl reload nginx` and `systemctl restart
-      nginx`?
-    matches: (?i)drop|without (closing|interrupt)|graceful|re-read|reread
+    prompt: Which action applies configuration gracefully while existing connections finish? Answer reload or restart.
+    matches: (?i)^\s*reload\s*$

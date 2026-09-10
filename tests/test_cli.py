@@ -2642,3 +2642,55 @@ def _create_pre_ownership_legacy_db(path: Path) -> None:
             );
             """
         )
+
+
+@pytest.mark.parametrize("output_format", ["human", "json"])
+@pytest.mark.parametrize("failure", ["registry", "digest"])
+def test_validate_certification_errors_are_structured(
+    tmp_path, monkeypatch, output_format, failure
+):
+    import shutil
+
+    from learnlab import cli
+    from learnlab.curriculum import CurriculumCatalog
+
+    root = tmp_path / "collections"
+    shutil.copytree(Path("src/learnlab/collections"), root)
+    if failure == "registry":
+        (root / "certifications.yaml").write_text("certifications: [")
+        source = "certifications.yaml"
+    else:
+        original = Path.open
+
+        def fail_read(path, mode="r", *args, **kwargs):
+            if path.name == "course.yaml" and mode == "rb":
+                raise OSError("injected digest read failure")
+            return original(path, mode, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", fail_read)
+        source = "nginx/courses/nginx-basics"
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("offline validation accessed runtime dependency")
+
+    for dependency in (
+        "load_settings",
+        "load_requested_profiles",
+        "resolve_token_secret",
+        "state_store_factory",
+        "provider_factory",
+    ):
+        monkeypatch.setattr(cli, dependency, forbidden)
+    monkeypatch.setattr(cli, "catalog_factory", lambda: CurriculumCatalog(root))
+    result = CliRunner().invoke(
+        cli.app, ["validate", "nginx/nginx-basics", "--format", output_format]
+    )
+    assert result.exit_code == 1
+    assert str(root) not in result.stdout
+    assert source in result.stdout
+    if output_format == "json":
+        payload = json.loads(result.stdout)
+        assert payload["ok"] is False
+        assert payload["findings"][0]["code"] == "invalid-certification"
+    else:
+        assert "invalid-certification" in result.stdout

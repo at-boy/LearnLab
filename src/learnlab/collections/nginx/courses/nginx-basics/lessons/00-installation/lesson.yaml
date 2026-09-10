@@ -19,8 +19,8 @@ steps:
     failure_message: The nginx package is not registered with dpkg. Reinstall with apt.
   - id: explain-package-source
     type: text-evidence
-    prompt: Which command did you use to install nginx from the distribution repository?
-    matches: (?i)apt
+    prompt: Enter the package installation command (omit sudo and flags).
+    matches: (?i)^\s*apt(?:-get)? install nginx\s*$
 - id: confirm-it-runs
   title: Confirm the service started and is reachable
   instructions: A fresh install starts and enables the nginx service immediately. Check its status with

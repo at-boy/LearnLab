@@ -42,6 +42,5 @@ steps:
     failure_message: Port 8080 is not serving your document root yet.
   - id: explain-virtual-hosts-option
     type: text-evidence
-    prompt: What NixOS option declares a named virtual host, roughly analogous to a hand-written nginx
-      server block?
-    matches: (?i)virtualhosts
+    prompt: Enter the full NixOS option that declares nginx virtual hosts.
+    matches: ^\s*services\.nginx\.virtualHosts\s*$

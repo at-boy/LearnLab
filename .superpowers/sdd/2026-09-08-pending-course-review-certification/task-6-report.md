@@ -65,3 +65,13 @@ compatible template capabilities and cleanup before any live work. Execute each
 protocol serially, destroy through LearnLab and verify absence. Failed or uncertain
 cleanup blocks certification until reconciled; deletion by VMID alone is forbidden.
 Only successful exact-digest live acceptance may produce a registry record.
+
+## Superseding final offline gate
+
+After the consolidated final-review fixes, the full offline gate is **513 passed,
+1 deselected in 31.88s**; covering validation/CLI/nginx and packaging tests are
+**135 passed in 3.29s**. Ruff, mypy (17 source files), both nginx JSON validates,
+and diff checks pass. These counts supersede the earlier Task 6 snapshot above.
+See `final-fix-report.md` for red/green evidence and invocation details. Both nginx
+digests have been refreshed; all six draft statuses, empty registry and pending
+live checkpoints are unchanged.

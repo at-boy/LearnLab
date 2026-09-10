@@ -18,9 +18,8 @@ steps:
     failure_message: Inspect nginx -T and repair included configuration before reloading.
   - id: explain-active-config
     type: text-evidence
-    prompt: Which directory holds the symlinks that determine which site configuration files are actually
-      active?
-    matches: (?i)sites-enabled
+    prompt: Enter the absolute directory path containing symlinks for enabled nginx sites.
+    matches: ^\s*/etc/nginx/sites-enabled/?\s*$
 - id: validate-before-you-reload
   title: Always test syntax before reloading
   instructions: Before every reload, run `sudo -n timeout 300 nginx -t`. It parses every included file
@@ -29,5 +28,5 @@ steps:
   verifications:
   - id: explain-config-test
     type: text-evidence
-    prompt: What does `nginx -t` check, and does it change the running server?
-    matches: (?i)syntax|valid
+    prompt: What does nginx -t check, and does it activate changes? Answer syntax; no.
+    matches: (?i)^\s*syntax; no\s*$

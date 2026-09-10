@@ -86,3 +86,68 @@ def test_nixos_recovery_is_isolated_and_does_not_replay_relative_rollback():
     assert "isolated" in step["instructions"]
     assert "rollback" not in step["title"].lower()
     assert any(v["id"] == "isolated-config-rejected" for v in step["verifications"])
+
+
+@pytest.mark.parametrize(
+    "family,check_id,answer,wrong",
+    [
+        (
+            "nginx-nixos",
+            "explain-dry-build",
+            "nixos-rebuild build",
+            "not nixos-rebuild build",
+        ),
+        ("nginx-nixos", "explain-restart-durability", "no", "yes"),
+        (
+            "nginx-nixos",
+            "explain-list-generations",
+            "--list-generations",
+            "--delete-generations",
+        ),
+        ("nginx", "explain-x-forwarded-for", "proxy address", "client address"),
+        ("nginx-nixos", "explain-forwarded-headers", "proxy address", "client address"),
+        ("nginx", "explain-package-source", "apt install nginx", "adapt"),
+        ("nginx", "explain-reload-vs-restart", "reload", "drop connections"),
+        (
+            "nginx",
+            "explain-active-config",
+            "/etc/nginx/sites-enabled",
+            "not sites-enabled",
+        ),
+        ("nginx", "explain-config-test", "syntax; no", "invalid"),
+        ("nginx", "explain-symlink-choice", "single source", "out of sync"),
+        (
+            "nginx-nixos",
+            "explain-the-apply-command",
+            "nixos-rebuild switch",
+            "not nixos-rebuild switch",
+        ),
+        (
+            "nginx-nixos",
+            "explain-source-of-truth",
+            "configuration.nix",
+            "not in any module",
+        ),
+        (
+            "nginx-nixos",
+            "explain-virtual-hosts-option",
+            "services.nginx.virtualHosts",
+            "not virtualHosts",
+        ),
+    ],
+)
+def test_nginx_knowledge_answers_are_whole_responses(family, check_id, answer, wrong):
+    import re
+
+    checks = [
+        check
+        for path in (ROOT / family).rglob("lesson.yaml")
+        for step in yaml.safe_load(path.read_text())["steps"]
+        for check in step.get("verifications", [])
+        if check["id"] == check_id
+    ]
+    assert len(checks) == 1
+    pattern = checks[0]["matches"]
+    assert re.search(pattern, answer)
+    for rejected in (wrong, "not " + answer, "unrelated " + answer + " unrelated"):
+        assert not re.search(pattern, rejected), rejected
