@@ -53,7 +53,7 @@ steps:
     NixOS options map onto unit sections: description/after/wants become
     [Unit] entries, script or serviceConfig.ExecStart become [Service],
     and wantedBy creates target dependency links (not necessarily an [Install] section). Inspect the mapping with:
-    systemctl cat hello-oneshot.service.
+    timeout 10 systemctl --no-pager cat hello-oneshot.service
   verifications:
   - id: explain-script
     type: text-evidence

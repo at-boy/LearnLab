@@ -7,7 +7,23 @@ steps:
     Services should not run as root unless they must. Create a system
     user, then a protected environment file:
 
-      getent passwd appuser >/dev/null || sudo -n timeout 10 useradd --system --user-group --no-create-home --shell /usr/sbin/nologin appuser
+      sudo -n timeout 25 sh -eu -c '
+        if timeout 10 getent passwd appuser >/dev/null; then
+          :
+        else
+          lookup_status=$?
+          if test "$lookup_status" -eq 2; then
+            timeout 10 useradd --system --user-group --no-create-home --shell /usr/sbin/nologin appuser
+          else
+            exit "$lookup_status"
+          fi
+        fi'
+
+    Continue only if the account command succeeds. Exit 2 from getent means the
+    account is absent; timeout or other lookup errors abort without creating it.
+
+    Then create the environment file:
+
       sudo -n timeout 10 mkdir -p /etc/learnlab
       echo 'APP_GREETING=hello-from-env' | sudo -n timeout 10 tee /etc/learnlab/app.env >/dev/null
       sudo -n timeout 10 chown root:appuser /etc/learnlab/app.env

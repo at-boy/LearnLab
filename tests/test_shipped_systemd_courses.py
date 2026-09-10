@@ -85,3 +85,22 @@ def test_systemd_catalog_schema_loads(family):
 def test_debian_printf_escapes_systemd_percent_specifier():
     instructions = lesson("systemd-debian", 4)["steps"][1]["instructions"]
     assert 'printf "%%s\\n"' in instructions
+
+
+def test_nixos_unit_inspection_is_bounded_and_without_pager():
+    instructions = lesson("systemd-nixos", 1)["steps"][1]["instructions"]
+    assert "timeout 10 systemctl --no-pager cat hello-oneshot.service" in instructions
+
+
+def test_debian_account_lookup_only_creates_for_missing_account():
+    instructions = lesson("systemd-debian", 4)["steps"][0]["instructions"]
+    assert "timeout 10 getent passwd appuser" in instructions
+    assert "lookup_status=$?" in instructions
+    assert 'test "$lookup_status" -eq 2' in instructions
+    assert 'exit "$lookup_status"' in instructions
+
+
+def test_nixos_account_remediation_does_not_require_debian_env_file():
+    check = lesson("systemd-nixos", 4)["steps"][0]["verifications"][0]
+    assert "Debian" not in check["failure_message"]
+    assert "env file" not in check["failure_message"]

@@ -26,8 +26,8 @@ steps:
       test "$(id -gn appuser)" = appuser
       getent passwd appuser | grep -Eq '"'"'^[^:]+:[^:]*:[0-9]+:[0-9]+:[^:]*:[^:]*:.*/nologin$'"'"''
     timeout_seconds: 35
-    failure_message: appuser must be a system UID below 1000 with group appuser and nologin shell; Debian
-      env file must be root:appuser mode 640.
+    failure_message: Declare appuser with isSystemUser, primary group appuser, and a nologin shell,
+      then rebuild; the reserved account must have a nonzero UID below 1000.
 - id: env-service
   title: Run a service as appuser with declared environment
   instructions: |-
