@@ -1,0 +1,35 @@
+id: installation-and-persistence
+title: Install nftables and Understand Persistence
+steps:
+- id: install-and-enable
+  title: Install nftables and enable it at boot
+  instructions: |-
+    Prerequisites: use a fresh disposable Debian 13 VM. Require passwordless sudo, SSH on TCP 22, stable static IPv4 guest networking and IPv4 SSH (no DHCP renewal dependency), and no other firewall manager, containers, or production services. Install nftables, iproute2 (ip), curl, Python 3, systemd tools and coreutils before proceeding. NixOS must expose these tools in environment.systemPackages. Reserve 192.0.2.0/30 for the isolated namespace probe; no existing route may overlap it. This course is cumulative: complete ordered lessons once on the same VM; on resume keep prior rules and listener state. Replace named declarations/files rather than append duplicates. Never run two attempts concurrently. NAT is deferred and not a prerequisite for logging. Draft: offline validation is not live certification.
+
+    Connect over SSH and install the package with `sudo timeout --kill-after=10 300 apt-get update && sudo timeout --kill-after=10 300 env DEBIAN_FRONTEND=noninteractive apt-get install -y nftables iproute2 curl python3`, then run `sudo timeout --kill-after=5 30 systemctl enable --now nftables.service`. That unit's only job is to load the ruleset from /etc/nftables.conf into the kernel; on a fresh install that file is close to empty, so nothing is blocked yet.
+  verifications:
+  - id: nft-binary-present
+    type: remote-command
+    command: command -v nft
+    failure_message: The nft binary was not found on your PATH.
+  - id: nftables-package-registered
+    type: remote-command
+    command: dpkg -s nftables
+    failure_message: The nftables package is not registered with dpkg.
+  - id: nftables-service-active
+    type: remote-command
+    command: systemctl is-active --quiet nftables
+    failure_message: nftables.service is not active. Run `sudo systemctl enable --now nftables.service`.
+- id: understand-live-vs-persisted
+  title: Understand live rules versus the persisted file
+  instructions: A command like `sudo nft add rule ...` changes the running kernel ruleset immediately,
+    but that change is not written anywhere; it is lost on the next reboot unless it also ends up in /etc/nftables.conf.
+    For the rest of this course you will always edit /etc/nftables.conf first and then apply it with `sudo
+    nft -f /etc/nftables.conf`, so the live ruleset and the persisted file never drift apart. Run `sudo
+    nft list ruleset` yourself now to see the current, still mostly empty, live state.
+  verifications:
+  - id: explain-persistence
+    type: text-evidence
+    prompt: 'If you run `sudo nft add rule ...` directly on the command line without touching /etc/nftables.conf,
+      will that change survive a reboot? Reply exactly: no'
+    matches: (?i)^no[.]?$

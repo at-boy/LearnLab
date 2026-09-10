@@ -1,0 +1,27 @@
+id: port-forwarding-with-nat
+title: 'Draft deferred: Port Forwarding with NAT'
+steps:
+- id: redirect-a-port
+  title: Redirect an externally-visible port
+  instructions: 'Draft blocker: deferred to the multi-machine workstream. Requires an independently controlled
+    ingress client, known listener ownership, and objective fresh request evidence through a nat prerouting
+    redirect. Locally generated packets take the output path and cannot prove prerouting. This lesson
+    is intentionally excluded from ordering; do not execute it. Preserve the port-8080 listener for the
+    logging lesson. Planned rule: tcp dport 8081 redirect to :8080 in an ip nat prerouting chain.'
+  verifications:
+  - id: nat-topology-not-certified
+    type: remote-command
+    command: 'false'
+    failure_message: 'Draft blocker: multi-machine ingress topology and live acceptance are not implemented.'
+- id: explain-filtering-order
+  title: Explain why the input chain still checks port 8080
+  instructions: DNAT and redirect rules run in the nat table's prerouting chain, which processes a packet
+    before it ever reaches the filter table's input chain. By the time your input chain's rules see this
+    connection, its destination port has already been rewritten from 8081 to 8080. That is why lesson
+    3's "tcp dport 8080 accept" rule is still required even though the connection arrived on 8081; a rule
+    for "tcp dport 8081 accept" in the filter table would not match it.
+  verifications:
+  - id: explain-post-nat-port
+    type: text-evidence
+    prompt: 'Which destination port would input see after redirect? Reply exactly: 8080'
+    matches: (?i)^8080[.]?$

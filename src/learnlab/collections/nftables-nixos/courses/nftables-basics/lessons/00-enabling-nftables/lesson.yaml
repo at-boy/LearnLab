@@ -1,0 +1,56 @@
+id: enabling-nftables
+title: Enable nftables Declaratively
+steps:
+- id: declare-and-switch
+  title: Turn on the nftables module
+  instructions: |-
+    Prerequisites: use a fresh disposable NixOS classic non-flake VM with pkgs in the configuration function arguments. Require passwordless sudo, SSH on TCP 22, stable static IPv4 guest networking and IPv4 SSH (no DHCP renewal dependency), and no other firewall manager, containers, or production services. Install nftables, iproute2 (ip), curl, Python 3, systemd tools and coreutils before proceeding. NixOS must expose these tools in environment.systemPackages. Reserve 192.0.2.0/30 for the isolated namespace probe; no existing route may overlap it. This course is cumulative: complete ordered lessons once on the same VM; on resume keep prior rules and listener state. Replace named declarations/files rather than append duplicates. Never run two attempts concurrently. NAT is deferred and not a prerequisite for logging. Draft: offline validation is not live certification.
+
+    This course assumes a NixOS learning VM using the classic, non-flake
+    /etc/nixos/configuration.nix workflow. Edit configuration.nix and
+    add:
+
+      networking.firewall.enable = false;
+      networking.nftables.enable = true;
+      networking.nftables.ruleset = ''
+        flush ruleset
+
+        table inet filter {
+          chain input {
+            type filter hook input priority 0; policy accept;
+          }
+          chain forward {
+            type filter hook forward priority 0; policy accept;
+          }
+          chain output {
+            type filter hook output priority 0; policy accept;
+          }
+        }
+      '';
+
+    Disabling the higher-level networking.firewall module avoids it
+    fighting with the raw ruleset you are about to hand-write yourself.
+    Apply with `sudo timeout --kill-after=10 900 nixos-rebuild build`. After the build succeeds, activate with `sudo timeout --kill-after=5 60 ./result/bin/switch-to-configuration switch`. A timeout is uncertain state: inspect the journal and live rules before retrying; never assume rollback.
+  verifications:
+  - id: nftables-enabled
+    type: remote-command
+    command: grep -q 'networking.nftables.enable = true' /etc/nixos/configuration.nix
+    failure_message: configuration.nix does not enable networking.nftables yet.
+  - id: default-firewall-disabled
+    type: remote-command
+    command: grep -q 'networking.firewall.enable = false' /etc/nixos/configuration.nix
+    failure_message: configuration.nix does not disable the default networking.firewall module yet.
+  - id: filter-table-declared
+    type: remote-command
+    command: grep -q 'table inet filter' /etc/nixos/configuration.nix
+    failure_message: configuration.nix does not declare an inet filter table yet.
+- id: confirm-ssh-still-works
+  title: Confirm the system is still reachable
+  instructions: Every chain above still has an accept policy, so nothing should be blocked yet. Confirm
+    you can still reach the VM over SSH after the switch, which you are effectively doing right now by
+    having this check run at all.
+  verifications:
+  - id: sshd-active
+    type: remote-command
+    command: systemctl is-active --quiet sshd
+    failure_message: sshd is not active.

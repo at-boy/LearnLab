@@ -1,0 +1,50 @@
+id: allowing-a-service
+title: Allow an Additional Service
+steps:
+- id: run-a-persistent-test-listener
+  title: Run something to test your rule against
+  instructions: |-
+    Create /etc/systemd/system/test-listener.service so you have a real,
+    persistent service to open a port for:
+
+      [Unit]
+      Description=LearnLab firewall test listener
+
+      [Service]
+      ExecStart=/usr/bin/python3 -m http.server 8080
+      Restart=always
+
+      [Install]
+      WantedBy=multi-user.target
+
+    Then run `sudo timeout 30 systemctl daemon-reload && sudo timeout 30 systemctl enable test-listener && sudo timeout 30 systemctl restart test-listener`.
+  verifications:
+  - id: test-listener-active
+    type: remote-command
+    command: systemctl is-active --quiet test-listener
+    failure_message: test-listener.service is not active.
+  - id: test-listener-reachable-on-loopback
+    type: remote-command
+    command: curl --noproxy '*' --fail --silent --show-error --max-time 3 -o /dev/null -w '%{http_code}'
+      http://127.0.0.1:8080/ | grep -qx 200
+    failure_message: The test listener did not respond on 127.0.0.1:8080.
+- id: allow-the-port-and-explain-loopback
+  title: Allow the port, and understand why loopback isn't proof
+  instructions: With your safety net armed as always, add `tcp dport 8080 accept` to the input chain in
+    /etc/nftables.conf, check it, and apply it. Notice that curling 127.0.0.1:8080 already worked before
+    you added this rule, because the `iifname "lo" accept` rule from lesson 2 accepts all loopback traffic
+    unconditionally, regardless of the destination port. Testing over loopback proves the listener works;
+    it does not prove your new port-8080 rule does anything at all. Preserve all previous input rules
+    and insert the service rule once. Use the checked snapshot timer and bounded activation procedure
+    from lesson 2; verify a new SSH connection before canceling.
+  verifications:
+  - id: port-8080-allowed
+    type: remote-command
+    command: sudo -n nft list chain inet filter input | grep -Ex '[[:space:]]*tcp dport 8080 accept[[:space:]]*'
+    failure_message: The active input chain does not have the required rule or policy. Check the complete
+      persisted ruleset, validate/build it, and use the verified snapshot timer before activation.
+  - id: explain-loopback-caveat
+    type: text-evidence
+    prompt: 'Why doesn''t successfully curling 127.0.0.1:8080 prove that your new "tcp dport 8080 accept"
+      rule is doing anything? Reply exactly: loopback is accepted before the port rule'
+    matches: (?i)^loopback\ is\ accepted\ before\ the\ port\ rule[.]?$

@@ -1,0 +1,24 @@
+id: nftables-basics
+title: nftables Firewalling on Debian 13
+environment:
+  scope: course
+  provider_capability: proxmox.vm
+  guest_capabilities:
+  - os.debian.13
+  - tool.nft
+  - tool.ip
+  - tool.curl
+  - tool.python3
+  - tool.systemctl
+  - tool.systemd-run
+  - tool.journalctl
+  - tool.timeout
+  - tool.sudo
+  - tool.apt
+  - tool.dpkg
+lessons:
+- installation-and-persistence
+- tables-chains-and-hooks
+- default-deny-with-a-safety-net
+- allowing-a-service
+- logging-and-troubleshooting

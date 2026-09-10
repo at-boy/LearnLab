@@ -1,0 +1,23 @@
+id: nftables-basics
+title: nftables Firewalling on NixOS
+environment:
+  scope: course
+  provider_capability: proxmox.vm
+  guest_capabilities:
+  - os.nixos
+  - tool.nft
+  - tool.ip
+  - tool.curl
+  - tool.python3
+  - tool.systemctl
+  - tool.systemd-run
+  - tool.journalctl
+  - tool.timeout
+  - tool.sudo
+  - tool.nixos-rebuild
+lessons:
+- enabling-nftables
+- build-time-syntax-checking
+- default-deny-with-a-safety-net
+- allowing-a-service
+- logging-and-troubleshooting

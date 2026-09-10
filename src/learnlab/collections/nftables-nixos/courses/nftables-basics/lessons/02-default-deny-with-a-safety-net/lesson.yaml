@@ -1,0 +1,70 @@
+id: default-deny-with-a-safety-net
+title: Default-Deny, Applied Safely
+steps:
+- id: schedule-a-safety-net
+  title: Practice the safety net before you need it
+  instructions: |-
+    Before each firewall activation, keep the current SSH session and a console available. Never remove the SSH accept or established/related rules. Build/check the candidate BEFORE arming this timer. In one shell run the following with sudo -n; stop at any failure. Each attempt has a unique unit and snapshot. The snapshot restores the previous live rules, not the persisted configuration. Do not start concurrent attempts.
+
+        nft_bin=$(command -v nft) && test -n "$nft_bin" &&
+        snapshot=$(sudo -n mktemp /var/tmp/learnlab-fw.XXXXXX) &&
+        sudo -n sh -c 'printf "flush ruleset\n" > "$1"; nft list ruleset >> "$1"' sh "$snapshot" &&
+        sudo -n nft -c -f "$snapshot" &&
+        unit="learnlab-fw-$(cat /proc/sys/kernel/random/uuid)" &&
+        sudo -n systemd-run --unit="$unit" --on-active=120 "$nft_bin" -f "$snapshot" &&
+        sudo -n systemctl is-active --quiet "$unit.timer"
+
+    Only after every command succeeds may you activate the candidate (bounded to 60 seconds). Open a NEW SSH connection before canceling the timer; an established connection alone is not evidence that new SSH is allowed. Then run `sudo -n systemctl stop "$unit.timer"` and verify `systemctl is-active "$unit.timer"` prints inactive. Keep the snapshot until the timer and its service are inactive, then remove it with `sudo -n rm -- "$snapshot"`. If activation fails or times out, leave the timer armed, wait at most 130 seconds, inspect its service result and live rules via console, and repair persisted configuration before retrying. Do not assume recovery succeeded. Practice arming and canceling without a firewall change now.
+  verifications:
+  - id: explain-the-safety-net-scope
+    type: text-evidence
+    prompt: 'After a timer restores the previous live rules, what does activating unchanged bad configuration
+      do? Reply exactly: the unchanged configuration reapplies the bad rules'
+    matches: (?i)^the\ unchanged\ configuration\ reapplies\ the\ bad\ rules[.]?$
+- id: apply-default-deny
+  title: Declare a default-deny input policy
+  instructions: |-
+    Prepare the candidate before arming the safety net. Update the ruleset string in
+    configuration.nix:
+
+      networking.nftables.ruleset = ''
+        flush ruleset
+
+        table inet filter {
+          chain input {
+            type filter hook input priority 0; policy drop;
+            iifname "lo" accept
+            ct state established,related accept
+            tcp dport 22 accept
+          }
+          chain forward {
+            type filter hook forward priority 0; policy drop;
+          }
+          chain output {
+            type filter hook output priority 0; policy accept;
+          }
+        }
+      '';
+
+    Build first with `sudo timeout --kill-after=10 900 nixos-rebuild build`; then arm and verify the snapshot timer above and activate with `sudo timeout --kill-after=5 60 ./result/bin/switch-to-configuration switch`. Rebuilding alone does not activate. A timer restores only live rules; configuration.nix must still be repaired.
+  verifications:
+  - id: input-policy-is-drop
+    type: remote-command
+    command: sudo -n nft list chain inet filter input | grep -Eq 'type filter hook input priority (filter|0);
+      policy drop;'
+    failure_message: The active input chain does not have the required rule or policy. Check the complete
+      persisted ruleset, validate/build it, and use the verified snapshot timer before activation.
+  - id: ssh-port-allowed
+    type: remote-command
+    command: sudo -n nft list chain inet filter input | grep -Ex '[[:space:]]*tcp dport 22 accept[[:space:]]*'
+    failure_message: The active input chain does not have the required rule or policy. Check the complete
+      persisted ruleset, validate/build it, and use the verified snapshot timer before activation.
+  - id: loopback-allowed
+    type: remote-command
+    command: sudo -n nft list chain inet filter input | grep -Ex '[[:space:]]*iifname "lo" accept[[:space:]]*'
+    failure_message: The active input chain does not have the required rule or policy. Check the complete
+      persisted ruleset, validate/build it, and use the verified snapshot timer before activation.
+  - id: sshd-active
+    type: remote-command
+    command: systemctl is-active --quiet sshd
+    failure_message: sshd is not active.

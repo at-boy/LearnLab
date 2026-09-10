@@ -1,0 +1,34 @@
+id: build-time-syntax-checking
+title: Syntax Errors Are Caught at Build Time
+steps:
+- id: break-it-on-purpose
+  title: Introduce a deliberate syntax mistake
+  instructions: Edit the ruleset string in configuration.nix and introduce an obvious syntax mistake,
+    for example changing `policy accept;` to `policy acccept;` in the input chain. Run `sudo timeout --kill-after=10
+    900 nixos-rebuild build`. By default, `networking.nftables.checkRuleset` is enabled, which runs `nft
+    --check` against your ruleset as part of the build itself, in a sandbox, before anything is ever activated.
+    Your typo should fail the build with a syntax error, not reach the running system at all.
+  verifications:
+  - id: explain-when-checked
+    type: text-evidence
+    prompt: 'Compared to the imperative Debian workflow, at what point does NixOS catch an nftables ruleset
+      syntax error: before or after it reaches the running system? Reply exactly: during build before
+      activation'
+    matches: (?i)^during\ build\ before\ activation[.]?$
+- id: fix-it-and-confirm
+  title: Fix the mistake and confirm a clean build
+  instructions: Revert your typo back to `policy accept;`, then run `sudo timeout --kill-after=10 900
+    nixos-rebuild build` again to confirm it succeeds before you ever run switch.
+  verifications:
+  - id: typo-removed
+    type: remote-command
+    command: '! grep -q acccept /etc/nixos/configuration.nix'
+    failure_message: configuration.nix still contains the deliberate "acccept" typo.
+  - id: ruleset-syntax-restored
+    type: remote-command
+    command: grep -q 'policy accept;' /etc/nixos/configuration.nix
+    failure_message: configuration.nix does not have a valid policy accept; line yet.
+  - id: sshd-still-active
+    type: remote-command
+    command: systemctl is-active --quiet sshd
+    failure_message: sshd is not active.

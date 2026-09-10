@@ -1,0 +1,72 @@
+id: logging-and-troubleshooting
+title: Logging Without Losing the Control Channel
+steps:
+- id: log-dropped-packets
+  title: Log what your ruleset drops
+  instructions: 'Keep the cumulative input policy drop, loopback, established/related, SSH and port-8080
+    accept rules. Add exactly one final `log prefix "nft-drop: " counter drop` rule after those accepts.
+    Validate/build first, then use lesson 2''s verified snapshot timer and bounded activation procedure,
+    checking a new SSH connection before canceling. The check creates a unique disposable network namespace
+    and veth pair on reserved TEST-NET-1 addresses. A new TCP SYN enters the guest via veth, so neither
+    loopback nor established/related accepts it, and port 9999 has no accept rule. A timeout alone is
+    not proof: the check requires a NEW kernel log entry after a captured journal cursor matching the
+    unique ingress interface, source and port. Cleanup runs on exit/signals. If an interrupted host leaves
+    ll-probe-* namespaces or llh* links, inspect ownership and remove only this course''s abandoned resources
+    before retrying. Never use the guest''s own address as a substitute for ingress.'
+  verifications:
+  - id: fresh-ingress-drop-log
+    type: remote-command
+    command: |-
+      sudo -n timeout --kill-after=5 20 sh -c 'set -eu
+      ns="ll-probe-$$"
+      host="llh$$"
+      peer="llp$$"
+      cleanup() { ip netns del "$ns" 2>/dev/null || true; ip link del "$host" 2>/dev/null || true; }
+      trap cleanup EXIT
+      trap '"'"'exit 1'"'"' HUP INT TERM
+      # Reserve TEST-NET-1 only on a scratch VM with no pre-existing route there.
+      ! ip route show | grep -q '"'"'192.0.2.'"'"'
+      ip netns add "$ns"
+      ip link add "$host" type veth peer name "$peer"
+      ip link set "$peer" netns "$ns"
+      ip addr add 192.0.2.1/30 dev "$host"
+      ip link set "$host" up
+      ip -n "$ns" addr add 192.0.2.2/30 dev "$peer"
+      ip -n "$ns" link set "$peer" up
+      ip -n "$ns" link set lo up
+      cursor=$(journalctl -k -n 1 --show-cursor --no-pager | sed -n '"'"'s/^-- cursor: //p'"'"')
+      test -n "$cursor"
+      rc=0
+      ip netns exec "$ns" curl --noproxy '"'"'*'"'"' --silent --show-error --max-time 2 http://192.0.2.1:9999/ >/dev/null 2>&1 || rc=$?
+      test "$rc" -eq 28
+      for attempt in 1 2 3 4 5; do
+        if journalctl -k --after-cursor="$cursor" --no-pager | grep -F '"'"'nft-drop: '"'"' | grep -F "IN=$host " | grep -F '"'"'SRC=192.0.2.2 '"'"' | grep -q '"'"'DPT=9999 '"'"'; then exit 0; fi
+        sleep 1
+      done
+      exit 1'
+    failure_message: Expected a new logged drop from the isolated veth probe. Check cumulative input rule
+      order, kernel journal access, tool prerequisites, and reserved subnet; timeout/refusal alone is
+      insufficient.
+  - id: explain-journal-command
+    type: text-evidence
+    prompt: 'Which bounded command reads kernel log entries? Reply exactly: journalctl -k --no-pager -n
+      20'
+    matches: (?i)^journalctl\ \-k\ \-\-no\-pager\ \-n\ 20[.]?$
+- id: preserve-control-channel
+  title: Understand recovery without a lockout
+  instructions: 'Do not remove TCP 22 accept. Established SSH is normally accepted by conntrack, while
+    a new connection depends on the SSH rule; LearnLab may open new connections. A deliberate SSH lockout
+    would sacrifice its control channel. Practice snapshot timer arming/canceling on the unchanged good
+    ruleset from lesson 2 and inspect the live chain. Recovery changes live rules only: repair the persisted
+    source before the next activation. Live acceptance of actual automatic recovery remains a draft blocker
+    requiring an independently reachable console.'
+  verifications:
+  - id: ssh-rule-preserved
+    type: remote-command
+    command: sudo -n nft list chain inet filter input | grep -Eq '^[[:space:]]*tcp dport 22 accept[[:space:]]*$'
+    failure_message: The active input chain does not have the required rule or policy. Check the complete
+      persisted ruleset, validate/build it, and use the verified snapshot timer before activation.
+  - id: explain-ssh-state
+    type: text-evidence
+    prompt: 'Which traffic still needs the explicit SSH accept rule? Reply exactly: new SSH connections'
+    matches: (?i)^new\ SSH\ connections[.]?$

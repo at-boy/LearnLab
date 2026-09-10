@@ -1,0 +1,54 @@
+id: tables-chains-and-hooks
+title: Tables, Chains, and Hooks
+steps:
+- id: write-a-skeleton-ruleset
+  title: Write a minimal three-chain skeleton
+  instructions: |-
+    Unlike iptables, nftables starts with no tables or chains at all;
+    you declare exactly the ones you want. Replace the contents of
+    /etc/nftables.conf with:
+
+      #!/usr/sbin/nft -f
+
+      flush ruleset
+
+      table inet filter {
+          chain input {
+              type filter hook input priority 0; policy accept;
+          }
+          chain forward {
+              type filter hook forward priority 0; policy accept;
+          }
+          chain output {
+              type filter hook output priority 0; policy accept;
+          }
+      }
+
+    The `inet` family matches both IPv4 and IPv6 in one chain, and each
+    chain's `hook` and `priority` decide where in the packet path it
+    runs. Every policy is still `accept` here, so nothing is filtered
+    yet.
+  verifications:
+  - id: filter-table-declared
+    type: remote-command
+    command: grep -q 'table inet filter' /etc/nftables.conf
+    failure_message: /etc/nftables.conf does not declare an inet filter table yet.
+  - id: input-hook-declared
+    type: remote-command
+    command: grep -q 'hook input' /etc/nftables.conf
+    failure_message: /etc/nftables.conf does not declare an input hook yet.
+- id: check-then-apply
+  title: Check syntax before you ever apply
+  instructions: Before loading any ruleset, get in the habit of running `sudo nft -c -f /etc/nftables.conf`
+    first. The `-c` flag checks syntax only, without touching the running system at all. Only once that
+    succeeds, apply it for real with `sudo nft -f /etc/nftables.conf`, and confirm with `sudo systemctl
+    is-active nftables`.
+  verifications:
+  - id: nftables-still-active
+    type: remote-command
+    command: systemctl is-active --quiet nftables
+    failure_message: nftables.service is not active after applying your skeleton.
+  - id: explain-check-flag
+    type: text-evidence
+    prompt: 'Which nft flag checks your ruleset''s syntax without applying it? Reply exactly: -c'
+    matches: (?i)^\-c[.]?$
