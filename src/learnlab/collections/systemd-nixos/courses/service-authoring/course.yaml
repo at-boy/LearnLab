@@ -1,0 +1,20 @@
+id: service-authoring
+title: Systemd Service Authoring on NixOS
+environment:
+  scope: course
+  provider_capability: proxmox.vm
+  guest_capabilities:
+  - os.nixos
+  - tool.systemd
+  - tool.coreutils
+  - tool.sudo
+  - tool.nixos-rebuild
+lessons:
+- unit-model
+- unit-anatomy
+- restart-policies
+- dependencies
+- users-env
+- hardening
+- timers
+- debugging-capstone

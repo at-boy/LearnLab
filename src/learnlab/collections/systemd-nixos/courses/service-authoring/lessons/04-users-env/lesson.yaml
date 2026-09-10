@@ -1,0 +1,82 @@
+id: users-env
+title: Users, Environment and Credentials
+steps:
+- id: declare-user
+  title: Declare a dedicated service user
+  instructions: |-
+    Users are declarative on NixOS. Add to configuration.nix:
+
+      users.users.appuser = {
+        isSystemUser = true;
+        group = "appuser";
+        shell = "${pkgs.shadow}/bin/nologin";
+      };
+      users.groups.appuser = { };
+
+    Apply with sudo -n timeout 300 nixos-rebuild switch.
+
+    If appuser already exists, verify it is the reserved system account with its own
+    primary group and a nologin shell. Do not repurpose an unrelated existing account.
+  verifications:
+  - id: system-account
+    type: remote-command
+    command: |-
+      sudo -n timeout 30 sh -eu -c 'uid=$(id -u appuser)
+      test "$uid" -gt 0 && test "$uid" -lt 1000
+      test "$(id -gn appuser)" = appuser
+      getent passwd appuser | grep -Eq '"'"'^[^:]+:[^:]*:[0-9]+:[0-9]+:[^:]*:[^:]*:.*/nologin$'"'"''
+    timeout_seconds: 35
+    failure_message: appuser must be a system UID below 1000 with group appuser and nologin shell; Debian
+      env file must be root:appuser mode 640.
+- id: env-service
+  title: Run a service as appuser with declared environment
+  instructions: |-
+    Add the service:
+
+      systemd.services.env-daemon = {
+        environment.APP_GREETING = "hello-from-env";
+        serviceConfig = {
+          Type = "oneshot";
+          User = "appuser";
+          Group = "appuser";
+        };
+        script = ''
+          printf '%s\n' "$APP_GREETING" > /var/tmp/learnlab-env-out.txt
+        '';
+        wantedBy = [ "multi-user.target" ];
+      };
+
+    Rebuild. The environment option injects Environment= lines into the
+    generated unit, so the service never depends on anyone's shell. For larger public values, serviceConfig.EnvironmentFile can reference a runtime
+    file. Never put secrets in environment.etc.text or the Nix store: store contents
+    are generally readable. Secret delivery is outside this exercise.
+  verifications:
+  - id: fresh-environment
+    type: remote-command
+    command: |-
+      sudo -n timeout 30 sh -eu -c 'test "$(systemctl show -p User --value env-daemon.service)" = "appuser"
+      test "$(systemctl show -p Group --value env-daemon.service)" = "appuser"
+      systemctl stop env-daemon.service
+      rm -f /var/tmp/learnlab-env-out.txt
+      systemctl start env-daemon.service
+      test "$(systemctl show -p Result --value env-daemon.service)" = "success"
+      test "$(systemctl show -p ExecMainStatus --value env-daemon.service)" = "0"
+      test "$(stat -c %U:%G /var/tmp/learnlab-env-out.txt)" = appuser:appuser
+      grep -qx hello-from-env /var/tmp/learnlab-env-out.txt'
+    timeout_seconds: 35
+    failure_message: Apply the environment and User/Group settings; a fresh run must write the greeting
+      as appuser.
+- id: environment-hygiene
+  title: Understand environment hygiene
+  instructions: Declare public service environment with environment or serviceConfig.EnvironmentFile for
+    a runtime file. Do not store secrets through environment.etc.text. Explicit inputs make service execution
+    reproducible.
+  verifications:
+  - id: explain-isolation
+    type: text-evidence
+    prompt: Should a service depend on an administrator shell environment? Answer yes or no.
+    matches: (?i)^\s*no\.?\s*$
+  - id: etc-files
+    type: text-evidence
+    prompt: Which NixOS option creates public files under /etc? Answer environment.etc.
+    matches: (?i)^\s*environment\.etc\.?\s*$

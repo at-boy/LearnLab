@@ -1,0 +1,63 @@
+id: dependencies
+title: Dependencies and Ordering
+steps:
+- id: build-chain
+  title: Build a two-unit chain
+  instructions: |-
+    Add both units to /etc/nixos/configuration.nix:
+
+      systemd.services.prep-data = {
+          serviceConfig.Type = "oneshot";
+        script = ''
+          mkdir -p /var/tmp/learnlab-data
+          echo ready > /var/tmp/learnlab-data/input.txt
+        '';
+      };
+
+      systemd.services.consume-data = {
+        after = [ "prep-data.service" ];
+        wants = [ "prep-data.service" ];
+          serviceConfig.Type = "oneshot";
+        script = ''
+          cat /var/tmp/learnlab-data/input.txt > /var/tmp/learnlab-data/output.txt
+        '';
+        wantedBy = [ "multi-user.target" ];
+      };
+
+    Run sudo -n timeout 300 nixos-rebuild switch. Because consume-data wants and comes
+    after prep-data, the chain produces output in one activation.
+
+    The check stops both units, deletes only the course input/output files and starts
+    only consume-data. Fresh output and both successful results prove the chain.
+  verifications:
+  - id: fresh-chain
+    type: remote-command
+    command: |-
+      sudo -n timeout 30 sh -eu -c 'case " $(systemctl show -p After --value consume-data.service) " in *" prep-data.service "*) ;; *) exit 1;; esac
+      case " $(systemctl show -p Wants --value consume-data.service) " in *" prep-data.service "*) ;; *) exit 1;; esac
+      systemctl stop consume-data.service prep-data.service
+      rm -f /var/tmp/learnlab-data/input.txt /var/tmp/learnlab-data/output.txt
+      systemctl start consume-data.service
+      test "$(systemctl show -p Result --value prep-data.service)" = "success"
+      test "$(systemctl show -p ExecMainStatus --value prep-data.service)" = "0"
+      test "$(systemctl show -p Result --value consume-data.service)" = "success"
+      test "$(systemctl show -p ExecMainStatus --value consume-data.service)" = "0"
+      grep -qx ready /var/tmp/learnlab-data/input.txt
+      grep -qx ready /var/tmp/learnlab-data/output.txt'
+    timeout_seconds: 35
+    failure_message: Apply Wants and After on the consumer; starting only the consumer must recreate both
+      removed files successfully.
+- id: ordering-versus-requirement
+  title: Separate ordering from dependency
+  instructions: After/Before order units already in the same transaction; they do not pull units in. Wants
+    pulls a unit in without making its startup success mandatory. Requires together with After prevents
+    this consumer from starting when preparation fails. All dependency declarations and files are cumulative.
+  verifications:
+  - id: after-alone
+    type: text-evidence
+    prompt: Does After alone start the other unit? Answer only yes or no.
+    matches: (?i)^\s*no\.?\s*$
+  - id: weak-dependency
+    type: text-evidence
+    prompt: Which directive expresses a weak dependency? Answer Wants.
+    matches: (?i)^\s*wants\.?\s*$

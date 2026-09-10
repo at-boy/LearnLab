@@ -1,0 +1,70 @@
+id: unit-model
+title: The Unit Model on NixOS
+steps:
+- id: inspect-units
+  title: Inspect units on a generated system
+  instructions: |-
+    Prerequisites: a fresh disposable learning VM with the declared OS, systemd as PID 1,
+    coreutils (including timeout), grep, getent, a POSIX shell, and passwordless sudo.
+    Complete every lesson in order on this same VM; lessons 5–7 require appuser from
+    lesson 4 and earlier declarations remain in place. Reserve the unit names and
+    learnlab-* paths in this course exclusively for these exercises. Do not use a
+    production VM. On resume, replace the same declarations rather than append duplicates.
+    The checks deliberately stop/restart only course units and clear only named course
+    artifacts to prove fresh behavior; retries repeat those scoped exercises.
+    Run commands with sudo -n and timeout as shown. After a timeout, inspect bounded
+    status/journal output before retrying: timeout does not imply rollback.
+
+    systemd manages units: services, timers, mounts, targets, and more.
+    On NixOS the twist is that unit files are generated from your
+    configuration, and individual generated unit files resolve into the
+    read-only Nix store. Inspect the system with systemctl before
+    declaring anything of your own.
+
+    Keep existing configuration.nix options and SSH/guest-agent settings. Rebuilds
+    may start wanted services again; fresh probes below isolate that extra activity.
+  verifications:
+  - id: learning-vm-running
+    type: provider-check
+    check: vm-running
+    failure_message: Wait for the disposable learning VM to report as running.
+  - id: learning-vm-agent-ready
+    type: provider-check
+    check: guest-agent-ready
+    failure_message: Wait for the disposable learning VM guest agent to respond.
+  - id: guest-prerequisites
+    type: remote-command
+    command: |-
+      sudo -n timeout 30 sh -eu -c 'test "$(ps -p 1 -o comm=)" = systemd
+      for tool in systemctl systemd-analyze journalctl timeout grep getent stat; do command -v "$tool" >/dev/null; done
+      . /etc/os-release
+      test "$ID" = nixos
+      command -v nixos-rebuild >/dev/null'
+    timeout_seconds: 35
+    failure_message: Use a compatible fresh VM with the required tools and passwordless sudo.
+  - id: journald-active
+    type: remote-command
+    command: sudo -n timeout 15 sh -eu -c 'systemctl is-active --quiet systemd-journald.service'
+    failure_message: systemd-journald must be active on a healthy system.
+    timeout_seconds: 20
+  - id: default-target
+    type: remote-command
+    command: sudo -n timeout 15 sh -eu -c 'test "$(systemctl get-default)" = "multi-user.target"'
+    failure_message: The template's default target should be multi-user.target.
+    timeout_seconds: 20
+  - id: name-unit-type
+    type: text-evidence
+    prompt: Answer with one word. Which unit type describes a background worker process managed by systemd?
+    matches: (?i)^services?\.?$
+- id: generated-units
+  title: Understand generated units
+  instructions: |-
+    Never edit unit files under /etc/systemd/system on NixOS: they are
+    regenerated from configuration.nix on every nixos-rebuild, and the
+    store paths they point to are read-only. All authoring happens
+    declaratively in /etc/nixos/configuration.nix.
+  verifications:
+  - id: explain-generated
+    type: text-evidence
+    prompt: Does rebuilding regenerate the NixOS unit files from declarations? Answer yes or no.
+    matches: (?i)^\s*yes\.?\s*$

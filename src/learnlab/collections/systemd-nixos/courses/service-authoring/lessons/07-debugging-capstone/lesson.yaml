@@ -1,0 +1,80 @@
+id: debugging-capstone
+title: Debugging, Journal and Capstone
+steps:
+- id: break-and-fix
+  title: Break a unit, then repair it declaratively
+  instructions: |-
+    Author this capstone service in configuration.nix:
+
+      systemd.services.capstone-daemon = {
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          User = "appuser";
+          Group = "appuser";
+        };
+        script = ''
+          cat /var/tmp/learnlab-capstone-input.txt > /var/tmp/learnlab-capstone.txt
+        '';
+      };
+
+    Apply with sudo -n timeout 300 nixos-rebuild test. This does activate the
+    running configuration; it is not a dry run. It does not make this configuration
+    the boot default. The capstone has no wantedBy, so start it explicitly.
+    To reproduce the failure on every attempt, stop the course capstone, remove its
+    input and output, then start it. The expected failure is a missing input file;
+    inspect sudo -n timeout 10 journalctl -u capstone-daemon.service -n 30 --no-pager.
+    Create /var/tmp/learnlab-capstone-input.txt containing capstone-ok (mode 644),
+    reset-failed and start again. The check repeats this failure/repair exercise,
+    checks the failed invocation journal, then requires a distinct successful
+    invocation and fresh appuser-owned output. It only changes these two course files.
+    After successful diagnosis, persist with sudo -n timeout 300 nixos-rebuild switch.
+    Run the check again after switch so rebuild activity cannot substitute for evidence.
+  verifications:
+  - id: failure-and-repair
+    type: remote-command
+    command: |-
+      sudo -n timeout 30 sh -eu -c 'systemctl stop capstone-daemon.service
+      rm -f /var/tmp/learnlab-capstone-input.txt /var/tmp/learnlab-capstone.txt
+      systemctl reset-failed capstone-daemon.service
+      if systemctl start capstone-daemon.service; then exit 1; fi
+      test "$(systemctl show -p Result --value capstone-daemon.service)" = "exit-code"
+      failed=$(systemctl show -p InvocationID --value capstone-daemon.service)
+      test -n "$failed"
+      journalctl --sync
+      journalctl "_SYSTEMD_INVOCATION_ID=$failed" --no-pager -n 30 | grep -F /var/tmp/learnlab-capstone-input.txt >/dev/null
+      printf "%s\n" capstone-ok > /var/tmp/learnlab-capstone-input.txt
+      chmod 644 /var/tmp/learnlab-capstone-input.txt
+      rm -f /var/tmp/learnlab-capstone.txt
+      systemctl reset-failed capstone-daemon.service
+      systemctl start capstone-daemon.service
+      systemctl is-active --quiet capstone-daemon.service
+      test "$(systemctl show -p Result --value capstone-daemon.service)" = "success"
+      test "$(systemctl show -p ExecMainStatus --value capstone-daemon.service)" = 0
+      repaired=$(systemctl show -p InvocationID --value capstone-daemon.service)
+      test -n "$repaired" && test "$repaired" != "$failed"
+      test "$(systemctl show -p User --value capstone-daemon.service)" = appuser
+      test "$(stat -c %U /var/tmp/learnlab-capstone.txt)" = appuser
+      grep -qx capstone-ok /var/tmp/learnlab-capstone.txt
+      systemd-analyze verify /etc/systemd/system/capstone-daemon.service'
+    timeout_seconds: 35
+    failure_message: Keep the capstone as the taught missing-input reader. It must first fail with exit-code
+      and a matching invocation log, then succeed as appuser after input repair.
+- id: nixos-recovery
+  title: Know your recovery paths
+  instructions: |-
+    A successful switch updates the system profile and boot default. A build or
+    evaluation failure before activation leaves the running system unchanged, but an
+    activation failure may leave partial changes. Inspect before retrying. To activate
+    the previous profile generation use sudo -n timeout 300 nixos-rebuild --rollback switch,
+    or select an older generation at boot. A rollback affects the whole system and may
+    remove cumulative course declarations; restore the course configuration before continuing.
+  verifications:
+  - id: explain-rollback
+    type: text-evidence
+    prompt: Which flag selects the previous profile generation with nixos-rebuild switch? Answer --rollback.
+    matches: (?i)^\s*--rollback\.?\s*$
+  - id: explain-test
+    type: text-evidence
+    prompt: Does nixos-rebuild test activate the running configuration? Answer yes or no.
+    matches: (?i)^\s*yes\.?\s*$

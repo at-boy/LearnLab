@@ -1,0 +1,65 @@
+id: unit-anatomy
+title: Anatomy of a Service Unit
+steps:
+- id: write-first-unit
+  title: Write and run your first unit
+  instructions: |-
+    Create /etc/systemd/system/hello-oneshot.service with sudo:
+
+      [Unit]
+      Description=LearnLab hello oneshot
+
+      [Service]
+      Type=oneshot
+      ExecStart=/bin/sh -c 'date > /var/tmp/learnlab-hello.txt'
+
+      [Install]
+      WantedBy=multi-user.target
+
+    Then run: sudo -n timeout 30 systemctl daemon-reload, followed by
+    sudo -n timeout 30 systemctl enable --now hello-oneshot.service.
+
+    An ordinary oneshot becomes inactive after a successful exit. The check removes
+    its old output and starts it again; enablement alone is not proof it ran.
+  verifications:
+  - id: unit-file-exists
+    type: remote-command
+    command: sudo -n timeout 15 sh -eu -c 'test -f /etc/systemd/system/hello-oneshot.service'
+    failure_message: Create the unit file at /etc/systemd/system/hello-oneshot.service.
+    timeout_seconds: 20
+  - id: unit-enabled
+    type: remote-command
+    command: sudo -n timeout 15 sh -eu -c 'systemctl is-enabled --quiet hello-oneshot.service'
+    failure_message: Enable the unit with sudo systemctl enable hello-oneshot.service.
+    timeout_seconds: 20
+  - id: explain-daemon-reload
+    type: text-evidence
+    prompt: Which command makes systemd re-read edited unit definitions? Answer systemctl daemon-reload.
+    matches: (?i)^\s*systemctl daemon-reload\.?\s*$
+  - id: fresh-hello
+    type: remote-command
+    command: |-
+      sudo -n timeout 30 sh -eu -c 'systemctl stop hello-oneshot.service
+      rm -f /var/tmp/learnlab-hello.txt
+      systemctl start hello-oneshot.service
+      test "$(systemctl show -p Result --value hello-oneshot.service)" = "success"
+      test "$(systemctl show -p ExecMainStatus --value hello-oneshot.service)" = "0"
+      test -s /var/tmp/learnlab-hello.txt'
+    timeout_seconds: 35
+    failure_message: The fresh oneshot must exit successfully and create its output. Inactive (dead) after
+      success is normal without RemainAfterExit.
+- id: section-roles
+  title: Know what each section does
+  instructions: |-
+    Review the three sections of your unit. [Unit] carries metadata and
+    dependencies, [Service] defines how the process runs, and [Install]
+    controls enabling.
+  verifications:
+  - id: install-section
+    type: text-evidence
+    prompt: Which unit section contains WantedBy?
+    matches: (?i)^\s*\[?install\]?\.?\s*$
+  - id: service-section
+    type: text-evidence
+    prompt: Which unit section contains ExecStart?
+    matches: (?i)^service\.?$

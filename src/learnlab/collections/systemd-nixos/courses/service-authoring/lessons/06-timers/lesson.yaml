@@ -1,0 +1,67 @@
+id: timers
+title: Timers
+steps:
+- id: create-timer
+  title: Declare a timer pair
+  instructions: |-
+    Add both units:
+
+      systemd.services.stamp-collector = {
+        serviceConfig.Type = "oneshot";
+        script = ''
+          date >> /var/tmp/learnlab-stamps.log
+        '';
+      };
+
+      systemd.timers.stamp-collector = {
+        wantedBy = [ "timers.target" ];
+        timerConfig = {
+          OnCalendar = "minutely";
+          Persistent = true;
+          AccuracySec = "1s";
+        };
+      };
+
+    Rebuild, then confirm the timer is armed with systemctl list-timers.
+    The check clears the old stamp and waits at most 90 seconds for a new timer
+    trigger. AccuracySec=1s bounds timer coalescing; a stalled guest fails clearly.
+  verifications:
+  - id: fresh-timer
+    type: remote-command
+    command: |-
+      sudo -n timeout 100 sh -eu -c 'systemctl is-enabled --quiet stamp-collector.timer
+      test "$(systemctl show -p Persistent --value stamp-collector.timer)" = yes
+      case "$(systemctl show -p TimersCalendar --value stamp-collector.timer)" in *"OnCalendar=*-*-* *:*:00"*) ;; *) exit 1;; esac
+      test "$(systemctl show -p Type --value stamp-collector.service)" = oneshot
+      systemctl stop stamp-collector.timer stamp-collector.service
+      rm -f /var/tmp/learnlab-stamps.log
+      systemctl start stamp-collector.timer
+      systemctl is-active --quiet stamp-collector.timer
+      next=$(systemctl show -p NextElapseUSecRealtime --value stamp-collector.timer)
+      test -n "$next" && test "$next" != n/a
+      before=$(systemctl show -p LastTriggerUSec --value stamp-collector.timer)
+      for attempt in $(seq 1 90); do
+        after=$(systemctl show -p LastTriggerUSec --value stamp-collector.timer)
+        if test -n "$after" && test "$after" != "$before" && test -s /var/tmp/learnlab-stamps.log && ! systemctl is-active --quiet stamp-collector.service; then
+          test "$(systemctl show -p Result --value stamp-collector.service)" = success
+          test "$(systemctl show -p ExecMainStatus --value stamp-collector.service)" = 0
+          exit 0
+        fi
+        sleep 1
+      done
+      exit 1'
+    timeout_seconds: 105
+    failure_message: Use an enabled minutely Persistent timer with AccuracySec=1s and a successful oneshot.
+      The check requires a new timer trigger and new stamp within 90 seconds.
+- id: timer-semantics
+  title: Understand timer semantics
+  instructions: |-
+    OnCalendar= uses calendar expressions; OnBootSec=/OnUnitActiveSec=
+    are monotonic. Persistent=true records the last trigger time and
+    catches up missed runs after downtime. systemctl list-timers shows
+    next and last trigger times.
+  verifications:
+  - id: explain-persistent
+    type: text-evidence
+    prompt: Persistent=true catches up what kind of calendar runs after downtime? Answer missed runs.
+    matches: (?i)^\s*missed runs\.?\s*$

@@ -1,0 +1,67 @@
+id: debugging-capstone
+title: Debugging, Journal and Capstone
+steps:
+- id: fix-broken-unit
+  title: Diagnose and fix a broken unit
+  instructions: |-
+    Author this capstone service at /etc/systemd/system/capstone-daemon.service:
+
+      [Unit]
+      Description=LearnLab missing-input capstone
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=true
+      User=appuser
+      Group=appuser
+      ExecStart=/bin/sh -c 'cat /var/tmp/learnlab-capstone-input.txt > /var/tmp/learnlab-capstone.txt'
+
+    Apply with sudo -n timeout 30 systemctl daemon-reload.
+    To reproduce the failure on every attempt, stop the course capstone, remove its
+    input and output, then start it. The expected failure is a missing input file;
+    inspect sudo -n timeout 10 journalctl -u capstone-daemon.service -n 30 --no-pager.
+    Create /var/tmp/learnlab-capstone-input.txt containing capstone-ok (mode 644),
+    reset-failed and start again. The check repeats this failure/repair exercise,
+    checks the failed invocation journal, then requires a distinct successful
+    invocation and fresh appuser-owned output. It only changes these two course files.
+  verifications:
+  - id: failure-and-repair
+    type: remote-command
+    command: |-
+      sudo -n timeout 30 sh -eu -c 'systemctl stop capstone-daemon.service
+      rm -f /var/tmp/learnlab-capstone-input.txt /var/tmp/learnlab-capstone.txt
+      systemctl reset-failed capstone-daemon.service
+      if systemctl start capstone-daemon.service; then exit 1; fi
+      test "$(systemctl show -p Result --value capstone-daemon.service)" = "exit-code"
+      failed=$(systemctl show -p InvocationID --value capstone-daemon.service)
+      test -n "$failed"
+      journalctl --sync
+      journalctl "_SYSTEMD_INVOCATION_ID=$failed" --no-pager -n 30 | grep -F /var/tmp/learnlab-capstone-input.txt >/dev/null
+      printf "%s\n" capstone-ok > /var/tmp/learnlab-capstone-input.txt
+      chmod 644 /var/tmp/learnlab-capstone-input.txt
+      rm -f /var/tmp/learnlab-capstone.txt
+      systemctl reset-failed capstone-daemon.service
+      systemctl start capstone-daemon.service
+      systemctl is-active --quiet capstone-daemon.service
+      test "$(systemctl show -p Result --value capstone-daemon.service)" = "success"
+      test "$(systemctl show -p ExecMainStatus --value capstone-daemon.service)" = 0
+      repaired=$(systemctl show -p InvocationID --value capstone-daemon.service)
+      test -n "$repaired" && test "$repaired" != "$failed"
+      test "$(systemctl show -p User --value capstone-daemon.service)" = appuser
+      test "$(stat -c %U /var/tmp/learnlab-capstone.txt)" = appuser
+      grep -qx capstone-ok /var/tmp/learnlab-capstone.txt
+      systemd-analyze verify /etc/systemd/system/capstone-daemon.service'
+    timeout_seconds: 35
+    failure_message: Keep the capstone as the taught missing-input reader. It must first fail with exit-code
+      and a matching invocation log, then succeed as appuser after input repair.
+- id: debugging-toolbox
+  title: Consolidate the debugging toolbox
+  instructions: |-
+    The core loop: systemctl status for state, journalctl -u for logs,
+    systemctl show for properties, systemd-analyze verify for syntax,
+    and Result=/ExecMainStatus= properties to interpret failures.
+  verifications:
+  - id: explain-journal
+    type: text-evidence
+    prompt: 'Show the unit log: answer journalctl -u capstone-daemon.service.'
+    matches: (?i)^\s*journalctl -u capstone-daemon\.service\s*$

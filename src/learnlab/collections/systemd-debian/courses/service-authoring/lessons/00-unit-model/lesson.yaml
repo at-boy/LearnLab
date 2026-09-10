@@ -1,0 +1,71 @@
+id: unit-model
+title: The Unit Model and systemctl Literacy
+steps:
+- id: inspect-units
+  title: Inspect units and state
+  instructions: |-
+    Prerequisites: a fresh disposable learning VM with the declared OS, systemd as PID 1,
+    coreutils (including timeout), grep, getent, a POSIX shell, and passwordless sudo.
+    Complete every lesson in order on this same VM; lessons 5–7 require appuser from
+    lesson 4 and earlier declarations remain in place. Reserve the unit names and
+    learnlab-* paths in this course exclusively for these exercises. Do not use a
+    production VM. On resume, replace the same declarations rather than append duplicates.
+    The checks deliberately stop/restart only course units and clear only named course
+    artifacts to prove fresh behavior; retries repeat those scoped exercises.
+    Run commands with sudo -n and timeout as shown. After a timeout, inspect bounded
+    status/journal output before retrying: timeout does not imply rollback.
+
+    systemd manages units: services, timers, mounts, targets, and more.
+    A unit's runtime state (active, inactive, failed) is separate from
+    whether it is enabled to start at boot. Before writing any units of
+    your own, inspect this Debian 13 system with systemctl.
+
+    Useful commands: timeout 10 systemctl list-units --no-pager,
+    timeout 10 systemctl list-unit-files --no-pager,
+    timeout 10 systemctl status --no-pager <unit>, timeout 10 systemctl get-default.
+  verifications:
+  - id: learning-vm-running
+    type: provider-check
+    check: vm-running
+    failure_message: Wait for the disposable learning VM to report as running.
+  - id: learning-vm-agent-ready
+    type: provider-check
+    check: guest-agent-ready
+    failure_message: Wait for the disposable learning VM guest agent to respond.
+  - id: guest-prerequisites
+    type: remote-command
+    command: |-
+      sudo -n timeout 30 sh -eu -c 'test "$(ps -p 1 -o comm=)" = systemd
+      for tool in systemctl systemd-analyze journalctl timeout grep getent stat; do command -v "$tool" >/dev/null; done
+      . /etc/os-release
+      test "$ID" = debian
+      test "$VERSION_ID" = 13
+      command -v useradd >/dev/null'
+    timeout_seconds: 35
+    failure_message: Use a compatible fresh VM with the required tools and passwordless sudo.
+  - id: journald-active
+    type: remote-command
+    command: sudo -n timeout 15 sh -eu -c 'systemctl is-active --quiet systemd-journald.service'
+    failure_message: systemd-journald must be active on a healthy system.
+    timeout_seconds: 20
+  - id: default-target
+    type: remote-command
+    command: sudo -n timeout 15 sh -eu -c 'test "$(systemctl get-default)" = "multi-user.target"'
+    failure_message: The template's default target should be multi-user.target.
+    timeout_seconds: 20
+  - id: name-unit-type
+    type: text-evidence
+    prompt: Answer with one word. Which unit type describes a background worker process managed by systemd?
+    matches: (?i)^services?\.?$
+- id: enable-versus-start
+  title: Distinguish enable from start
+  instructions: |-
+    Enabling a unit wires it into boot; starting it affects only the
+    running system. Look at any enabled unit with systemctl
+    list-unit-files and note the difference between "enabled" and
+    "active".
+  verifications:
+  - id: explain-enable
+    type: text-evidence
+    prompt: Does enabling arrange startup through a target such as the boot target? Answer yes or no.
+    matches: (?i)^\s*yes\.?\s*$

@@ -1,0 +1,78 @@
+id: users-env
+title: Users, Environment and Credentials
+steps:
+- id: dedicated-user-and-env-file
+  title: Create a dedicated user and a protected env file
+  instructions: |-
+    Services should not run as root unless they must. Create a system
+    user, then a protected environment file:
+
+      getent passwd appuser >/dev/null || sudo -n timeout 10 useradd --system --user-group --no-create-home --shell /usr/sbin/nologin appuser
+      sudo -n timeout 10 mkdir -p /etc/learnlab
+      echo 'APP_GREETING=hello-from-env' | sudo -n timeout 10 tee /etc/learnlab/app.env >/dev/null
+      sudo -n timeout 10 chown root:appuser /etc/learnlab/app.env
+      sudo -n timeout 10 chmod 640 /etc/learnlab/app.env
+
+    If appuser already exists, verify it is the reserved system account with its own
+    primary group and a nologin shell. Do not repurpose an unrelated existing account.
+  verifications:
+  - id: system-account
+    type: remote-command
+    command: |-
+      sudo -n timeout 30 sh -eu -c 'uid=$(id -u appuser)
+      test "$uid" -gt 0 && test "$uid" -lt 1000
+      test "$(id -gn appuser)" = appuser
+      getent passwd appuser | grep -Eq '"'"'^[^:]+:[^:]*:[0-9]+:[0-9]+:[^:]*:[^:]*:.*/nologin$'"'"'
+      test "$(stat -c %U:%G:%a /etc/learnlab/app.env)" = root:appuser:640'
+    timeout_seconds: 35
+    failure_message: appuser must be a system UID below 1000 with group appuser and nologin shell; Debian
+      env file must be root:appuser mode 640.
+- id: env-service
+  title: Run a service as appuser with an environment file
+  instructions: |-
+    Create /etc/systemd/system/env-daemon.service:
+
+      [Unit]
+      Description=LearnLab environment demo
+
+      [Service]
+      Type=oneshot
+      User=appuser
+      Group=appuser
+      EnvironmentFile=/etc/learnlab/app.env
+      ExecStart=/bin/sh -c 'printf "%%s\n" "$$APP_GREETING" > /var/tmp/learnlab-env-out.txt'
+
+      [Install]
+      WantedBy=multi-user.target
+
+    In ExecStart, %% escapes a literal percent and $$ defers environment expansion
+    to the shell. Reload and start it. The output file's owner proves which user ran
+    the service.
+  verifications:
+  - id: fresh-environment
+    type: remote-command
+    command: |-
+      sudo -n timeout 30 sh -eu -c 'test "$(systemctl show -p User --value env-daemon.service)" = "appuser"
+      test "$(systemctl show -p Group --value env-daemon.service)" = "appuser"
+      systemctl stop env-daemon.service
+      rm -f /var/tmp/learnlab-env-out.txt
+      systemctl start env-daemon.service
+      test "$(systemctl show -p Result --value env-daemon.service)" = "success"
+      test "$(systemctl show -p ExecMainStatus --value env-daemon.service)" = "0"
+      test "$(stat -c %U:%G /var/tmp/learnlab-env-out.txt)" = appuser:appuser
+      grep -qx hello-from-env /var/tmp/learnlab-env-out.txt'
+    timeout_seconds: 35
+    failure_message: Apply the environment and User/Group settings; a fresh run must write the greeting
+      as appuser.
+- id: environment-hygiene
+  title: Understand environment hygiene
+  instructions: |-
+    Services do not inherit your shell environment. Everything they see
+    must be declared: Environment=, EnvironmentFile=, or
+    PassEnvironment=. This makes services reproducible across boots,
+    users, and sessions.
+  verifications:
+  - id: explain-isolation
+    type: text-evidence
+    prompt: Should a service depend on an administrator shell environment? Answer yes or no.
+    matches: (?i)^\s*no\.?\s*$

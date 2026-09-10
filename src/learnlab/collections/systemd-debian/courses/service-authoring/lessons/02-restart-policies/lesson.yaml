@@ -1,0 +1,62 @@
+id: restart-policies
+title: Service Types and Restart Policies
+steps:
+- id: build-restarting-daemon
+  title: Build a daemon that survives a kill
+  instructions: |-
+    Create /usr/local/bin/learnlab-counter.sh (sudo, then chmod +x):
+
+      #!/bin/sh
+      echo "started $(date +%s)" >> /var/tmp/learnlab-restarts.log
+      exec sleep 3600
+
+    Create /etc/systemd/system/counter-daemon.service:
+
+      [Unit]
+      Description=LearnLab counter daemon
+
+      [Service]
+      ExecStart=/usr/local/bin/learnlab-counter.sh
+      Restart=on-failure
+      RestartSec=2
+
+      [Install]
+      WantedBy=multi-user.target
+
+    Run sudo -n timeout 30 systemctl daemon-reload and
+    sudo -n timeout 30 systemctl enable --now counter-daemon.service.
+    The automated check restarts the course daemon to establish a fresh baseline,
+    records its current invocation and restart count, then uses systemctl kill
+    --kill-whom=main --signal=KILL. It waits at most 12 seconds for an automatic
+    restart. SIGTERM from plain kill is normally a clean termination and does not
+    exercise Restart=on-failure. Do not kill a PID copied from an old session.
+  verifications:
+  - id: restart-observed
+    type: remote-command
+    command: |-
+      sudo -n timeout 30 sh -eu -c 'test "$(systemctl show -p Restart --value counter-daemon.service)" = on-failure
+      systemctl restart counter-daemon.service
+      before=$(systemctl show -p InvocationID --value counter-daemon.service)
+      count=$(systemctl show -p NRestarts --value counter-daemon.service)
+      test -n "$before"
+      systemctl kill --kill-whom=main --signal=KILL counter-daemon.service
+      for attempt in $(seq 1 12); do
+        after=$(systemctl show -p InvocationID --value counter-daemon.service)
+        now=$(systemctl show -p NRestarts --value counter-daemon.service)
+        if systemctl is-active --quiet counter-daemon.service && test -n "$after" && test "$after" != "$before" && test "$now" -gt "$count"; then exit 0; fi
+        sleep 1
+      done
+      exit 1'
+    timeout_seconds: 35
+    failure_message: Set Restart=on-failure and RestartSec=2, apply the unit, then retry the bounded fresh
+      SIGKILL probe.
+- id: restart-semantics
+  title: Understand restart semantics
+  instructions: Restart=on-failure restarts after nonzero exit codes, abnormal signals such as SIGKILL,
+    and timeouts. Clean exits and clean signals such as SIGTERM do not cause this restart. An explicit
+    systemctl stop suppresses restart.
+  verifications:
+  - id: explain-on-failure
+    type: text-evidence
+    prompt: Which signal does this exercise use to cause an abnormal termination? Answer SIGKILL.
+    matches: (?i)^\s*SIGKILL\.?\s*$

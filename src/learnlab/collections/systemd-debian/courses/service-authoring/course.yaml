@@ -1,0 +1,20 @@
+id: service-authoring
+title: Systemd Service Authoring on Debian 13
+environment:
+  scope: course
+  provider_capability: proxmox.vm
+  guest_capabilities:
+  - os.debian.13
+  - tool.systemd
+  - tool.coreutils
+  - tool.sudo
+  - tool.useradd
+lessons:
+- unit-model
+- unit-anatomy
+- restart-policies
+- dependencies
+- users-env
+- hardening
+- timers
+- debugging-capstone

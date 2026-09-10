@@ -1,0 +1,65 @@
+id: unit-anatomy
+title: Anatomy of a NixOS Service
+steps:
+- id: declare-first-unit
+  title: Declare and run your first unit
+  instructions: |-
+    Open /etc/nixos/configuration.nix with sudo and add inside the
+    top-level attribute set:
+
+      systemd.services.hello-oneshot = {
+        description = "LearnLab hello oneshot";
+        wantedBy = [ "multi-user.target" ];
+          serviceConfig.Type = "oneshot";
+        script = ''
+          date > /var/tmp/learnlab-hello.txt
+        '';
+      };
+
+    Apply with: sudo -n timeout 300 nixos-rebuild switch
+    The rebuild evaluates the configuration, generates the unit, and
+    activates it. The first rebuild can take a while; later small
+    changes are much faster.
+
+    An ordinary oneshot becomes inactive after a successful exit. The check removes
+    its old output and starts it again; enablement alone is not proof it ran.
+  verifications:
+  - id: unit-enabled
+    type: remote-command
+    command: sudo -n timeout 15 sh -eu -c 'systemctl is-enabled --quiet hello-oneshot.service'
+    failure_message: Declare wantedBy multi-user.target and run nixos-rebuild switch.
+    timeout_seconds: 20
+  - id: unit-in-store
+    type: remote-command
+    command: sudo -n timeout 15 sh -eu -c 'readlink -f /etc/systemd/system/hello-oneshot.service | grep
+      -q '"'"'^/nix/store/'"'"''
+    failure_message: The generated unit must resolve into the Nix store after a rebuild.
+    timeout_seconds: 20
+  - id: fresh-hello
+    type: remote-command
+    command: |-
+      sudo -n timeout 30 sh -eu -c 'systemctl stop hello-oneshot.service
+      rm -f /var/tmp/learnlab-hello.txt
+      systemctl start hello-oneshot.service
+      test "$(systemctl show -p Result --value hello-oneshot.service)" = "success"
+      test "$(systemctl show -p ExecMainStatus --value hello-oneshot.service)" = "0"
+      test -s /var/tmp/learnlab-hello.txt'
+    timeout_seconds: 35
+    failure_message: The fresh oneshot must exit successfully and create its output. Inactive (dead) after
+      success is normal without RemainAfterExit.
+- id: section-mapping
+  title: Map unit sections to NixOS options
+  instructions: |-
+    NixOS options map onto unit sections: description/after/wants become
+    [Unit] entries, script or serviceConfig.ExecStart become [Service],
+    and wantedBy creates target dependency links (not necessarily an [Install] section). Inspect the mapping with:
+    systemctl cat hello-oneshot.service.
+  verifications:
+  - id: explain-script
+    type: text-evidence
+    prompt: Which NixOS service option generates ExecStart? Answer script.
+    matches: (?i)^\s*script\.?\s*$
+  - id: explain-wantedby
+    type: text-evidence
+    prompt: Which NixOS service option creates target dependency links? Answer wantedBy.
+    matches: (?i)^\s*wantedBy\.?\s*$

@@ -1,0 +1,75 @@
+id: hardening
+title: Sandbox and Hardening Directives
+steps:
+- id: sandbox-unit
+  title: Build a sandboxed service
+  instructions: |-
+    Create the sandbox directory:
+
+      sudo -n timeout 10 mkdir -p /var/lib/learnlab-sandbox
+      sudo -n timeout 10 chown appuser:appuser /var/lib/learnlab-sandbox
+
+    Create /etc/systemd/system/sandbox-daemon.service:
+
+      [Unit]
+      Description=LearnLab sandbox demo
+
+      [Service]
+      Type=oneshot
+      User=appuser
+      Group=appuser
+      NoNewPrivileges=true
+      ProtectSystem=strict
+      ProtectHome=true
+      PrivateTmp=true
+      ReadWritePaths=/var/lib/learnlab-sandbox
+      ExecStart=/bin/sh -c 'echo sandboxed > /tmp/learnlab-tmp-probe && cat /tmp/learnlab-tmp-probe > /var/lib/learnlab-sandbox/ok-write'
+
+      [Install]
+      WantedBy=multi-user.target
+
+    Reload and start it. Because PrivateTmp=true gives the service its
+    own /tmp, its probe file is invisible from the host.
+
+    The check removes both old markers and reruns the service. Reading back the
+    private probe into ok-write proves the write occurred inside that invocation.
+  verifications:
+  - id: fresh-private-tmp
+    type: remote-command
+    command: |-
+      sudo -n timeout 30 sh -eu -c 'test "$(systemctl show -p PrivateTmp --value sandbox-daemon.service)" = "yes"
+      test "$(systemctl show -p ProtectSystem --value sandbox-daemon.service)" = "strict"
+      test "$(systemctl show -p ProtectHome --value sandbox-daemon.service)" = "yes"
+      test "$(systemctl show -p NoNewPrivileges --value sandbox-daemon.service)" = "yes"
+      test "$(systemctl show -p User --value sandbox-daemon.service)" = "appuser"
+      test "$(systemctl show -p Group --value sandbox-daemon.service)" = "appuser"
+      systemctl stop sandbox-daemon.service
+      rm -f /tmp/learnlab-tmp-probe /var/lib/learnlab-sandbox/ok-write
+      systemctl start sandbox-daemon.service
+      test "$(systemctl show -p Result --value sandbox-daemon.service)" = "success"
+      test "$(systemctl show -p ExecMainStatus --value sandbox-daemon.service)" = "0"
+      grep -qx sandboxed /var/lib/learnlab-sandbox/ok-write
+      test "$(stat -c %U /var/lib/learnlab-sandbox/ok-write)" = appuser
+      test ! -e /tmp/learnlab-tmp-probe'
+    timeout_seconds: 35
+    failure_message: The fresh sandbox run must read back its private /tmp probe into the allowed directory,
+      succeed, and leave no host /tmp probe.
+- id: understand-sandboxing
+  title: Understand what each directive restricts
+  instructions: |-
+    ProtectSystem=strict makes the whole filesystem read-only except
+    /dev, /proc, /sys and paths whitelisted in ReadWritePaths=.
+    ProtectHome=true makes /home, /root and /run/user inaccessible.
+    systemd-analyze security <unit> scores the resulting exposure.
+  verifications:
+  - id: explain-protect-system
+    type: text-evidence
+    prompt: ProtectSystem=strict makes the filesystem read-only or writable by default? Answer read-only.
+    matches: (?i)^\s*read-only\.?\s*$
+  - id: security-score-runs
+    type: remote-command
+    command: sudo -n timeout 15 sh -eu -c 'systemd-analyze security sandbox-daemon.service >/dev/null
+      2>&1'
+    failure_message: systemd-analyze security must accept the unit name; ensure the unit exists and daemon-reload
+      ran.
+    timeout_seconds: 20
