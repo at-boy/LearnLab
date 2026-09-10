@@ -1,0 +1,53 @@
+id: server-blocks
+title: Create a Server Block
+steps:
+- id: create-the-document-root
+  title: Create a document root with distinctive content
+  instructions: 'Create a new document root and a page that proves your own configuration is being served,
+    rather than the default site: run `sudo -n timeout 300 mkdir -p /var/www/learnlab` and then write
+    a file at /var/www/learnlab/index.html whose body contains exactly the text "Hello from LearnLab".'
+  verifications:
+  - id: document-root-present
+    type: remote-command
+    command: test -d /var/www/learnlab
+    failure_message: /var/www/learnlab does not exist yet.
+  - id: index-file-present
+    type: remote-command
+    command: test -f /var/www/learnlab/index.html
+    failure_message: /var/www/learnlab/index.html does not exist yet.
+  - id: index-file-content
+    type: remote-command
+    command: grep -q 'Hello from LearnLab' /var/www/learnlab/index.html
+    failure_message: index.html does not contain the expected "Hello from LearnLab" text.
+- id: write-and-enable-the-server-block
+  title: Write and enable a new server block
+  instructions: |-
+    Create /etc/nginx/sites-available/learnlab.conf with a server block
+    that listens on port 8080 and serves your new document root:
+
+      server {
+          listen 8080;
+          server_name _;
+          root /var/www/learnlab;
+          index index.html;
+      }
+
+    Enable it the standard way, by symlinking it into sites-enabled rather
+    than copying it, so the two files never drift apart:
+    `sudo -n timeout 300 ln -sfnT /etc/nginx/sites-available/learnlab.conf /etc/nginx/sites-enabled/learnlab.conf`.
+    Run `sudo -n timeout 300 nginx -t` to check the syntax, then `sudo -n timeout 300 systemctl reload nginx`.
+  verifications:
+  - id: nginx-listener-and-config
+    type: remote-command
+    command: sudo -n timeout 10 nginx -T >/dev/null && sudo -n timeout 10 ss -ltnp 'sport = :8080' | grep
+      -q '"nginx"'
+    failure_message: nginx must own port 8080 and its complete configuration must parse.
+  - id: server-block-serves-content
+    type: remote-command
+    command: test "$(curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8080/)" = "Hello
+      from LearnLab"
+    failure_message: Port 8080 is not serving your new document root yet. Check the syntax and reload.
+  - id: explain-symlink-choice
+    type: text-evidence
+    prompt: Why enable a site by symlinking it into sites-enabled instead of copying the file?
+    matches: (?i)drift|single|one (copy|source)|sync

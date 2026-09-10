@@ -1,0 +1,33 @@
+id: rebuild-workflow
+title: Understand the Rebuild Workflow
+steps:
+- id: know-what-persists
+  title: Know what a manual restart does not do
+  instructions: '`sudo -n timeout 300 systemctl restart nginx` restarts the unit using whatever is already
+    active on disk; it does not read configuration.nix and will not survive your next `nixos-rebuild switch`
+    from an unrelated checkout. Only an edit to configuration.nix, applied with nixos-rebuild, is durable.
+    In practice you will rarely need to restart nginx by hand at all, because switch already restarts
+    any service whose derivation changed.'
+  verifications:
+  - id: nginx-active
+    type: remote-command
+    command: systemctl is-active --quiet nginx
+    failure_message: nginx is not active.
+  - id: explain-restart-durability
+    type: text-evidence
+    prompt: Does restarting nginx alone create a persistent declarative configuration change? Answer no.
+    matches: (?i)^\s*no[.!]?\s*$
+- id: list-and-understand-generations
+  title: List your system generations
+  instructions: List generations with `timeout 10 nix-env --list-generations -p /nix/var/nix/profiles/system`.
+    The current marker identifies the system profile generation, which can differ from the booted generation
+    after a switch. Read `/run/current-system` and `/run/booted-system` with readlink to distinguish them.
+  verifications:
+  - id: generations-list-shows-current
+    type: remote-command
+    command: timeout 10 nix-env --list-generations -p /nix/var/nix/profiles/system | grep -F "(current)"
+    failure_message: nixos-rebuild list-generations did not report a current generation.
+  - id: explain-list-generations
+    type: text-evidence
+    prompt: Which nix-env option lists generations? Answer --list-generations.
+    matches: ^\s*--list-generations\s*$

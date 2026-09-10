@@ -1,0 +1,15 @@
+id: nginx-basics
+title: NGINX Fundamentals on Debian 13
+environment:
+  scope: course
+  provider_capability: proxmox.vm
+  guest_capabilities:
+  - os.debian.13
+  - tool.curl
+lessons:
+- installation
+- service-management
+- configuration-structure
+- server-blocks
+- reverse-proxy
+- logging-and-troubleshooting

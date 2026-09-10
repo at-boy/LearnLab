@@ -1,0 +1,47 @@
+id: server-blocks
+title: Declare a Virtual Host
+steps:
+- id: create-the-document-root
+  title: Create a document root with distinctive content
+  instructions: 'Create a document root that proves your own virtual host is being served, not the default
+    catch-all from lesson 0: run `sudo -n timeout 300 mkdir -p /var/www/learnlab` and write /var/www/learnlab/index.html
+    containing exactly the text "Hello from LearnLab virtualHost".'
+  verifications:
+  - id: document-root-present
+    type: remote-command
+    command: test -d /var/www/learnlab
+    failure_message: /var/www/learnlab does not exist yet.
+  - id: index-file-content
+    type: remote-command
+    command: grep -q 'Hello from LearnLab virtualHost' /var/www/learnlab/index.html
+    failure_message: index.html does not contain the expected text yet.
+- id: declare-a-virtual-host
+  title: Declare the virtual host and rebuild
+  instructions: |-
+    Add a named virtual host on its own port, distinct from lesson 0's
+    default response, in /etc/nixos/configuration.nix:
+
+      services.nginx.virtualHosts."learnlab-content.local" = {
+        listen = [ { addr = "0.0.0.0"; port = 8080; } ];
+        root = "/var/www/learnlab";
+      };
+
+    Run `sudo -n timeout 300 nixos-rebuild switch`, then confirm from the VM with
+    `curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8080/`.
+    Keep the learnlab.local port-80 response from lesson 0.
+  verifications:
+  - id: nginx-listener-and-config
+    type: remote-command
+    command: sudo -n timeout 10 nginx -T >/dev/null && sudo -n timeout 10 ss -ltnp 'sport = :8080' | grep
+      -q '"nginx"'
+    failure_message: nginx must own port 8080 and its complete configuration must parse.
+  - id: virtual-host-serves-content
+    type: remote-command
+    command: test "$(curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8080/)" = "Hello
+      from LearnLab virtualHost"
+    failure_message: Port 8080 is not serving your document root yet.
+  - id: explain-virtual-hosts-option
+    type: text-evidence
+    prompt: What NixOS option declares a named virtual host, roughly analogous to a hand-written nginx
+      server block?
+    matches: (?i)virtualhosts

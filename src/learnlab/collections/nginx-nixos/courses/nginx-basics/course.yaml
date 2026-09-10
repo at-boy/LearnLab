@@ -1,0 +1,15 @@
+id: nginx-basics
+title: NGINX Fundamentals on NixOS
+environment:
+  scope: course
+  provider_capability: proxmox.vm
+  guest_capabilities:
+  - os.nixos
+  - tool.curl
+lessons:
+- enabling-the-service
+- rebuild-workflow
+- configuration-structure
+- server-blocks
+- reverse-proxy
+- logging-and-troubleshooting

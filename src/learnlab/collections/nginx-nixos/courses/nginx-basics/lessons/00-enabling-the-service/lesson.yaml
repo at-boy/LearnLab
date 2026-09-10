@@ -1,0 +1,47 @@
+id: enabling-the-service
+title: Enable NGINX Declaratively
+steps:
+- id: declare-and-switch
+  title: Declare the service and apply it
+  instructions: |-
+    Prerequisites: a fresh disposable NixOS classic non-flake VM, systemd, curl, coreutils timeout, and passwordless sudo. Reserve ports 80, 8080 and 8081 for nginx. Complete lessons in order on this same VM; keep previous configuration and files. On resume, update existing declarations instead of appending duplicates; do not reset earlier state. Re-run syntax/build checks before applying. Commands time out after 300 seconds; a timeout can leave an operation incomplete, so inspect status before retrying.
+
+    This course assumes a NixOS learning VM using the classic, non-flake /etc/nixos/configuration.nix workflow. Connect over SSH and edit /etc/nixos/configuration.nix, adding `services.nginx.enable = true;` inside the top-level attribute set. Apply it with `sudo -n timeout 300 nixos-rebuild switch`. This builds a new store path, records it as a new numbered system generation, sets it as the default boot entry, and activates it immediately, which starts the nginx systemd unit for you.
+  verifications:
+  - id: service-declared
+    type: remote-command
+    command: systemctl is-active --quiet nginx
+    failure_message: Apply the enabled nginx module and inspect its unit status.
+  - id: nginx-service-active
+    type: remote-command
+    command: systemctl is-active --quiet nginx
+    failure_message: nginx is not active. Run `sudo nixos-rebuild switch` after saving your edit.
+  - id: explain-the-apply-command
+    type: text-evidence
+    prompt: Which single command builds, activates, and sets your edited configuration.nix as the new
+      boot default?
+    matches: (?i)nixos-rebuild switch
+- id: confirm-a-response
+  title: Prove the running config matches what you declared
+  instructions: |-
+    Keep services.nginx.enable = true; declared once. Add this named port-80 host:
+
+    services.nginx.virtualHosts."learnlab.local" = {
+      listen = [ { addr = "127.0.0.1"; port = 80; } ];
+      locations."/" = {
+        return = "200 'Hello from LearnLab'";
+        extraConfig = "default_type text/plain;";
+      };
+    };
+
+    Run `sudo -n timeout 300 nixos-rebuild switch`, then `curl --fail --silent --show-error --max-time 5 http://127.0.0.1/`.
+  verifications:
+  - id: default-response-served
+    type: remote-command
+    command: test "$(curl --fail --silent --show-error --max-time 5 http://127.0.0.1/)" = "Hello from
+      LearnLab"
+    failure_message: Port 80 is not returning the declared response yet.
+  - id: nginx-still-active
+    type: remote-command
+    command: systemctl is-active --quiet nginx
+    failure_message: nginx is not active after your second switch.

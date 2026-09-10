@@ -1,0 +1,33 @@
+id: configuration-structure
+title: Understand the Configuration Layout
+steps:
+- id: explore-the-main-config
+  title: Explore nginx.conf and its includes
+  instructions: Open /etc/nginx/nginx.conf with a read-only viewer such as `cat`. Find the top-level `http`
+    block and the `include` directives inside it that pull in /etc/nginx/conf.d/*.conf and /etc/nginx/sites-enabled/*.
+    Only files that end up included this way are actually active; editing a file that nothing includes
+    has no effect.
+  verifications:
+  - id: main-config-present
+    type: remote-command
+    command: test -f /etc/nginx/nginx.conf
+    failure_message: /etc/nginx/nginx.conf was not found.
+  - id: included-config-parses
+    type: remote-command
+    command: sudo -n timeout 10 nginx -T >/dev/null
+    failure_message: Inspect nginx -T and repair included configuration before reloading.
+  - id: explain-active-config
+    type: text-evidence
+    prompt: Which directory holds the symlinks that determine which site configuration files are actually
+      active?
+    matches: (?i)sites-enabled
+- id: validate-before-you-reload
+  title: Always test syntax before reloading
+  instructions: Before every reload, run `sudo -n timeout 300 nginx -t`. It parses every included file
+    and reports "syntax is ok" and "test is successful" without changing the running server, catching
+    mistakes before they take effect. Never reload a configuration you have not just tested.
+  verifications:
+  - id: explain-config-test
+    type: text-evidence
+    prompt: What does `nginx -t` check, and does it change the running server?
+    matches: (?i)syntax|valid

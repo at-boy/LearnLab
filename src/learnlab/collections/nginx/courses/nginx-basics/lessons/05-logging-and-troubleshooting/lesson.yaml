@@ -1,0 +1,37 @@
+id: logging-and-troubleshooting
+title: Logs and Troubleshooting
+steps:
+- id: locate-the-logs
+  title: Locate the access and error logs
+  instructions: Inspect `sudo -n timeout 10 journalctl --no-pager -u nginx -n 30` and the access/error
+    logs. The check records the current access-log byte offset, requests a unique token, then searches
+    only new bytes. A pre-existing log file or historical request cannot satisfy it. Keep default unbuffered
+    access logging enabled.
+  verifications:
+  - id: fresh-access-entry
+    type: remote-command
+    command: set -eu; probe=$(mktemp /tmp/learnlab-access.XXXXXX); trap 'rm -f "$probe"' EXIT; token=${probe##*/};
+      before=$(sudo -n timeout 5 stat -c %s /var/log/nginx/access.log); curl --fail --silent --show-error
+      --max-time 5 "http://127.0.0.1:8080/?learnlab=$token" >/dev/null; sudo -n timeout 5 tail -c +$((before
+      + 1)) /var/log/nginx/access.log | grep -F "$token"
+    failure_message: A new request must appear after the saved access-log offset. Check active access_log
+      settings; retry if logs rotated.
+- id: practice-recovering-from-a-bad-config
+  title: Practice recovering from a broken configuration
+  instructions: |
+    Use an isolated invalid configuration, without editing or reloading the active server. Run the verification command below to observe nginx rejecting an unknown directive; it removes its scratch file afterward. Inspect the error on stderr, then test your real configuration successfully before any reload.
+  verifications:
+  - id: isolated-config-rejected
+    type: remote-command
+    command: set -eu; probe=$(mktemp /tmp/learnlab-invalid.XXXXXX); trap 'rm -f "$probe" "$probe.err"'
+      EXIT; printf 'events {}\nhttp { learnlab_invalid_directive on; }\n' >"$probe"; if sudo -n timeout
+      10 nginx -t -c "$probe" 2>"$probe.err"; then exit 1; fi; grep -F 'unknown directive "learnlab_invalid_directive"'
+      "$probe.err"; sudo -n timeout 10 nginx -t
+    failure_message: The isolated probe must fail for the intended unknown directive and the real configuration
+      must pass.
+  - id: cumulative-endpoints-restored
+    type: remote-command
+    command: systemctl is-active --quiet nginx && test "$(curl --fail --silent --show-error --max-time
+      5 http://127.0.0.1:8080/)" = "Hello from LearnLab" && test "$(curl --fail --silent --show-error
+      --max-time 5 http://127.0.0.1:8081/)" = "Hello from LearnLab"
+    failure_message: Restore the complete course configuration, including content and proxy endpoints.

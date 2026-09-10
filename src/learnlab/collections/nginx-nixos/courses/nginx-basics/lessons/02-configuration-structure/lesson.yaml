@@ -1,0 +1,28 @@
+id: configuration-structure
+title: Understand the Declarative Config Layout
+steps:
+- id: why-editing-etc-nginx-doesnt-stick
+  title: See why editing /etc/nginx directly is pointless
+  instructions: NixOS generates nginx configuration in the read-only Nix store. Inspect `systemctl --no-pager
+    cat nginx` for its ExecStart configuration path and use `sudo -n timeout 10 nginx -T -c /etc/nginx/nginx.conf`
+    to inspect parsed configuration. Edit services.nginx options in your imported NixOS modules; do not
+    edit store files.
+  verifications:
+  - id: nginx-conf-is-a-store-symlink
+    type: remote-command
+    command: readlink -f /etc/nginx/nginx.conf | grep -q '^/nix/store/'
+    failure_message: /etc/nginx/nginx.conf does not resolve into /nix/store on this system.
+  - id: explain-source-of-truth
+    type: text-evidence
+    prompt: Where does the durable configuration for nginx actually live on a NixOS system?
+    matches: (?i)configuration\.nix|services\.nginx|module
+- id: check-before-you-switch
+  title: Build before you activate
+  instructions: Run `sudo -n timeout 300 nixos-rebuild build` to evaluate and build without activation.
+    dry-build only reports what would be built; it does not perform the build. Inspect errors before `sudo
+    -n timeout 300 nixos-rebuild switch`.
+  verifications:
+  - id: explain-dry-build
+    type: text-evidence
+    prompt: Which command builds your edited configuration without activating it on the running system?
+    matches: '(?i)^\s*(?:sudo(?: -n)? )?(?:timeout 300 )?nixos-rebuild build\s*$'

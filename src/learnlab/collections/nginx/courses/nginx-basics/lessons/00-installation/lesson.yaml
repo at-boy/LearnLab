@@ -1,0 +1,38 @@
+id: installation
+title: Install and Verify NGINX
+steps:
+- id: install-the-package
+  title: Install NGINX from the distribution repository
+  instructions: |-
+    Prerequisites: a fresh disposable Debian 13 VM, systemd, curl, coreutils timeout, and passwordless sudo. Reserve ports 80, 8080 and 8081 for nginx. Complete lessons in order on this same VM; keep previous configuration and files. On resume, update existing declarations instead of appending duplicates; do not reset earlier state. Re-run syntax/build checks before applying. Commands time out after 300 seconds; a timeout can leave an operation incomplete, so inspect status before retrying.
+
+    This course assumes a Debian 13 learning VM with apt and systemd. Connect to your learning VM over SSH and install the nginx package: `sudo -n timeout 300 apt-get update` followed by `sudo -n timeout 300 env DEBIAN_FRONTEND=noninteractive apt-get install -y nginx curl`. Installing from the distribution repository gives you a config layout of /etc/nginx/nginx.conf plus sites-available and sites-enabled directories, and a systemd unit that starts automatically on boot.
+  verifications:
+  - id: nginx-binary-present
+    type: remote-command
+    command: command -v nginx
+    failure_message: The nginx binary was not found on your PATH. Confirm the package installed successfully.
+  - id: nginx-package-registered
+    type: remote-command
+    command: dpkg -s nginx
+    failure_message: The nginx package is not registered with dpkg. Reinstall with apt.
+  - id: explain-package-source
+    type: text-evidence
+    prompt: Which command did you use to install nginx from the distribution repository?
+    matches: (?i)apt
+- id: confirm-it-runs
+  title: Confirm the service started and is reachable
+  instructions: A fresh install starts and enables the nginx service immediately. Check its status with
+    `systemctl --no-pager status nginx`, then confirm the default welcome page is reachable on the VM
+    itself with `curl --fail --silent --show-error --max-time 5 -I http://127.0.0.1/`. You should see
+    an HTTP 200 response.
+  verifications:
+  - id: nginx-service-active
+    type: remote-command
+    command: systemctl is-active --quiet nginx
+    failure_message: nginx is not active. Start it with `sudo systemctl start nginx`.
+  - id: default-page-reachable
+    type: remote-command
+    command: test "$(curl --fail --silent --show-error --max-time 5 -o /dev/null -w '%{http_code}' http://127.0.0.1/)"
+      = "200"
+    failure_message: The default site did not return HTTP 200 on port 80.

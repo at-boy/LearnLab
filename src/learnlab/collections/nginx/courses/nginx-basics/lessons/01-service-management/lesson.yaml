@@ -1,0 +1,30 @@
+id: service-management
+title: Manage the NGINX Service
+steps:
+- id: confirm-boot-persistence
+  title: Confirm NGINX starts on boot
+  instructions: Production web servers must survive a reboot without manual intervention. Check whether
+    nginx is enabled at boot with `systemctl is-enabled nginx`. If it reports disabled, enable it with
+    `sudo -n timeout 300 systemctl enable nginx`.
+  verifications:
+  - id: nginx-enabled-at-boot
+    type: remote-command
+    command: systemctl is-enabled --quiet nginx
+    failure_message: nginx is not enabled at boot. Run `sudo systemctl enable nginx`.
+- id: practice-restart-and-reload
+  title: Practice restart, reload, and status
+  instructions: Run `sudo -n timeout 300 systemctl restart nginx`, then `sudo -n timeout 300 systemctl
+    reload nginx`, checking `systemctl --no-pager status nginx` after each. Restart stops and starts the
+    master process, briefly dropping in-flight connections. Reload sends the running master process a
+    signal to re-read its configuration and spawn new worker processes without closing existing connections,
+    which is why it is preferred after routine configuration changes.
+  verifications:
+  - id: nginx-active-after-practice
+    type: remote-command
+    command: systemctl is-active --quiet nginx
+    failure_message: nginx is not active after your restart/reload practice.
+  - id: explain-reload-vs-restart
+    type: text-evidence
+    prompt: What is the key operational difference between `systemctl reload nginx` and `systemctl restart
+      nginx`?
+    matches: (?i)drop|without (closing|interrupt)|graceful|re-read|reread

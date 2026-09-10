@@ -1,0 +1,56 @@
+id: reverse-proxy
+title: Configure a Reverse Proxy
+steps:
+- id: proxy-to-an-upstream
+  title: Proxy one server block to another
+  instructions: |-
+    Reuse the learnlab.conf server block from the previous lesson as an
+    upstream target, and put a proxy in front of it. Create
+    /etc/nginx/sites-available/proxy.conf:
+
+      server {
+          listen 8081;
+          server_name _;
+          location / {
+              proxy_pass http://127.0.0.1:8080;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+          }
+      }
+
+    Enable it with a symlink into sites-enabled, test the syntax with
+    `sudo -n timeout 300 nginx -t`, and reload with `sudo -n timeout 300 systemctl reload nginx`.
+    Inside the existing learnlab.conf server block add:
+    location = /learnlab-probe {
+      default_type text/plain;
+      return 200 "$arg_token|$http_x_forwarded_for";
+    }
+    Enable the proxy with `sudo -n timeout 10 ln -sfnT /etc/nginx/sites-available/proxy.conf /etc/nginx/sites-enabled/proxy.conf`.
+    Apply the edited configuration again before verification. The diagnostic upstream echoes a fresh token and the forwarded client header; it is for this disposable lab only.
+  verifications:
+  - id: proxy-forwards-body-and-header
+    type: remote-command
+    command: set -eu; probe=$(mktemp /tmp/learnlab-proxy.XXXXXX); trap 'rm -f "$probe"' EXIT; token=${probe##*/};
+      test "$(curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:8080/learnlab-probe?token=$token")"
+      = "$token|"; test "$(curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:8081/learnlab-probe?token=$token")"
+      = "$token|127.0.0.1"
+    failure_message: The direct upstream must return the new token without a forwarded address; the proxy
+      must return it with 127.0.0.1.
+  - id: nginx-proxy-listener
+    type: remote-command
+    command: sudo -n timeout 10 nginx -T >/dev/null && sudo -n timeout 10 ss -ltnp 'sport = :8081' | grep
+      -q '"nginx"'
+    failure_message: nginx must own port 8081 and its configuration must parse.
+- id: explain-proxy-headers
+  title: Explain why forwarding headers matter
+  instructions: Without X-Real-IP and X-Forwarded-For, every request the upstream application sees appears
+    to originate from the proxy's own loopback address, breaking access logs, rate limiting, and any logic
+    based on the client's real address.
+  verifications:
+  - id: explain-x-forwarded-for
+    type: text-evidence
+    prompt: If a reverse proxy does not set X-Forwarded-For, what address does the upstream application
+      see as the client's IP?
+    matches: (?i)^\s*(?:the )?proxy(?:\x27s)? (?:own )?(?:loopback )?(?:IP )?address(?:,? 127\.0\.0\.1)?[.!]?\s*$
