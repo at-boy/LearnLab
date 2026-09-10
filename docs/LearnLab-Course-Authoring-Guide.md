@@ -117,8 +117,14 @@ The loader rejects **unknown and missing keys** everywhere. This is deliberate: 
 
 We'll build `nixos/vm-management` — *Creating and Managing Virtual Machines in NixOS* — assuming a NixOS learning VM template with libvirt/QEMU and a pre-cached Cirros image at `/var/lib/libvirt/images/cirros.img`.
 
-This walkthrough is illustrative authoring guidance. It has not been run as a
-live course or certified against a real template.
+This nested-virtualization walkthrough is illustrative authoring guidance. It
+has not been run as a live course or certified against a compatible template,
+so it is explicitly **uncertified**. If added to the catalog as shown, start it
+only through the draft opt-in while it is being developed:
+
+```bash
+learnlab start nixos/vm-management --provider scratch-profile --include-drafts
+```
 
 ### 4.1 `src/learnlab/collections/nixos/collection.yaml`
 
@@ -407,7 +413,46 @@ Operational behavior authors should understand (so they can write good instructi
 
 ## 8. Testing your course
 
-### 8.1 Offline validation
+### 8.1 Maturity and digest-bound certification
+
+Every course has one of three maturity values:
+
+| Maturity | Meaning | Start behavior |
+|---|---|---|
+| `draft` | The default for an unproven course | A new session requires `--include-drafts` |
+| `offline-validated` | Structural and recorded offline review passed for these exact course files | Still requires `--include-drafts`; this is not live proof |
+| `live-validated` | The full live acceptance protocol passed for these exact course files | May be started without the draft opt-in |
+
+Maturity comes from `src/learnlab/collections/certifications.yaml`. A record is
+valid only for the SHA-256 digest of the complete course directory: sorted
+relative file paths and every file's bytes are included. A missing record or a
+stale digest always resolves to `draft`. This fail-closed rule means any edit
+to `course.yaml`, a lesson, or another file under the course directory removes
+the effective certification until the changed course is reviewed again.
+
+Each registry entry has exactly these fields:
+
+```yaml
+certifications:
+  - path: example/example-course
+    digest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    status: offline-validated
+    validated_at: 2026-09-10
+    learnlab_revision: git-revision-reviewed
+    guest_capabilities:
+      - os.debian.13
+      - tool.curl
+    note: Short description of the review performed.
+```
+
+Records contain review facts only. Review their exact schema and content before
+committing. Never record a provider profile, endpoint or URL, VMID, node, IP
+address, token, credential, template or other personal infrastructure value.
+The recorded `guest_capabilities` must describe the capabilities reviewed for
+that course digest; profile declarations remain assertions and are not proof
+that a guest contains them.
+
+### 8.2 Offline validation
 
 Run validation from the repository root after every curriculum edit. With no
 course argument it discovers and checks the entire canonical packaged catalog;
@@ -458,7 +503,12 @@ Finding `severity` is `error` or `warning`; every other finding field is a
 string. Paths are relative to `src/learnlab/collections/`. Output is
 deterministically ordered and contains neither secrets nor raw provider data.
 
-### 8.2 Repository test suite
+Passing offline validation can support an `offline-validated` review record,
+but it does not exercise a provider, guest, lesson command, progress flow, or
+cleanup. Keep the course draft unless the repository's review process actually
+creates a matching record.
+
+### 8.3 Repository test suite
 
 Normal tests are offline and must not connect to Proxmox:
 
@@ -468,7 +518,7 @@ python3.13 -m pytest -m 'not live' -q
 
 Mirror the style of `tests/test_curriculum.py` when adding loader fixtures for new edge cases.
 
-### 8.3 Read-only provider validation
+### 8.4 Read-only provider validation
 
 After offline validation succeeds, an explicit profile can check whether its
 declared template capabilities cover the effective course requirements and can
@@ -491,18 +541,59 @@ The walkthrough in this guide remains unverified until separately exercised
 and reviewed. `learnlab validate` never claims live acceptance or course
 certification.
 
-### 8.4 Optional live lifecycle test for provider code
+### 8.5 Live acceptance and certification
 
-If you add provider inspection names or lifecycle behavior, the intentionally destructive live acceptance test (`tests/live/test_proxmox_lifecycle.py`) runs only when both `LEARNLAB_RUN_LIVE_PROXMOX=1` and `LEARNLAB_LIVE_PROFILE=<profile>` are set, with the profile secret already exported. Never enable it casually.
+Live acceptance is a separate, opt-in validation level. It provisions and
+destroys real course environments, so obtain explicit approval for the exact
+course and a named **scratch profile** before starting. Confirm that the fresh
+template declares the course's guest capabilities. Run courses serially when
+they share infrastructure, and never broaden provider permissions merely to
+make acceptance pass.
+
+For each approved course:
+
+1. Run offline validation, then read-only provider validation against the
+   intended scratch profile.
+2. Start from a fresh compatible template using `--include-drafts`.
+3. Complete every lesson and verification in order.
+4. Intentionally fail at least one check and assess whether its remediation
+   message is accurate and actionable.
+5. Save and exit mid-lesson, then resume at the first incomplete check.
+6. Confirm the expected cumulative course state after all lessons.
+7. Destroy the scratch environment through LearnLab and verify that it is
+   absent.
+8. Add a certification record only after cleanup succeeds, or after any
+   uncertain cleanup state has been reconciled against provider inventory.
+
+An interruption or timeout can leave infrastructure in an uncertain state.
+Preserve LearnLab state and recovery guidance, inspect ownership before retrying,
+and never delete a resource by VMID alone. Failed or unverified cleanup blocks
+certification. Record the matching digest only after content stops changing;
+rerun the repository gates and review the record for secrets before committing.
+
+The six nginx, nftables, and systemd courses added during the pending-course
+review are canonical but remain draft: their live acceptance has not been
+performed. nftables NAT is deliberately deferred to a future multi-machine
+workstream rather than weakened into manual confirmation.
+
+### 8.6 Optional live lifecycle test for provider code
+
+If you add provider inspection names or lifecycle behavior, the intentionally
+destructive provider lifecycle test (`tests/live/test_proxmox_lifecycle.py`)
+runs only when both `LEARNLAB_RUN_LIVE_PROXMOX=1` and
+`LEARNLAB_LIVE_PROFILE=<profile>` are set, with the profile secret already
+exported. Never enable it casually. Passing this provider test alone does not
+complete the course acceptance checklist or certify curriculum.
 
 ---
 
 ## 9. Shipping and versioning
 
 * **IDs are forever.** Progress, resumes, and administrative overrides reference paths like `proxmox/proxmox-admin/api-access`. Renaming a shipped collection/course/lesson/step/verification id orphans recorded progress. Add new ids; don't rename.
-* **Content edits are fine.** Improving instructions, prompts, regexes, and failure messages under stable ids is the normal evolution path.
+* **Any course-file edit invalidates certification.** Improving instructions, prompts, regexes, and failure messages under stable ids is normal, but it changes the digest and makes the course effectively `draft` until it is reviewed and recorded again.
 * **Renumbering directories is safe** (ordering lives in `course.yaml`) but pointless churn; keep prefixes stable.
-* **Appending lessons** is safe: update the `lessons:` list; existing learners resume at their first incomplete lesson.
+* **Appending lessons preserves old completion rows but changes the digest.** Existing learners resume at their first incomplete lesson after the new content becomes startable; recertify the changed course before treating it as ready.
+* **Maturity does not rewrite progress.** Certification controls whether a new `start` needs `--include-drafts`; it does not erase recorded checks or turn prior progress into evidence for a changed digest. `resume` still requires existing local course state.
 * **`learnlab progress complete …` is an administrative override**, recorded as `manual_override`. Never instruct learners to use it; it exists for exceptional recovery and course administration only.
 
 ---
@@ -572,7 +663,7 @@ learnlab validate                                   # offline, complete catalog
 learnlab validate <collection>/<course>             # offline, one course
 learnlab validate <collection>/<course> --format json
 learnlab validate <collection>/<course> --provider p # read-only online checks
-learnlab start nixos/vm-management --provider p     # new session / first incomplete lesson
+learnlab start nixos/vm-management --provider p --include-drafts # uncertified example
 learnlab resume nixos/vm-management --provider p    # explicit resume
 learnlab progress                                   # view recorded state
 learnlab progress complete <c>/<course>/<lesson>    # admin override (provenance: manual_override)
@@ -600,6 +691,8 @@ Config lives at `~/.config/learnlab/config.toml`; secrets only via the env var n
 - [ ] No new `requirements`; legacy courses migrated to `environment.guest_capabilities`
 - [ ] No secrets, endpoints, VMIDs, or deployment values anywhere in content
 - [ ] `failure_message`s actionable and secret-free
-- [ ] `learnlab validate` and the selected-course JSON command (§8.1) pass
-- [ ] Read-only profile validation (§8.3), when relevant, passes without being treated as live proof
+- [ ] `learnlab validate` and the selected-course JSON command (§8.2) pass
+- [ ] Read-only profile validation (§8.4), when relevant, passes without being treated as live proof
+- [ ] Maturity record matches the final course digest and contains only non-secret review facts
+- [ ] Eight-point live acceptance (§8.5) completed before using `live-validated`
 - [ ] `pytest -m 'not live' -q` passes

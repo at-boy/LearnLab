@@ -99,8 +99,15 @@ first incomplete lesson by default and remains open while it guides you through
 each step and its checks:
 
 ```bash
-learnlab start proxmox/proxmox-admin --provider home-proxmox
+learnlab start proxmox/proxmox-admin --provider home-proxmox --include-drafts
 ```
+
+The packaged courses are currently unproven drafts, including the Proxmox
+course. LearnLab requires `--include-drafts` to start any course that is not
+`live-validated`. The flag is an explicit choice to exercise uncertified
+content; it is not evidence that the course or template has passed live
+acceptance. A matching certification record is also invalidated by any course
+file change, which returns the effective maturity to `draft`.
 
 You may also resume an existing course explicitly:
 
