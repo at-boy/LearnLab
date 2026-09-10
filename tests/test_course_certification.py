@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -97,6 +98,14 @@ def test_matching_offline_record_is_not_live_ready(
         ({"note": "Guest address 192.0.2.10"}, "non-secret"),
         ({"note": "Checked VMID 123"}, "non-secret"),
         ({"note": "Used token_secret value"}, "non-secret"),
+        ({"note": "Guest address 2001:db8::10"}, "non-secret"),
+        ({"note": "Tested on node pve-lab-01"}, "non-secret"),
+        ({"note": "Used profile scratch-lab"}, "non-secret"),
+        ({"note": "Checked endpoint lab-api"}, "non-secret"),
+        ({"note": "Recorded provider identity lab-one"}, "non-secret"),
+        ({"note": "Used password hunter2"}, "non-secret"),
+        ({"note": "Used API-key abc123"}, "non-secret"),
+        ({"guest_capabilities": ["provider.identity"]}, "non-secret"),
     ],
 )
 def test_registry_rejects_unknown_or_infrastructure_metadata(
@@ -125,3 +134,39 @@ def test_registry_rejects_invalid_digest_and_date(
 
     with pytest.raises(CertificationError, match="digest"):
         CertificationRegistry.load(registry_file)
+
+
+def test_registry_rejects_yaml_timestamp_instead_of_calendar_date(
+    tmp_course: Path, tmp_path: Path
+) -> None:
+    registry_file = tmp_path / "certifications.yaml"
+    registry_file.write_text(
+        yaml.safe_dump(
+            {
+                "certifications": [
+                    _record(
+                        course_digest(tmp_course),
+                        validated_at="2026-09-09T12:30:00Z",
+                    )
+                ]
+            },
+            sort_keys=False,
+        ).replace("'2026-09-09T12:30:00Z'", "2026-09-09T12:30:00Z"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CertificationError, match="ISO date"):
+        CertificationRegistry.load(registry_file)
+
+
+def test_course_digest_normalizes_file_read_errors(tmp_course: Path) -> None:
+    real_open = Path.open
+
+    def fail_course_file(path: Path, *args: object, **kwargs: object):
+        if path.name == "course.yaml" and args == ("rb",):
+            raise OSError("unreadable")
+        return real_open(path, *args, **kwargs)
+
+    with patch.object(Path, "open", fail_course_file):
+        with pytest.raises(CertificationError, match="unable to read course files"):
+            course_digest(tmp_course)

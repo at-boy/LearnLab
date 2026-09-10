@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -31,8 +32,13 @@ def course_digest(course_dir: Traversable) -> str:
     digest = hashlib.sha256()
     for relative_path, file in sorted(_course_files(course_dir)):
         encoded_path = relative_path.encode("utf-8")
-        with file.open("rb") as stream:
-            contents = stream.read()
+        try:
+            with file.open("rb") as stream:
+                contents = stream.read()
+        except OSError as error:
+            raise CertificationError(
+                f"{course_dir}: unable to read course files"
+            ) from error
         digest.update(len(encoded_path).to_bytes(8, "big"))
         digest.update(encoded_path)
         digest.update(len(contents).to_bytes(8, "big"))
@@ -71,9 +77,12 @@ _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _CAPABILITY = re.compile(r"[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*\Z")
 _FORBIDDEN_METADATA = re.compile(
     r"(?:\b(?:https?|ssh)://|\b(?:\d{1,3}\.){3}\d{1,3}\b|"
-    r"\bvmid\b|\b(?:token|secret)(?:[_ -]?(?:id|value|env|secret))?\b)",
+    r"\bvmid\b|\b(?:node|profile|endpoint|credentials?|password)\b|"
+    r"\bprovider[._ -]+identity\b|\bapi[._ -]*key\b|"
+    r"\b(?:token|secret)(?:[_ -]?(?:id|value|env|secret))?\b)",
     re.IGNORECASE,
 )
+_IP_CANDIDATE = re.compile(r"[0-9A-Fa-f:.]+")
 
 
 @dataclass(frozen=True)
@@ -142,6 +151,10 @@ def _parse_record(
             details.append(f"unknown keys: {', '.join(unknown)}")
         raise CertificationError(f"{label}: {'; '.join(details)}")
 
+    for text in _string_values(value):
+        if _contains_forbidden_metadata(text):
+            raise CertificationError(f"{label}: metadata must be non-secret")
+
     strings = {
         key: _required_string(value, key, label)
         for key in (
@@ -152,9 +165,6 @@ def _parse_record(
             "note",
         )
     }
-    for text in strings.values():
-        if _FORBIDDEN_METADATA.search(text):
-            raise CertificationError(f"{label}: metadata must be non-secret")
     if not _COURSE_PATH.fullmatch(strings["path"]):
         raise CertificationError(f"{label}: path must use collection/course")
     if not _SHA256.fullmatch(strings["digest"]):
@@ -165,7 +175,7 @@ def _parse_record(
         raise CertificationError(f"{label}: status is invalid") from error
 
     raw_date = value["validated_at"]
-    if isinstance(raw_date, date):
+    if type(raw_date) is date:
         validated_at = raw_date
     elif isinstance(raw_date, str):
         try:
@@ -205,3 +215,30 @@ def _required_string(value: Mapping[str, Any], key: str, label: str) -> str:
     if not isinstance(item, str) or not item.strip():
         raise CertificationError(f"{label}: {key} must be a nonempty string")
     return item
+
+
+def _string_values(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, Mapping):
+        return tuple(
+            text for item in value.values() for text in _string_values(item)
+        )
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return tuple(text for item in value for text in _string_values(item))
+    return ()
+
+
+def _contains_forbidden_metadata(value: str) -> bool:
+    if _FORBIDDEN_METADATA.search(value):
+        return True
+    for match in _IP_CANDIDATE.finditer(value):
+        candidate = match.group().strip("[](),.;")
+        if not candidate or not (":" in candidate or "." in candidate):
+            continue
+        try:
+            ipaddress.ip_address(candidate)
+        except ValueError:
+            continue
+        return True
+    return False

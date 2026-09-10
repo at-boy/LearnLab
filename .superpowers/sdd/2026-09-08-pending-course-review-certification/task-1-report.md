@@ -151,3 +151,71 @@ records plus `draft` for `proxmox/proxmox-admin`.
 
 None. The empty manifest intentionally leaves every currently shipped course
 unready until an exact digest is certified by later tasks.
+
+## Review Round 1 Fixes
+
+### Changes
+
+- Expanded non-secret metadata validation to reject IPv6 as well as IPv4,
+  explicit node/profile/endpoint/provider-identity labels, and
+  credential/password/API-key forms.
+- Applied the metadata filter recursively to every string value in a record,
+  including guest-capability entries.
+- Required `validated_at` to be an exact calendar `date`; YAML timestamps that
+  deserialize to `datetime` are rejected.
+- Normalized course-file open/read `OSError` failures to `CertificationError`,
+  matching directory traversal failures.
+
+The validator catches explicit prohibited forms. Arbitrary personal
+infrastructure names without a URL, address, prohibited label, or credential
+marker cannot be identified reliably from free-form prose and still require
+human review before a certification record is committed.
+
+### TDD Evidence
+
+RED command:
+
+```text
+/home/at-boy/Projects/codex/LearnLab/.venv/bin/python -m pytest tests/test_course_certification.py -q
+```
+
+RED result:
+
+```text
+10 failed, 9 passed in 0.08s
+```
+
+The failures covered the eight newly prohibited metadata cases, a YAML
+timestamp accepted as a `date` subclass, and an unnormalized file-read
+`OSError`.
+
+GREEN focused command and result:
+
+```text
+/home/at-boy/Projects/codex/LearnLab/.venv/bin/python -m pytest tests/test_course_certification.py -q
+19 passed in 0.04s
+```
+
+GREEN covering command and result:
+
+```text
+/home/at-boy/Projects/codex/LearnLab/.venv/bin/python -m pytest tests/test_course_certification.py tests/test_curriculum.py tests/test_cli.py -q
+174 passed in 0.85s
+```
+
+Additional verification:
+
+```text
+/home/at-boy/Projects/codex/LearnLab/.venv/bin/ruff check src tests
+All checks passed!
+
+/home/at-boy/Projects/codex/LearnLab/.venv/bin/mypy src
+Success: no issues found in 17 source files
+
+git diff --check
+(no output; exit 0)
+```
+
+Self-review found no further defects. The fix remains limited to certification
+metadata validation, digest error normalization, regression tests, and this
+report append.
