@@ -63,6 +63,7 @@ def test_built_wheel_installs_with_curriculum_resources(tmp_path: Path) -> None:
     with zipfile.ZipFile(wheel) as archive:
         names = set(archive.namelist())
         archive.extractall(tmp_path / "extracted")  # noqa: S202 - test wheel only
+    assert "learnlab/collections/certifications.yaml" in names
     assert "learnlab/collections/proxmox/collection.yaml" in names
     assert "learnlab/collections/proxmox/courses/proxmox-admin/course.yaml" in names
     canonical_curriculum = root / "src" / "learnlab" / "collections"
@@ -156,3 +157,53 @@ def test_built_wheel_installs_with_curriculum_resources(tmp_path: Path) -> None:
         }
         for finding in payload["findings"]
     )
+
+    pending_paths = (
+        "nginx/nginx-basics",
+        "nginx-nixos/nginx-basics",
+        "nftables-debian13/nftables-basics",
+        "nftables-nixos/nftables-basics",
+        "systemd-debian/service-authoring",
+        "systemd-nixos/service-authoring",
+    )
+    pending_smoke = subprocess.run(  # noqa: S603 - installed artifact only
+        [
+            sys.executable,
+            "-c",
+            """
+import json
+from importlib.resources import files
+from unittest.mock import patch
+from typer.testing import CliRunner
+from learnlab import cli
+from learnlab.curriculum import CurriculumCatalog
+from learnlab.course_certification import CourseMaturity
+root = files('learnlab') / 'collections'
+assert root.joinpath('certifications.yaml').read_text().strip() == 'certifications: []'
+catalog = CurriculumCatalog(root)
+paths = json.loads(__import__('sys').argv[1])
+for path in paths:
+    course = catalog.load_course(path)
+    assert course.maturity is CourseMaturity.DRAFT
+    assert course.environment.guest_capabilities
+    with (
+        patch.object(cli, 'state_store_factory',
+                     side_effect=AssertionError('state accessed')),
+        patch.object(cli, 'load_settings',
+                     side_effect=AssertionError('provider settings accessed')),
+    ):
+        result = CliRunner().invoke(cli.app, ['start', path])
+    assert result.exit_code == 2, result.output
+    assert 'not live-validated' in result.output
+    assert '--include-drafts' in result.output
+    print(path)
+""",
+            json.dumps(pending_paths),
+        ],
+        check=True,
+        cwd=tmp_path,
+        env=smoke_environment,
+        capture_output=True,
+        text=True,
+    )
+    assert pending_smoke.stdout.splitlines() == list(pending_paths)
