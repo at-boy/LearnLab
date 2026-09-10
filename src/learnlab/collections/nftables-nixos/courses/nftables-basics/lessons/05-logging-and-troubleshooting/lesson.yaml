@@ -12,7 +12,10 @@ steps:
     not proof: the check requires a NEW kernel log entry after a captured journal cursor matching the
     unique ingress interface, source and port. Cleanup runs on exit/signals. If an interrupted host leaves
     ll-probe-* namespaces or llh* links, inspect ownership and remove only this course''s abandoned resources
-    before retrying. Never use the guest''s own address as a substitute for ingress.'
+    before retrying. Never use the guest''s own address as a substitute for ingress. Preflight rejects
+    failed route queries and overlapping non-default IPv4 prefixes from every routing table. If a namespace
+    or link name already exists, creation fails and cleanup removes only resources successfully created
+    by this attempt.'
   verifications:
   - id: fresh-ingress-drop-log
     type: remote-command
@@ -21,13 +24,32 @@ steps:
       ns="ll-probe-$$"
       host="llh$$"
       peer="llp$$"
-      cleanup() { ip netns del "$ns" 2>/dev/null || true; ip link del "$host" 2>/dev/null || true; }
+      ns_created=0
+      link_created=0
+      cleanup() {
+        if [ "$link_created" -eq 1 ]; then ip link del "$host" 2>/dev/null || true; fi
+        if [ "$ns_created" -eq 1 ]; then ip netns del "$ns" 2>/dev/null || true; fi
+      }
       trap cleanup EXIT
       trap '"'"'exit 1'"'"' HUP INT TERM
       # Reserve TEST-NET-1 only on a scratch VM with no pre-existing route there.
-      ! ip route show | grep -q '"'"'192.0.2.'"'"'
+      if ! routes=$(ip -j -4 route show table all); then exit 1; fi
+      # The default route is expected; reject all other overlapping prefixes.
+      if ! python3 -c '"'"'import ipaddress, json, sys
+      probe = ipaddress.ip_network("192.0.2.0/30")
+      for route in json.loads(sys.argv[1]):
+          destination = route.get("dst")
+          if destination in ("default", "0.0.0.0/0"):
+              continue
+          if destination is None:
+              sys.exit(1)
+          if ipaddress.ip_network(destination, strict=False).overlaps(probe):
+              sys.exit(1)
+      '"'"' "$routes"; then exit 1; fi
       ip netns add "$ns"
+      ns_created=1
       ip link add "$host" type veth peer name "$peer"
+      link_created=1
       ip link set "$peer" netns "$ns"
       ip addr add 192.0.2.1/30 dev "$host"
       ip link set "$host" up

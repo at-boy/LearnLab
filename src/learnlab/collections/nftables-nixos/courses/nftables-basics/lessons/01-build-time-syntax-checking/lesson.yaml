@@ -24,10 +24,11 @@ steps:
     type: remote-command
     command: '! grep -q acccept /etc/nixos/configuration.nix'
     failure_message: configuration.nix still contains the deliberate "acccept" typo.
-  - id: ruleset-syntax-restored
+  - id: policy-accept-source-present
     type: remote-command
     command: grep -q 'policy accept;' /etc/nixos/configuration.nix
-    failure_message: configuration.nix does not have a valid policy accept; line yet.
+    failure_message: No policy accept; text found in configuration.nix. This source-presence check does
+      not prove a successful build; run the bounded build above and inspect its result.
   - id: sshd-still-active
     type: remote-command
     command: systemctl is-active --quiet sshd

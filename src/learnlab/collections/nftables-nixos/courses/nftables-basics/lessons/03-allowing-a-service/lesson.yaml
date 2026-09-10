@@ -33,13 +33,15 @@ steps:
     failure_message: The test listener did not respond on 127.0.0.1:8080.
 - id: allow-the-port-and-explain-loopback
   title: Allow the port, and understand why loopback isn't proof
-  instructions: With your safety net armed, add `tcp dport 8080 accept` to the input chain inside the
-    ruleset string, then rebuild switch. Notice that curling 127.0.0.1:8080 already worked before this
-    rule existed, because `iifname "lo" accept` accepts all loopback traffic unconditionally regardless
-    of destination port. Testing over loopback proves the listener works; it does not prove your new port-8080
-    rule does anything at all. Preserve all previous input rules and insert the service rule once. Use
-    the checked snapshot timer and bounded activation procedure from lesson 2; verify a new SSH connection
-    before canceling.
+  instructions: Add `tcp dport 8080 accept` once to the input chain inside the ruleset string. First run
+    `sudo timeout --kill-after=10 900 nixos-rebuild build` and stop if it fails. Only after a successful
+    build, arm and verify the lesson 2 snapshot timer. Then activate with `sudo timeout --kill-after=5
+    60 ./result/bin/switch-to-configuration switch`. Verify a new SSH connection before canceling the
+    timer. Notice that curling 127.0.0.1:8080 already worked before this rule existed, because `iifname
+    "lo" accept` accepts all loopback traffic unconditionally regardless of destination port. Testing
+    over loopback proves the listener works; it does not prove your new port-8080 rule does anything at
+    all. Preserve all previous input rules and insert the service rule once. Use the checked snapshot
+    timer and bounded activation procedure from lesson 2; verify a new SSH connection before canceling.
   verifications:
   - id: port-8080-allowed
     type: remote-command

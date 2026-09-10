@@ -91,7 +91,17 @@ def test_no_nixos_usr_sbin_or_dry_build_claim(course_dir: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "scenario,expected", [("fresh", 0), ("stale", 1), ("refused", 1)]
+    "scenario,expected",
+    [
+        ("fresh", 0),
+        ("stale", 1),
+        ("refused", 1),
+        ("overlap", 1),
+        ("route-failure", 1),
+        ("ns-collision", 1),
+        ("link-collision", 1),
+        ("configure-failure", 1),
+    ],
 )
 def test_logging_shell_requires_fresh_drop_and_cleans_up(
     course_dir: Path, tmp_path: Path, scenario: str, expected: int
@@ -116,7 +126,19 @@ args = sys.argv[1:]
 state = pathlib.Path(os.environ['PROBE_STATE'])
 with (state / 'calls').open('a') as log:
     log.write(name + ' ' + ' '.join(args) + '\\n')
+scenario = os.environ['PROBE_SCENARIO']
+if name == 'ip' and 'route' in args:
+    if scenario == 'route-failure': sys.exit(1)
+    if '-j' in args:
+        print('[{"dst": "192.0.0.0/16"}]' if scenario == 'overlap' else
+              '[{"dst": "default"}, {"dst": "10.0.0.0/24"}]')
+    elif scenario == 'overlap': print('192.0.0.0/16 dev existing')
+if name == 'ip' and args[:2] == ['netns', 'add'] and scenario == 'ns-collision':
+    sys.exit(1)
+if name == 'ip' and args[:2] == ['addr', 'add'] and scenario == 'configure-failure':
+    sys.exit(1)
 if name == 'ip' and args[:2] == ['link', 'add']:
+    if scenario == 'link-collision': sys.exit(1)
     (state / 'interface').write_text(args[2])
 if name == 'ip' and args[:2] == ['netns', 'exec']:
     sys.exit(7 if os.environ['PROBE_SCENARIO'] == 'refused' else 28)
@@ -147,5 +169,25 @@ if name == 'journalctl':
     )
     assert result.returncode == expected, result.stderr
     calls = (tmp_path / "calls").read_text()
-    assert "ip netns del ll-probe-" in calls
-    assert "ip link del llh" in calls
+    assert ("ip netns del ll-probe-" in calls) == (
+        scenario not in {"overlap", "route-failure", "ns-collision"}
+    )
+    assert ("ip link del llh" in calls) == (
+        scenario not in {"overlap", "route-failure", "ns-collision", "link-collision"}
+    )
+    if scenario in {"overlap", "route-failure"}:
+        assert "ip netns add" not in calls
+
+
+def test_nixos_service_build_precedes_timer(course_dir: Path) -> None:
+    if "nixos" not in str(course_dir):
+        return
+    lesson = next(x for x in lessons(course_dir) if x["id"] == "allowing-a-service")
+    instructions = lesson["steps"][1]["instructions"]
+    assert "With your safety net armed" not in instructions
+    assert instructions.index("nixos-rebuild build") < instructions.index(
+        "arm and verify"
+    )
+    assert instructions.index("arm and verify") < instructions.index(
+        "switch-to-configuration"
+    )
