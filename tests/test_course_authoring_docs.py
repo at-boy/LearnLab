@@ -13,7 +13,7 @@ README = ROOT / "README.md"
 
 
 def _start_commands(text: str) -> list[str]:
-    return re.findall(r"^learnlab start .+$", text, flags=re.MULTILINE)
+    return re.findall(r"learnlab start [^`\n]+", text)
 
 
 def test_guide_documents_the_implemented_certification_contract() -> None:

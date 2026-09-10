@@ -65,3 +65,23 @@ was run. Every shipped course remains draft until its final digest completes
 the separately approved live acceptance protocol. Registry date and revision
 facts must be recorded only after such a run; they were intentionally not
 invented here.
+
+## Review round 1
+
+Corrected the inline course-path example to include `--include-drafts`, since
+the example course is explicitly uncertified. Strengthened the documentation
+test helper to find `learnlab start` invocations anywhere on a line, including
+inline backticked commands, instead of checking only commands at column zero.
+
+TDD RED:
+`PYTHONPATH=src /home/at-boy/Projects/codex/LearnLab/.venv/bin/python -m pytest
+-q tests/test_course_authoring_docs.py` produced **1 failed, 4 passed in
+0.10s**. The failure listed the previously missed inline command without the
+draft opt-in.
+
+GREEN and relevant CLI gate:
+`PYTHONPATH=src /home/at-boy/Projects/codex/LearnLab/.venv/bin/python -m pytest
+-q tests/test_course_authoring_docs.py tests/test_cli.py -k
+'course_authoring_docs or start_blocks_draft or start_include_drafts'`
+produced **7 passed, 87 deselected in 0.11s**. No full-suite repeat or live
+operation was needed for this documentation-only review correction.

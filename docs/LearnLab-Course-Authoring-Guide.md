@@ -79,7 +79,7 @@ src/learnlab/collections/
 
 Rules the loader enforces:
 
-* The **course path** used by the CLI is `collection/course`, e.g. `learnlab start nixos/vm-management --provider home-proxmox`.
+* The **course path** used by the CLI is `collection/course`, e.g. `learnlab start nixos/vm-management --provider home-proxmox --include-drafts` for this guide's uncertified example.
 * `collection.yaml` `id` must equal its directory name; `course.yaml` `id` must equal its directory name; `lesson.yaml` `id` must equal its lesson id.
 * Lesson directories must **end with `-<lesson-id>`** (e.g. `01-first-vm` for id `first-vm`), and **exactly one** directory may match each id. Numeric prefixes are only labels for humans; even numeric lesson IDs and directory prefixes never determine ordering. Ordering comes solely from `course.yaml`.
 
