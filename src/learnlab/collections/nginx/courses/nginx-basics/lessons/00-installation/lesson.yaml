@@ -10,8 +10,9 @@ steps:
   verifications:
   - id: nginx-binary-present
     type: remote-command
-    command: command -v nginx
-    failure_message: The nginx binary was not found on your PATH. Confirm the package installed successfully.
+    command: sudo -n timeout 10 /usr/sbin/nginx -v
+    failure_message: The installed nginx executable did not report its version. Check installation and
+      passwordless sudo.
   - id: nginx-package-registered
     type: remote-command
     command: dpkg -s nginx

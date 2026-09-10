@@ -65,3 +65,24 @@ def test_restart_explanation_rejects_unrelated_no_substring():
     check = yaml.safe_load(path.read_text())["steps"][0]["verifications"][1]
     assert re.search(check["matches"], "no")
     assert not re.search(check["matches"], "I know it persists")
+
+
+def test_debian_binary_check_uses_privileged_bounded_lookup():
+    path = ROOT / "nginx/courses/nginx-basics/lessons/00-installation/lesson.yaml"
+    checks = yaml.safe_load(path.read_text())["steps"][0]["verifications"]
+    check = next(item for item in checks if item["id"] == "nginx-binary-present")
+    assert check["command"] == "sudo -n timeout 10 /usr/sbin/nginx -v"
+
+
+def test_nixos_recovery_is_isolated_and_does_not_replay_relative_rollback():
+    path = (
+        ROOT
+        / "nginx-nixos/courses/nginx-basics/lessons"
+        / "05-logging-and-troubleshooting/lesson.yaml"
+    )
+    lesson = yaml.safe_load(path.read_text())
+    step = lesson["steps"][1]
+    assert "--rollback" not in step["instructions"]
+    assert "isolated" in step["instructions"]
+    assert "rollback" not in step["title"].lower()
+    assert any(v["id"] == "isolated-config-rejected" for v in step["verifications"])

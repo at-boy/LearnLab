@@ -8,10 +8,6 @@ steps:
 
     This course assumes a NixOS learning VM using the classic, non-flake /etc/nixos/configuration.nix workflow. Connect over SSH and edit /etc/nixos/configuration.nix, adding `services.nginx.enable = true;` inside the top-level attribute set. Apply it with `sudo -n timeout 300 nixos-rebuild switch`. This builds a new store path, records it as a new numbered system generation, sets it as the default boot entry, and activates it immediately, which starts the nginx systemd unit for you.
   verifications:
-  - id: service-declared
-    type: remote-command
-    command: systemctl is-active --quiet nginx
-    failure_message: Apply the enabled nginx module and inspect its unit status.
   - id: nginx-service-active
     type: remote-command
     command: systemctl is-active --quiet nginx

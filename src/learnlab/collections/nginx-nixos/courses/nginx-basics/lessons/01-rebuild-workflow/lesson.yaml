@@ -3,11 +3,10 @@ title: Understand the Rebuild Workflow
 steps:
 - id: know-what-persists
   title: Know what a manual restart does not do
-  instructions: '`sudo -n timeout 300 systemctl restart nginx` restarts the unit using whatever is already
-    active on disk; it does not read configuration.nix and will not survive your next `nixos-rebuild switch`
-    from an unrelated checkout. Only an edit to configuration.nix, applied with nixos-rebuild, is durable.
-    In practice you will rarely need to restart nginx by hand at all, because switch already restarts
-    any service whose derivation changed.'
+  instructions: '`sudo -n timeout 300 systemctl restart nginx` restarts the unit using the configuration
+    already generated on disk. It neither edits nor evaluates your NixOS configuration. To change the
+    declarative configuration, edit its source modules and apply them with `sudo -n timeout 300 nixos-rebuild
+    switch`.'
   verifications:
   - id: nginx-active
     type: remote-command
@@ -26,7 +25,7 @@ steps:
   - id: generations-list-shows-current
     type: remote-command
     command: timeout 10 nix-env --list-generations -p /nix/var/nix/profiles/system | grep -F "(current)"
-    failure_message: nixos-rebuild list-generations did not report a current generation.
+    failure_message: nix-env --list-generations did not report a current system profile generation.
   - id: explain-list-generations
     type: text-evidence
     prompt: Which nix-env option lists generations? Answer --list-generations.

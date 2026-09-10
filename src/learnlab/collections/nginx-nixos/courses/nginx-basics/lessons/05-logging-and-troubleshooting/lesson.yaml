@@ -1,5 +1,5 @@
 id: logging-and-troubleshooting
-title: Logs, the Journal, and Rollback
+title: Logs, the Journal, and Configuration Recovery
 steps:
 - id: find-the-logs
   title: Locate the logs and the live journal
@@ -16,12 +16,12 @@ steps:
       + 1)) /var/log/nginx/access.log | grep -F "$token"
     failure_message: A new request must appear after the saved access-log offset. Check active access_log
       settings; retry if logs rotated.
-- id: practice-a-rollback
-  title: Practice a rollback recovery drill
+- id: practice-isolated-recovery
+  title: Practice isolated configuration failure and recovery
   instructions: |
     Use an isolated invalid configuration, without editing or reloading the active server. Run the verification command below to observe nginx rejecting an unknown directive; it removes its scratch file afterward. Inspect the error on stderr, then test your real configuration successfully before any reload.
 
-    Whole-system rollback can remove earlier hosts and proxy settings. On this disposable VM only, save `readlink -f /run/current-system`, run `sudo -n timeout 300 nixos-rebuild switch --rollback`, and inspect the selected generation. Then restore the complete saved course source with `sudo -n timeout 300 nixos-rebuild switch` before continuing. Never accept nginx-active alone as recovery. If interrupted, restore the complete course source and switch again.
+    This exercise uses an isolated scratch configuration and leaves the system generation unchanged. Repeat the check safely after an interruption, then verify all cumulative endpoints below. Whole-system generation recovery requires a separately planned explicit target and is outside this exercise.
   verifications:
   - id: isolated-config-rejected
     type: remote-command
