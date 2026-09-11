@@ -3,10 +3,10 @@
 Status: **draft; offline gate passed; live acceptance not performed**.
 Recorded 2026-09-11. The filename follows the design/plan date, 2026-09-10.
 Tested content revision: `9f0df3bd15b45e1575e5071668e594f07a373c74`
-on `feature/nixos-template-course`. This report is the only subsequent tracked
-change in the acceptance-evidence commit. The final whole-branch review finding
-about lingering SSH sessions is addressed at the tested content revision; Task 5
-Step 5 remains unchecked as instructed. No merge or push is implied.
+on `feature/nixos-template-course`. The final whole-branch review found an SSH
+session-sealing gap; commits `9f0df3b` and `97e75ea` fixed it, and the scoped
+re-review found no remaining findings. Offline checks were rerun successfully;
+only live acceptance remains pending. No merge or push is implied.
 
 Course: `proxmox/nixos-template`, seven ordered lessons, effective
 `environment.scope: none`, no provider or guest capabilities, and only exact
@@ -234,5 +234,5 @@ git diff --exit-code 9f0df3b -- src/learnlab/collections/certifications.yaml
 The registry is byte-for-byte unchanged from pre-fix `102c591` and tested content
 revision `9f0df3b`.
 Read-only catalog loading reports `Course maturity: draft`. The implementation
-plan checks Tasks 1–4 and Task 5 Steps 1–3 only. Live Step 4 and Task 5 Step 5
-remain unchecked; their completion is not claimed here.
+plan checks the completed offline review through Task 5 Step 5. Live Step 4
+remains unchecked; its completion is not claimed here.
