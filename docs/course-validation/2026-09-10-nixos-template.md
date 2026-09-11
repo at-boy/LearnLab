@@ -4,9 +4,9 @@ Status: **draft; offline gate passed; live acceptance not performed**.
 Recorded 2026-09-11. The filename follows the design/plan date, 2026-09-10.
 Tested content revision: `9f0df3bd15b45e1575e5071668e594f07a373c74`
 on `feature/nixos-template-course`. The final whole-branch review found an SSH
-session-sealing gap; commits `9f0df3b` and `97e75ea` fixed it, and the scoped
-re-review found no remaining findings. Offline checks were rerun successfully;
-only live acceptance remains pending. No merge or push is implied.
+session-sealing gap; commit `9f0df3b` fixed it, `97e75ea` refreshed this report,
+and the scoped re-review found no remaining findings. Offline checks were rerun
+successfully; only live acceptance remains pending. No merge or push is implied.
 
 Course: `proxmox/nixos-template`, seven ordered lessons, effective
 `environment.scope: none`, no provider or guest capabilities, and only exact
