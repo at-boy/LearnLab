@@ -1,0 +1,6 @@
+id: nixos-template
+title: Build a NixOS 26.05 Template for LearnLab
+environment:
+  scope: none
+lessons:
+  - prerequisites-and-safety

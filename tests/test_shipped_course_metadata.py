@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from learnlab.course_certification import CourseMaturity
-from learnlab.curriculum import CurriculumCatalog
+from learnlab.curriculum import CurriculumCatalog, EnvironmentScope
 
 ROOT = Path(__file__).parents[1] / "src/learnlab/collections"
 PENDING = (
@@ -29,10 +29,16 @@ def test_every_shipped_course_loads_with_metadata(course_path: str) -> None:
     summary = next(item for item in catalog.list_courses() if item.path == course_path)
     assert isinstance(course.maturity, CourseMaturity)
     assert summary.maturity is course.maturity
-    assert course.environment.guest_capabilities
-    assert len(set(course.environment.guest_capabilities)) == len(
-        course.environment.guest_capabilities
-    )
+    for lesson in course.lessons:
+        policy = course.effective_environment(lesson)
+        if policy.scope is EnvironmentScope.NONE:
+            assert policy.provider_capability is None
+            assert policy.guest_capabilities == ()
+        else:
+            assert policy.guest_capabilities
+            assert len(set(policy.guest_capabilities)) == len(
+                policy.guest_capabilities
+            )
 
 
 def test_exact_pending_courses_ship_as_drafts() -> None:
