@@ -48,6 +48,36 @@ def test_bootstrap_validates_without_findings():
     assert report.findings == ()
 
 
+def test_complete_lesson_order_and_handoff():
+    assert [lesson.id for lesson in load_course().lessons] == [
+        "prerequisites-and-safety",
+        "create-installer-vm",
+        "install-nixos",
+        "configure-lab-access",
+        "seal-and-convert",
+        "test-two-clones",
+        "configure-provider",
+    ]
+    handoff = lesson_text("configure-provider")
+    for concept in (
+        'learnlab provider test "$PROFILE"',
+        'learnlab validate nginx-nixos/nginx-basics --provider "$PROFILE"',
+        'learnlab validate nftables-nixos/nftables-basics --provider "$PROFILE"',
+        'learnlab validate systemd-nixos/service-authoring --provider "$PROFILE"',
+        "template_capabilities",
+        "default_provider",
+        "token_secret_env",
+        "learner-owned",
+        "Do not use learnlab destroy",
+        "absence",
+        "VMID alone",
+        "retain the template",
+        "source",
+        "clone permissions",
+    ):
+        assert concept in handoff
+
+
 def test_installer_teaches_target_specific_steps():
     text = lesson_text("install-nixos")
     for concept in [
@@ -149,6 +179,16 @@ def test_access_trust_state_loss_requires_console_reenrollment():
     assert "fresh console-verified reenrollment" in guide.lower()
 
 
+@pytest.mark.parametrize("source", ["seal-and-convert", "guide"])
+def test_guest_poweroff_requires_stopped_state_without_assuming_management_task(source):
+    if source == "guide":
+        text = (Path(__file__).parents[1] / "docs/NixOS-Template-Guide.md").read_text()
+    else:
+        text = lesson_text(source)
+    assert "positively verify Stopped" in text
+    assert "only if an actual management shutdown task was initiated" in text
+
+
 @pytest.mark.parametrize("source", ["configure-lab-access", "test-two-clones", "guide"])
 def test_fresh_ssh_acceptance_disables_connection_sharing(source):
     if source == "guide":
@@ -171,6 +211,7 @@ def test_fresh_ssh_acceptance_disables_connection_sharing(source):
         ("configure-lab-access", "key-material", "public key", "private key"),
         ("seal-and-convert", "sealed-next-action", "power off", "reboot"),
         ("test-two-clones", "clone-identity-rule", "distinct and stable", "same"),
+        ("configure-provider", "handoff-certification", "self-attested", "certified"),
     ],
 )
 def test_added_knowledge_checks_execute_exact_answer_contract(

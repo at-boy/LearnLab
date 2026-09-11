@@ -30,6 +30,20 @@ mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/learnlab"
 
 ## Configure a named Proxmox profile
 
+Need to build the template first? Follow the draft
+[NixOS Template Guide](docs/NixOS-Template-Guide.md), or start its seven-lesson
+bootstrap course on your controller without a provider profile:
+
+```bash
+learnlab start proxmox/nixos-template --include-drafts
+```
+
+LearnLab records local, self-attested progress; you operate Proxmox and the guest
+explicitly. The guide covers ISO installation, trusted access, identity sealing,
+two-clone acceptance, a new named profile and cleanup of only those test clones.
+Template creation and read-only profile checks do not certify downstream courses;
+their live acceptance remains separate. The walkthrough has not been live-tested.
+
 The following is the complete schema for a named profile. The concrete
 resource names below are **Checkpoint 05 example values**, not LearnLab
 defaults: replace the API host, token identity, template, node, storage,

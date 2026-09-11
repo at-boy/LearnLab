@@ -170,9 +170,12 @@ steps:
       sudo systemctl poweroff
       ```
 
-      Proxmox node (UI): wait for Stopped and successful shutdown task; timeout or
-      loss of console alone does not prove shutdown. Inspect status/task history
-      before any next action. Do not force-stop or automatically retry sealing.
+      Proxmox node (UI): positively verify Stopped for the inspected candidate.
+      Guest-side systemctl poweroff may not create a Proxmox shutdown task.
+      Require task success only if an actual management shutdown task was initiated.
+      A timeout or closed console does not prove shutdown; inspect current VM
+      state and any initiated task before acting. Stop on uncertainty; do not
+      convert a running candidate, force-stop or automatically retry sealing.
     verifications:
       - id: sealed-and-powered-off
         type: manual-confirmation

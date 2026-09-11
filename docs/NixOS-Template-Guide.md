@@ -1,12 +1,64 @@
 # NixOS 26.05 Template Guide
 
-Draft: documentation-reviewed, not live-tested. This guide covers installer creation, installation, lab access, sealing, conversion and two-clone acceptance. Provider handoff and final cleanup are later course tasks. Do not treat these checkpoints as template certification.
+Draft: documentation-reviewed, not live-tested. This standalone guide covers all seven course lessons: safety, installer creation, installation, lab access, sealing/conversion, two-clone acceptance, and provider handoff with bounded cleanup. Do not treat these checkpoints as template certification.
 
 LearnLab runs on the controller with `learnlab start proxmox/nixos-template --include-drafts`, without a provider profile. It displays instructions and saves local self-attestations; the learner operates all infrastructure explicitly. A saved answer never establishes current resource ownership.
 
 Prerequisites: permission to create disposable VMs, trusted Proxmox management UI/console access, enough free storage/RAM, existing LAN bridge with DHCP, reachable official ISO/package sources and controller-to-guest SSH. Keep an owner-only worksheet outside this repository with chosen node/storage/bridge, candidate and eventual clone IDs/names, disk identity, template/profile names and private paths. Never paste secrets, personal infrastructure values or raw identities into LearnLab or shared reports. Inspect occupied IDs/names; select another or investigate collisions without deleting anything.
 
 Terminal labels distinguish Controller, Proxmox node, Installer console and Installed guest. Execute each command individually in the labeled location and inspect its result. Installer editors and password prompts are deliberately interactive. Before any destructive action, reconcile full resource identity and repeat the local checkpoint, including after resume.
+
+## Prerequisites and Safety
+
+### Who operates the infrastructure?
+
+Controller: LearnLab records progress. You operate Proxmox and the guest
+explicitly. A saved lesson does not prove that a VM still exists or owns
+the same ID. Inspect your local resource worksheet before resuming.
+
+Knowledge checkpoint: Who operates the infrastructure here? Enter learner or learnlab.
+
+### Distinguish controller, node, and guest
+
+The controller is the computer where you run LearnLab and keep local
+progress. The Proxmox node is the virtualization host you administer.
+The guest is the virtual machine that will become the template. Keep
+these roles distinct when a later lesson asks you to perform an action.
+
+Local checkpoint: Confirm that you can identify your controller, Proxmox node, and guest.
+
+### Keep an owner-only resource worksheet
+
+Before later lessons, prepare a private, owner-only worksheet outside
+this course. Record the node, guest VM ID and name, storage, network,
+installation media, and any other local choices you will need. Do not
+paste passwords, API tokens, private keys, or personal infrastructure
+values into LearnLab, course files, shell history, or shared notes.
+
+Local checkpoint: Confirm that your local worksheet is private and contains no secrets.
+
+### Start without a provider profile
+
+This draft course has no managed environment. Start it with
+`learnlab start proxmox/nixos-template --include-drafts` and do not pass
+a provider profile. LearnLab presents guidance and records your answers;
+it does not contact Proxmox, create a VM, change a guest, or clean up
+infrastructure for you.
+
+Local checkpoint: Confirm that this course starts without a provider profile.
+
+### Save progress without assuming infrastructure state
+
+Manual confirmations and saved progress record only what you attested at
+the time. They do not inspect current infrastructure or prove that a VM,
+VM ID, node, or guest state is unchanged. To stop safely, leave any
+manually operated task in a known state, update your private worksheet,
+then save and exit. Before resuming, inspect the worksheet and verify the
+real node and guest state yourself. LearnLab performs no automatic
+cleanup, so you remain responsible for stopping, removing, or preserving
+every resource you created.
+
+Local checkpoint: Confirm that you will verify real infrastructure state before resuming.
 
 ## Create the Installer VM
 
@@ -614,8 +666,11 @@ identities before cloning.
 sudo systemctl poweroff
 ```
 
-Proxmox node (UI): wait for Stopped and successful shutdown task. Timeout or a
-closed console does not prove shutdown; inspect task history/status before acting.
+Proxmox node (UI): positively verify Stopped for the inspected candidate. Guest-side
+`systemctl poweroff` may not create a Proxmox shutdown task. Require task success
+only if an actual management shutdown task was initiated. A timeout or closed
+console does not prove shutdown; inspect the current VM state and any initiated
+task before acting. Stop on uncertainty; do not convert a running candidate.
 Do not force-stop or retry sealing automatically.
 
 ### Confirm conversion independently
@@ -763,6 +818,202 @@ confirmation, stop/destroy and absence verification; uncertain state means stop
 and reconcile without deletion retries by VMID alone. Exact-digest live acceptance
 and final cleanup remain pending; draft status is unchanged.
 
+## Configure a Provider and Reconcile Test Clones
+
+### Add a new named profile without replacing existing configuration
+
+Controller: prerequisite is successful two-clone acceptance, including
+each clone's rebuild and stable identities after reboot. On resume,
+inspect the private worksheet and actual template/clone state again.
+A profile describes connection, placement and template expectations;
+a template name alone is not a profile. This course still loads no
+settings, profile, secret or SSH dependency. You make the edits yourself.
+Open your existing XDG config file in a local editor: normally
+~/.config/learnlab/config.toml, or $XDG_CONFIG_HOME/learnlab/config.toml
+when XDG_CONFIG_HOME is set. If absent, create its parent directory and
+file in your editor. Keep an owner-only backup outside the repository.
+Preserve every existing profile and default_provider. Select an unused
+profile name and add a separate [providers."CHOSEN_PROFILE"] table;
+replace CHOSEN_PROFILE locally. Do not overwrite a same-named table.
+Only for a new configuration with no default_provider, add the top-level
+default_provider = "CHOSEN_PROFILE" before the provider tables. An
+existing default remains unchanged; the commands below select explicitly.
+Enter every required field using locally verified worksheet values:
+
+- type = "proxmox": the supported provider type; name comes from the table.
+- api_url: quoted HTTPS API origin, including your port if needed, with
+  no credentials, API path, query or fragment; use the controller's trusted CA.
+- token_id: quoted existing API account/realm and token identity, not its secret.
+- token_secret_env: quoted name of your dedicated environment variable,
+  never the secret itself. Choose a name not used by another profile.
+- template_vmid: positive integer ID, unquoted, of the inspected template.
+- template_name: quoted exact current template name; match both name and ID.
+- node: quoted actual node holding that template.
+- storage: quoted configured target storage for future managed clone disks.
+- network: quoted existing bridge/network identifier for those clones.
+- ssh_user: quoted dedicated learner account already tested on both clones.
+- ssh_identity_file: quoted controller private-key path for that account;
+  the file remains local, and only its public key was installed in the guest.
+- tls_verify = true: TOML boolean; fix CA/hostname/clock errors rather than
+  disabling verification to obtain a passing health check.
+- template_capabilities: optional in the schema, but supply the verified
+  string array below for the matching downstream courses. Adding a string
+  never installs a command or proves that it runs.
+
+```toml
+# Controller: field inside the newly selected provider table
+template_capabilities = ["os.nixos", "tool.coreutils", "tool.curl", "tool.ip", "tool.journalctl", "tool.nft", "tool.nixos-rebuild", "tool.python3", "tool.sudo", "tool.systemctl", "tool.systemd", "tool.systemd-run", "tool.timeout"]
+```
+
+This union comes from the effective nginx-nixos/nginx-basics,
+nftables-nixos/nftables-basics and systemd-nixos/service-authoring
+requirements. It is backed by the command/rebuild checks on both clones
+from prior lessons, not a compatibility claim based on TOML alone.
+Inspect the saved file locally for duplicate tables, missing fields and
+TOML types. Do not paste the profile or worksheet into an evidence prompt.
+Use an existing authorized API account/token, following your operator's
+account setup and the Proxmox User Management/API Tokens guidance at
+https://pve.proxmox.com/pve-docs/pveum.1.html . If no suitable account
+exists, stop for your administrator to provision one with scoped rights.
+Do not run the VM-scoped proxmox-admin course as a bootstrap prerequisite.
+Diagnose the selected user, token and resource ACLs read-only; separated
+token permissions are limited by both user and token grants. Never grant
+broad administrator rights merely to turn a failed check green.
+
+Local checkpoint: Confirm locally that the new profile preserves existing profiles/defaults and contains no secret value.
+
+### Supply the secret privately and check compatibility read-only
+
+Controller: perform these commands yourself only after inspecting the new
+profile. They are not run by the course session. At the read prompt enter
+the chosen profile name, then check it matches your new TOML table locally.
+
+```sh
+# Controller
+read -r PROFILE
+```
+
+Supply the token secret from a secret manager or an interactive Bash read
+in this separate controller shell. For example, if the unique name you
+chose in token_secret_env is LEARNLAB_TEMPLATE_TOKEN_SECRET:
+
+```bash
+# Controller: use the exact variable name chosen in your profile
+read -r -s LEARNLAB_TEMPLATE_TOKEN_SECRET
+export LEARNLAB_TEMPLATE_TOKEN_SECRET
+printf '\n'
+```
+
+Enter the secret at the hidden prompt, never as a command argument,
+history entry, LearnLab answer, TOML value or Nix expression. Replace the
+example variable name consistently if you selected another. Do not print
+it or enable shell tracing. Then run individually and inspect each result:
+
+```sh
+# Controller
+learnlab provider test "$PROFILE"
+learnlab validate nginx-nixos/nginx-basics --provider "$PROFILE"
+learnlab validate nftables-nixos/nftables-basics --provider "$PROFILE"
+learnlab validate systemd-nixos/service-authoring --provider "$PROFILE"
+```
+
+Expected: provider test shows PASS for required API/node/template/storage/
+network checks, exit status 0; each validate reports no errors and exits 0.
+Inspect `echo "$?"` immediately after each command if needed. Draft warnings
+do not confer certification. These are read-only health and declared
+compatibility checks; they do not prove clone permissions, execute guest
+commands or certify this template or any downstream course. Permission to
+read resources is not permission to clone, start, modify or delete them.
+A missing profile/field/secret means inspect the local table and environment
+variable name; never reveal the secret in diagnostic output. TLS failure
+means inspect certificate trust, API hostname and clock. API denial means
+inspect existing user/token ACL scope with the administrator; do not broaden
+privileges silently. Wrong template/node/storage/network means compare full
+observed identity with the worksheet. Missing capability means return to
+actual guest configuration and two-clone tests, not just adding TOML strings.
+Stop on failures and retain resources for diagnosis. Remove the exported
+secret from this shell when finished with `unset LEARNLAB_TEMPLATE_TOKEN_SECRET`
+(using your selected name). Keep only non-secret pass/fail notes.
+
+Local checkpoint: Confirm that you ran the chosen profile health and three compatibility checks yourself and reviewed their limits.
+
+### Remove only the two learner-owned acceptance clones
+
+Proxmox node: these two test clones are learner-owned and untracked by
+LearnLab. Do not use learnlab destroy to remove them: it cannot destroy
+untracked clones. Later authorized downstream sessions create separately
+managed environments with their own normal destroy flow.
+Cleanup permanently deletes each selected clone and its attached disks.
+Keep the private worksheet until absence is positively verified. Always
+retain the template, the recoverable source and any original working
+template. They are outside this cleanup boundary. If acceptance failed,
+stop and diagnose before deciding whether these test clones can be removed.
+Work on one clone at a time; no loops, ranges or bulk removal. In the
+trusted management UI reconcile cluster/node, clone name and ID, creation
+history, storage volumes, MAC/firmware identity and the worksheet. Confirm
+this is one of the two disposable full clones and not a template/source,
+another profile's VM or any replacement that reused an ID. VMID alone is
+insufficient. Reinspect after every interruption or failed lookup.
+In the shell on the verified owning node, set CLONE_VMID from that observed
+clone and inspect the output locally. Do not paste it into LearnLab:
+
+```sh
+# Proxmox node: inspect one already reconciled clone
+read -r CLONE_VMID
+qm config "$CLONE_VMID"
+qm status "$CLONE_VMID"
+```
+
+Expected: correct name/disks/MAC/firmware identity, no template flag and
+a known running/stopped state. Any failed command or ambiguity means stop.
+Separately confirm locally that this exact disposable clone may be shut
+down. If running, request graceful shutdown in the UI, or individually:
+
+```sh
+# Proxmox node: only after the shutdown confirmation
+qm shutdown "$CLONE_VMID"
+```
+
+Require successful completion of the initiated management shutdown task
+and positively verify Stopped in the UI and `qm status "$CLONE_VMID"`.
+If already stopped, there is no new shutdown task to require. A timeout,
+closed console or failed lookup is not proof of stopped state. Do not
+silently escalate to force-stop; inspect console/tasks and reconcile first.
+Before deletion, repeat full identity inspection and verify no other work
+uses this clone. Make a separate explicit local destruction confirmation
+naming that clone and its attached disposable disks. Only then use the
+UI Remove confirmation for that clone or execute this single command:
+
+```sh
+# Proxmox node: only after the separate destruction confirmation
+qm destroy "$CLONE_VMID"
+```
+
+Do not add purge, skiplock, force or delete-unreferenced-disk options.
+Expected: successful removal task and absence of this clone from a
+successfully refreshed authorized cluster VM inventory. Inspect storage
+for absence of its recorded attached volumes and confirm the retained
+template/source remain present. A failed qm config lookup alone cannot
+establish absence: it could mean wrong node, denied access or lost service.
+If deletion/task/status/inventory is uncertain, stop, retain the worksheet
+and reconcile with the administrator. Never retry deletion by VMID alone.
+Only after the first clone is reconciled, repeat these independent checks
+and confirmations for the second worksheet clone. Record only pass/fail
+and retained-template/cleanup status in shared notes, never raw identities.
+
+Local checkpoint: Confirm locally that only the two inspected test clones are absent and the template and source are retained.
+
+### Keep learner progress separate from live certification
+
+Controller: successful knowledge answers and manual confirmations save
+self-attested progress. Even completion of all seven lessons grants no
+live certificate. The course remains draft and the certification registry
+remains unchanged. A downstream live run needs its own authorization and
+exact-digest acceptance, including mutation permissions and cleanup of its
+separately managed clones. Do not treat read-only health as that approval.
+
+Knowledge checkpoint: What kind of progress do these manual confirmations record? Enter self-attested.
+
 ## Capability mapping and developer derivation
 
 The 2026-09-11 catalog-derived union below is an output contract for the eventual
@@ -848,10 +1099,30 @@ live-acceptance requirements. Stop at any mismatch with the actual target.
   The source is a moving development branch, so confirm labels/options against
   the installed Proxmox version before changing the candidate.
 
+- [NixOS option search](https://search.nixos.org/options?channel=26.05) is the
+  release-selectable reference for `services.openssh.hostKeys` and
+  `services.qemuGuest.enable`. The dynamic option page was not readable during
+  this refresh; use the release-specific modules above and inspect the generated
+  guest units before sealing.
+- [Systemd machine identity reference](https://manpages.debian.org/trixie/systemd/machine-id.5.en.html)
+  was accessible in the final handoff review after an earlier fetch failed.
+  It describes generic-image identity semantics; it does not establish the
+  target NixOS release's effective path/mount/unit behavior.
+- [Proxmox User Management source](https://raw.githubusercontent.com/proxmox/pve-docs/master/pveum.adoc)
+  documents API token permission separation and the intersection of user/token
+  grants. The rendered [user-management reference](https://pve.proxmox.com/pve-docs/pveum.1.html)
+  returned HTTP 403 in this refresh. Use your installed-version operator guidance
+  and administrator for account setup; no account or privilege change was tested.
+- The [upstream qm source](https://raw.githubusercontent.com/proxmox/pve-docs/master/qm.adoc)
+  also documents shutdown/wait and destroy. The handoff requires positive stopped
+  state and independent removal verification; it deliberately requires local
+  ownership checks and confirmations before these learner-operated mutations.
+  Rendered qm retrieval still returned HTTP 403. No exact Proxmox release has
+  been live-validated for this walkthrough; check its installed help/UI first.
+
 The sealing source refresh also read the current upstream systemd machine-ID
-source and NixOS 26.05 OpenSSH module linked above. The rendered systemd identity
-page and Proxmox qm reference could not be retrieved; their upstream sources were
-accessible. Moving branch sources do not establish the exact installed release's
+source and NixOS 26.05 OpenSSH module linked above. Moving branch sources do not
+establish the exact installed release's
 generated units, path/mount layout, shutdown persistence, snapshot/conversion
 behavior or clone/reboot identity results. These remain explicit live blockers.
 Offline content tests and local knowledge answers cannot certify the template.

@@ -176,8 +176,10 @@ from importlib.resources import files
 from unittest.mock import patch
 from typer.testing import CliRunner
 from learnlab import cli
-from learnlab.curriculum import CurriculumCatalog
+from learnlab.curriculum import CurriculumCatalog, EnvironmentScope, VerificationType
 from learnlab.course_certification import CourseMaturity
+from learnlab.state import StateStore
+from pathlib import Path
 root = files('learnlab') / 'collections'
 assert root.joinpath('certifications.yaml').read_text().strip() == 'certifications: []'
 catalog = CurriculumCatalog(root)
@@ -197,6 +199,59 @@ for path in paths:
     assert 'not live-validated' in result.output
     assert '--include-drafts' in result.output
     print(path)
+path = 'proxmox/nixos-template'
+course = catalog.load_course(path)
+assert course.maturity is CourseMaturity.DRAFT
+assert [lesson.id for lesson in course.lessons] == [
+    'prerequisites-and-safety', 'create-installer-vm', 'install-nixos',
+    'configure-lab-access', 'seal-and-convert', 'test-two-clones',
+    'configure-provider',
+]
+for lesson in course.lessons:
+    policy = course.effective_environment(lesson)
+    assert policy.scope is EnvironmentScope.NONE
+    assert policy.provider_capability is None
+    assert policy.guest_capabilities == ()
+    assert all(check.type in (VerificationType.TEXT_EVIDENCE,
+                             VerificationType.MANUAL_CONFIRMATION)
+               for step in lesson.steps for check in step.verifications)
+store = StateStore(Path('bootstrap-state/learnlab.db'))
+def forbidden(*args, **kwargs):
+    raise AssertionError('bootstrap accessed settings, provider, or SSH')
+with (
+    patch.object(cli, 'state_store_factory', return_value=store),
+    patch.object(cli, 'state_root', return_value=Path('bootstrap-state')),
+    patch.object(cli, 'load_settings', side_effect=forbidden),
+    patch.object(cli, 'load_requested_profiles', side_effect=forbidden),
+    patch.object(cli, 'resolve_token_secret', side_effect=forbidden),
+    patch.object(cli, 'provider_factory', side_effect=forbidden),
+    patch.object(cli, 'SshExecutor', side_effect=forbidden),
+):
+    started = CliRunner().invoke(cli.app, ['start', path, '--include-drafts'],
+                                input='7\\n\\ny\\nq\\n')
+    assert started.exit_code == 0, started.output
+    assert 'PASS (self-attested): Learner confirmed' in started.output
+    assert 'Progress saved.' in started.output
+    step_path = ('proxmox', 'nixos-template', 'configure-provider', 'create-profile')
+    [saved] = store.verification_records(step_path)
+    assert saved.self_attested and saved.evidence is None
+    resumed = CliRunner().invoke(cli.app, ['resume', path],
+                                input='7\\n\\ny\\n\\ny\\n\\nself-attested\\nq\\n')
+    assert resumed.exit_code == 0, resumed.output
+    assert '[in progress]' in resumed.output
+    assert 'create-profile' not in resumed.output
+    assert 'read-only-handoff-checked' in resumed.output
+    assert store.verification_records(step_path) == [saved]
+    assert store.completed_lessons('proxmox', 'nixos-template') == {
+        'configure-provider'
+    }
+    assert catalog.load_course(path).maturity is CourseMaturity.DRAFT
+    assert (root.joinpath('certifications.yaml').read_text().strip()
+            == 'certifications: []')
+    gated = CliRunner().invoke(cli.app, ['start', path])
+    assert gated.exit_code == 2, gated.output
+    assert 'not live-validated' in gated.output
+print(path + ': none; draft; start/save/resume; self-attested')
 """,
             json.dumps(pending_paths),
         ],
@@ -206,4 +261,7 @@ for path in paths:
         capture_output=True,
         text=True,
     )
-    assert pending_smoke.stdout.splitlines() == list(pending_paths)
+    assert pending_smoke.stdout.splitlines() == [
+        *pending_paths,
+        "proxmox/nixos-template: none; draft; start/save/resume; self-attested",
+    ]
