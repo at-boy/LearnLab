@@ -105,9 +105,11 @@ steps:
 
       ```sh
       # Controller
-      ssh -i "$KEY_PATH" -o IdentitiesOnly=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$CLONE_SSH_DIR/known_hosts" -o GlobalKnownHostsFile=/dev/null "$LAB_USER@$CLONE_ADDRESS"
+      ssh -i "$KEY_PATH" -o ControlPath=none -o IdentitiesOnly=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$CLONE_SSH_DIR/known_hosts" -o GlobalKnownHostsFile=/dev/null "$LAB_USER@$CLONE_ADDRESS"
       ```
 
+      ControlPath=none disables connection sharing; retain it on every repeated
+      acceptance connection so host-key exchange and authentication run again.
       Installed guest (fresh SSH session): run `whoami`, `sudo -n true` and immediately
       `echo $?`; expect the intended account and exit 0 without a server password.
       A passphrase prompt for the local private key is separate. Any failed check

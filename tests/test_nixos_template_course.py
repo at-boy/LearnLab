@@ -149,6 +149,20 @@ def test_access_trust_state_loss_requires_console_reenrollment():
     assert "fresh console-verified reenrollment" in guide.lower()
 
 
+@pytest.mark.parametrize("source", ["configure-lab-access", "test-two-clones", "guide"])
+def test_fresh_ssh_acceptance_disables_connection_sharing(source):
+    if source == "guide":
+        text = (Path(__file__).parents[1] / "docs/NixOS-Template-Guide.md").read_text()
+    else:
+        text = lesson_text(source)
+    commands = [
+        line.strip() for line in text.splitlines() if line.strip().startswith("ssh -i ")
+    ]
+    assert commands, f"Missing fresh SSH acceptance example in {source}"
+    for command in commands:
+        assert "-o ControlPath=none" in command
+
+
 @pytest.mark.parametrize(
     ("lesson_id", "check_id", "accepted", "rejected"),
     [

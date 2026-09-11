@@ -398,9 +398,11 @@ Then make a fresh key-only connection, with your private key still local:
 
 ```sh
 # Controller
-ssh -i "$KEY_PATH" -o IdentitiesOnly=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$LAB_SSH_DIR/known_hosts" -o GlobalKnownHostsFile=/dev/null "$LAB_USER@$GUEST_ADDRESS"
+ssh -i "$KEY_PATH" -o ControlPath=none -o IdentitiesOnly=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$LAB_SSH_DIR/known_hosts" -o GlobalKnownHostsFile=/dev/null "$LAB_USER@$GUEST_ADDRESS"
 ```
 
+ControlPath=none disables connection sharing so this checks a new transport and
+authentication instead of reusing an existing SSH connection.
 A local private-key passphrase prompt is different from a server account
 password prompt. Expected: learner shell without server password fallback
 or an unverified host prompt. If unavailable, use the console to inspect the
@@ -706,9 +708,11 @@ restore its CLONE_SSH_DIR when switching between clones. Make fresh connections:
 
 ```sh
 # Controller
-ssh -i "$KEY_PATH" -o IdentitiesOnly=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$CLONE_SSH_DIR/known_hosts" -o GlobalKnownHostsFile=/dev/null "$LAB_USER@$CLONE_ADDRESS"
+ssh -i "$KEY_PATH" -o ControlPath=none -o IdentitiesOnly=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$CLONE_SSH_DIR/known_hosts" -o GlobalKnownHostsFile=/dev/null "$LAB_USER@$CLONE_ADDRESS"
 ```
 
+ControlPath=none disables connection sharing; retain it on every repeated
+acceptance connection so host-key exchange and authentication run again.
 Installed guest (fresh SSH session): `whoami`, `sudo -n true`, immediately `echo $?`.
 Require intended account and exit 0 without server password fallback. Local key
 passphrases are separate. Failures require console diagnosis of account/public key,
