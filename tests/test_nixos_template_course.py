@@ -189,6 +189,23 @@ def test_guest_poweroff_requires_stopped_state_without_assuming_management_task(
     assert "only if an actual management shutdown task was initiated" in text
 
 
+@pytest.mark.parametrize("source", ["seal-and-convert", "guide"])
+def test_sealing_checks_established_ssh_sessions_and_processes(source):
+    if source == "guide":
+        text = (Path(__file__).parents[1] / "docs/NixOS-Template-Guide.md").read_text()
+    else:
+        text = lesson_text(source)
+    lower = text.lower()
+
+    assert "every effective ssh port" in lower
+    assert "before stopping" in lower and "sshd -t" in lower
+    assert "listening sockets alone" in lower
+    assert "state established" in lower
+    assert "pgrep -a -x sshd" in lower
+    assert "no output" in lower
+    assert "permission" in lower and "stop" in lower
+
+
 @pytest.mark.parametrize("source", ["configure-lab-access", "test-two-clones", "guide"])
 def test_fresh_ssh_acceptance_disables_connection_sharing(source):
     if source == "guide":

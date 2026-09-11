@@ -132,17 +132,41 @@ steps:
   - id: seal-verified-state
     title: Stop SSH, clear only inspected state and power off
     instructions: |
-      Installed guest (Proxmox console): close every remote SSH session, then run:
+      Installed guest (Proxmox console): before stopping SSH, determine and
+      record every effective SSH port from this target's actual configuration:
+
+      ```sh
+      # Installed guest: read-only effective configuration inspection
+      sudo sshd -T
+      ```
+
+      Record every `port <number>` line locally. Require a nonempty list of
+      valid ports and a successful, unambiguous command. An empty or malformed
+      port list, a configuration or permission error, or uncertainty about an
+      Include/custom unit/socket means stop and reconcile through the console.
+      Close every remote SSH session, then run:
 
       ```sh
       # Installed guest: deliberate service mutation
       sudo systemctl stop sshd.service sshd-keygen.service
       systemctl is-active sshd.service sshd-keygen.service
-      sudo ss -lntp
+      sudo ss -Hlnpt
+      # Repeat separately for every recorded port, replacing PORT with its number.
+      sudo ss -Htnp state established 'sport = :PORT'
+      sudo pgrep -a -x sshd
       ```
 
-      Expected: both inactive and no SSH listener; inactive is a nonzero status.
-      Remaining listener/session or failure: stop and inspect, do not delete keys.
+      `ss -Hlnpt` displays listening sockets; listening sockets alone do not prove
+      sessions ended. NixOS 26.05 configures `sshd.service` with `KillMode=process`,
+      so stopping it can leave sshd session children alive. Require both services
+      inactive and no listener on the recorded ports, then inspect established
+      connections on every effective SSH port and remaining sshd processes
+      independently. The required state is no output from
+      every established-connection query and no output from `pgrep`; inactive and
+      no-match statuses are nonzero as expected. Any matching connection/process,
+      unexpected output, permission failure, incomplete port coverage or uncertainty
+      about whether a command failed is a stop condition: keep console access and do
+      not delete keys or machine identity.
       Only for the ordinary writable /etc/machine-id layout already inspected,
       deliberately run `sudo truncate -s 0 /etc/machine-id` in the Installed guest.
       Leave the empty file in place. Empty and missing have different first-boot

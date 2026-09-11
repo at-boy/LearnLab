@@ -631,22 +631,48 @@ this behavior. [NixOS 26.05 OpenSSH module](https://github.com/NixOS/nixpkgs/blo
 Installed guest (console): explicitly confirm the candidate identity, recovery
 source and exact list of per-machine files to clear. Read this whole phase first.
 Close all SSH sessions; stop if another operator, rebuild or automatic deployment
-could regenerate state during sealing. Then deliberately stop both services:
+could regenerate state during sealing. Before stopping SSH, determine and record
+every effective SSH port from this target's actual configuration:
+
+```sh
+# Installed guest: read-only effective configuration inspection
+sudo sshd -T
+```
+
+Record every `port <number>` line locally. Require a nonempty list of valid ports
+and a successful, unambiguous command. An empty or malformed port list, a
+configuration or permission error, or uncertainty about an Include/custom
+unit/socket means stop and reconcile through the console. Then deliberately stop
+both services:
 
 ```sh
 # Installed guest: deliberate service mutation
 sudo systemctl stop sshd.service sshd-keygen.service
 systemctl is-active sshd.service sshd-keygen.service
-sudo ss -lntp
+sudo ss -Hlnpt
+# Repeat separately for every recorded port, replacing PORT with its number.
+sudo ss -Htnp state established 'sport = :PORT'
+sudo pgrep -a -x sshd
 ```
 
-Require both inactive (nonzero is expected for inactive) and no SSH listener/session.
-Remaining SSH or errors mean stop before removing keys. Only for the inspected
-ordinary writable machine-id file, run `sudo truncate -s 0 /etc/machine-id` in the
-Installed guest and leave the empty file in place. For D-Bus, leave absence alone;
-preserve a verified link to /etc/machine-id and confirm it reads empty. Only if it
-is a separate validated regular file, run `sudo rm -i -- /var/lib/dbus/machine-id`
-and confirm that one deletion. Any other layout is a stop condition.
+`ss -Hlnpt` displays listening sockets; listening sockets alone do not prove
+sessions ended. NixOS 26.05 configures `sshd.service` with `KillMode=process`, so
+stopping it can leave sshd session children alive. Require both services inactive
+and no listener on the recorded ports, then inspect established connections on
+every effective SSH port and remaining sshd processes independently. The required
+state is no output from every
+established-connection query and no output from `pgrep`; inactive and no-match
+statuses are nonzero as expected. Any matching connection/process, unexpected
+output, permission failure, incomplete port coverage or uncertainty about whether
+a command failed is a stop condition: keep console access and do not delete keys
+or machine identity.
+
+Only for the inspected ordinary writable machine-id file, run
+`sudo truncate -s 0 /etc/machine-id` in the Installed guest and leave the empty
+file in place. For D-Bus, leave absence alone; preserve a verified link to
+/etc/machine-id and confirm it reads empty. Only if it is a separate validated
+regular file, run `sudo rm -i -- /var/lib/dbus/machine-id` and confirm that one
+deletion. Any other layout is a stop condition.
 
 Installed guest: for each configured host-key pair on the inspected local list,
 type `sudo rm -i --` followed by only the exact private and .pub paths, review the
