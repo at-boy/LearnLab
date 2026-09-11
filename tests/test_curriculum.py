@@ -706,9 +706,7 @@ def test_provider_and_secret_text_policy(source: str, expected: bool) -> None:
     assert _contains_prohibited_provider_or_secret_text(source) is expected
 
 
-def test_curriculum_contains_no_provider_configuration_or_secret_material(
-    collections_dir: Path,
-):
+def _contains_prohibited_provider_keys(parsed: dict[str, Any]) -> bool:
     prohibited_keys = {
         "template_vmid",
         "node",
@@ -717,13 +715,35 @@ def test_curriculum_contains_no_provider_configuration_or_secret_material(
         "api_url",
         "provider_profile",
     }
+    return not prohibited_keys.isdisjoint(parsed)
 
+
+@pytest.mark.parametrize(
+    "prohibited_key",
+    [
+        "template_vmid",
+        "node",
+        "storage",
+        "network",
+        "api_url",
+        "provider_profile",
+    ],
+)
+def test_provider_key_policy_rejects_each_prohibited_key(
+    prohibited_key: str,
+) -> None:
+    assert _contains_prohibited_provider_keys({prohibited_key: "configured"})
+
+
+def test_curriculum_contains_no_provider_configuration_or_secret_material(
+    collections_dir: Path,
+):
     for path in collections_dir.rglob("*.yaml"):
         source = path.read_text(encoding="utf-8")
         assert not _contains_prohibited_provider_or_secret_text(source)
         parsed = yaml.safe_load(source)
         assert isinstance(parsed, dict)
-        assert prohibited_keys.isdisjoint(parsed)
+        assert not _contains_prohibited_provider_keys(parsed)
 
 
 @pytest.mark.parametrize(
