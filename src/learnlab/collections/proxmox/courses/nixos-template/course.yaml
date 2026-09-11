@@ -4,3 +4,6 @@ environment:
   scope: none
 lessons:
   - prerequisites-and-safety
+  - create-installer-vm
+  - install-nixos
+  - configure-lab-access
