@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-10-nixos-template-course-design.md`
 
-**Status:** Ready for a later implementation session; no implementation started. Drafted 2026-09-10, checked 2026-09-11.
+**Status:** Tasks 1–4 and Task 5 offline Steps 1–3 completed on 2026-09-11. Course remains draft; live acceptance and final whole-branch review remain pending. See [offline acceptance evidence](../../course-validation/2026-09-10-nixos-template.md).
 
 ## Global Constraints
 
@@ -58,7 +58,7 @@ The sibling bootstrap course may already be merged. Preserve its content and ada
 
 **Interfaces:** Produces `COURSE_PATH`, `ROOT`, `load_course()` and `lesson_text(lesson_id)` in the course test file for later tests. Consumes existing NONE-scope engine; no provider API additions.
 
-- [ ] **Step 1: Add course loading/boundary regression tests.** Use these imports/helpers and tests in `tests/test_nixos_template_course.py`:
+- [x] **Step 1: Add course loading/boundary regression tests.** Use these imports/helpers and tests in `tests/test_nixos_template_course.py`:
 
 ```python
 from pathlib import Path
@@ -98,9 +98,9 @@ def test_bootstrap_validates_without_findings():
     assert report.findings == ()
 ```
 
-- [ ] **Step 2: Run RED.** `.venv/bin/python -m pytest tests/test_nixos_template_course.py -q`; expected missing-course failure, not a collection/import error.
+- [x] **Step 2: Run RED.** `.venv/bin/python -m pytest tests/test_nixos_template_course.py -q`; expected missing-course failure, not a collection/import error.
 
-- [ ] **Step 3: Create a working one-lesson course, not empty future lessons.** Initial manifest:
+- [x] **Step 3: Create a working one-lesson course, not empty future lessons.** Initial manifest:
 
 ```yaml
 id: nixos-template
@@ -131,7 +131,7 @@ steps:
         failure_message: The learner operates Proxmox; LearnLab only guides this course.
 ```
 
-- [ ] **Step 4: Correct the shared metadata assumption without weakening VM coverage.** Import `EnvironmentScope` in `tests/test_shipped_course_metadata.py`; replace its unconditional nonempty capability assertion with:
+- [x] **Step 4: Correct the shared metadata assumption without weakening VM coverage.** Import `EnvironmentScope` in `tests/test_shipped_course_metadata.py`; replace its unconditional nonempty capability assertion with:
 
 ```python
 for lesson in course.lessons:
@@ -146,9 +146,9 @@ for lesson in course.lessons:
 
 If a sibling course already made this correction, reuse it. Do not delete all-shipped coverage or alter the six pending-course set.
 
-- [ ] **Step 5: Exercise real CLI startup with no profile.** Add a test in `tests/test_cli.py` using its existing `tmp_xdg` fixture and `CliRunner`. Patch `cli.load_settings`, `cli.resolve_token_secret`, `cli.provider_factory` to a function that raises `AssertionError`; start `["start", "proxmox/nixos-template", "--include-drafts"]`, answer the first concept correctly, then save and exit. Assert exit 0, NONE policy, saved progress, no configuration access. Use the actual prompt sequence (inspect `ConsoleSessionPrompt`); do not replace the course/session with a synthetic fake. Add a resume assertion for the saved session with the same tripwires and no provider flag.
+- [x] **Step 5: Exercise real CLI startup with no profile.** Add a test in `tests/test_cli.py` using its existing `tmp_xdg` fixture and `CliRunner`. Patch `cli.load_settings`, `cli.resolve_token_secret`, `cli.provider_factory` to a function that raises `AssertionError`; start `["start", "proxmox/nixos-template", "--include-drafts"]`, answer the first concept correctly, then save and exit. Assert exit 0, NONE policy, saved progress, no configuration access. Use the actual prompt sequence (inspect `ConsoleSessionPrompt`); do not replace the course/session with a synthetic fake. Add a resume assertion for the saved session with the same tripwires and no provider flag.
 
-- [ ] **Step 6: GREEN and commit.** Run `tests/test_nixos_template_course.py`, `tests/test_shipped_course_metadata.py` and the new CLI test. Commit only these files and the manifest/first lesson with subject `feat: add nixos-template bootstrap entry course`.
+- [x] **Step 6: GREEN and commit.** Run `tests/test_nixos_template_course.py`, `tests/test_shipped_course_metadata.py` and the new CLI test. Commit only these files and the manifest/first lesson with subject `feat: add nixos-template bootstrap entry course`.
 
 ### Task 2: Installer and lab access lessons
 
@@ -156,7 +156,7 @@ If a sibling course already made this correction, reuse it. Do not delete all-sh
 
 **Interfaces:** Consumes test helpers from Task 1. Produces installable guest and confirmed controller key/sudo/agent/tool access as learner-verified checkpoints; nothing is entered into engine environment state.
 
-- [ ] **Step 1: Add RED tests for the new instructional contract.** Add to `tests/test_nixos_template_course.py`:
+- [x] **Step 1: Add RED tests for the new instructional contract.** Add to `tests/test_nixos_template_course.py`:
 
 ```python
 def test_installer_teaches_target_specific_steps():
@@ -176,9 +176,9 @@ def test_access_covers_required_guest_configuration():
 
 Run `.venv/bin/python -m pytest tests/test_nixos_template_course.py -q`; expect missing lesson failures. These are content regressions, not proof of guest execution.
 
-- [ ] **Step 2: Write installer lessons using the spec's Installation design.** Include the full Proxmox UI settings, verified official minimal x86_64 ISO, HTTPS/checksum verification, networking diagnostics, actual disk identification, confirmation before writes, OS installation and disk-only boot. Treat installer UI, editor and password entry as deliberately interactive learner actions, not remote verifications. After each action specify expected state, how to diagnose a mismatch and where to stop. There must be no unconditional disk-format command that can be copied before identity confirmation.
+- [x] **Step 2: Write installer lessons using the spec's Installation design.** Include the full Proxmox UI settings, verified official minimal x86_64 ISO, HTTPS/checksum verification, networking diagnostics, actual disk identification, confirmation before writes, OS installation and disk-only boot. Treat installer UI, editor and password entry as deliberately interactive learner actions, not remote verifications. After each action specify expected state, how to diagnose a mismatch and where to stop. There must be no unconditional disk-format command that can be copied before identity confirmation.
 
-- [ ] **Step 3: Write the access lesson using the spec's Lab access design.** Cover guest agent at both hypervisor and guest, actual tool packages, trusted SSH enrollment, key login before disabling password SSH, checked lab-only sudo policy and a separate console recovery route. Derive downstream template capabilities with this read-only developer command:
+- [x] **Step 3: Write the access lesson using the spec's Lab access design.** Cover guest agent at both hypervisor and guest, actual tool packages, trusted SSH enrollment, key login before disabling password SSH, checked lab-only sudo policy and a separate console recovery route. Derive downstream template capabilities with this read-only developer command:
 
 ```bash
 PYTHONPATH=src .venv/bin/python - <<'CAPS'
@@ -198,9 +198,9 @@ CAPS
 
 Map that list to actual installed commands in the guide. Leave unrelated exercise state absent. Add new IDs to the manifest only when their complete lessons exist. Keep manual attestations in separate steps from knowledge questions.
 
-- [ ] **Step 4: Add knowledge-answer cases and verify.** For each added text check, table a known accepted concept and at least one negated/unrelated answer. Execute the actual `equals` or full regex against those examples; never just assert that a regex string contains anchors. Test YAML with `validate_catalog`; run `.venv/bin/learnlab validate proxmox/nixos-template` and focused pytest. Review instructions and shell snippets without running guest commands.
+- [x] **Step 4: Add knowledge-answer cases and verify.** For each added text check, table a known accepted concept and at least one negated/unrelated answer. Execute the actual `equals` or full regex against those examples; never just assert that a regex string contains anchors. Test YAML with `validate_catalog`; run `.venv/bin/learnlab validate proxmox/nixos-template` and focused pytest. Review instructions and shell snippets without running guest commands.
 
-- [ ] **Step 5: Commit the installer/access lessons, guide sections and tests.** Subject: `feat: teach nixos-template installation and lab access`.
+- [x] **Step 5: Commit the installer/access lessons, guide sections and tests.** Subject: `feat: teach nixos-template installation and lab access`.
 
 ### Task 3: Safe sealing and two-clone identity acceptance
 
@@ -208,7 +208,7 @@ Map that list to actual installed commands in the guide. Leave unrelated exercis
 
 **Interfaces:** Consumes learner-owned installed guest. Produces a retained template and two learner-owned test clones, not LearnLab-managed environments. No new lifecycle methods or validators.
 
-- [ ] **Step 1: Add RED safety regressions.** In `tests/test_nixos_template_course.py`:
+- [x] **Step 1: Add RED safety regressions.** In `tests/test_nixos_template_course.py`:
 
 ```python
 def test_sealing_and_clone_identity_contract():
@@ -226,13 +226,13 @@ def test_sealing_and_clone_identity_contract():
 
 Run focused tests; expect missing lessons. Add OS-specific regression cases for the sealing design, including the NixOS hostKeys/generated sshd inspection.
 
-- [ ] **Step 2: Implement the spec's OS-specific sealing phase.** Give inspect/confirm/execute/verify checkpoints. Check actual file types/mounts and D-Bus fallback; do not introduce a universal rm/truncate script for arbitrary paths. Preserve already working templates, require no snapshots before conversion, and explain interruption recovery. No automatic snapshot deletion, force flags or reboot after sealing. Never mutate the template currently used by another profile.
+- [x] **Step 2: Implement the spec's OS-specific sealing phase.** Give inspect/confirm/execute/verify checkpoints. Check actual file types/mounts and D-Bus fallback; do not introduce a universal rm/truncate script for arbitrary paths. Preserve already working templates, require no snapshots before conversion, and explain interruption recovery. No automatic snapshot deletion, force flags or reboot after sealing. Never mutate the template currently used by another profile.
 
-- [ ] **Step 3: Implement two-clone acceptance instructions.** Each clone must boot from disk, have confirmed guest agent/SSH/sudo/tool access, and have its own machine ID and host keys. Verify A differs from B and each is stable after a reboot. Require console-authenticated host-key enrollment into an isolated file. Ask the learner only to confirm local comparison results; never persist raw identities or addresses. Include the OS-specific configuration check from the spec.
+- [x] **Step 3: Implement two-clone acceptance instructions.** Each clone must boot from disk, have confirmed guest agent/SSH/sudo/tool access, and have its own machine ID and host keys. Verify A differs from B and each is stable after a reboot. Require console-authenticated host-key enrollment into an isolated file. Ask the learner only to confirm local comparison results; never persist raw identities or addresses. Include the OS-specific configuration check from the spec.
 
-- [ ] **Step 4: Test any introduced guard logic without real resources.** For a shell guard, use PATH stubs under `tmp_path` and an invocation log. Cover ID collision, wrong resource name/template flag, failed lookup, timeout, already-converted candidate and partially cleaned clone. Assert no mutating stub is called until ownership and explicit confirmation pass; failed lookup must not be treated as absence. If no executable helper is introduced, do not invent one for testing: record this as manual-instruction coverage and keep live acceptance pending.
+- [x] **Step 4: Test any introduced guard logic without real resources.** For a shell guard, use PATH stubs under `tmp_path` and an invocation log. Cover ID collision, wrong resource name/template flag, failed lookup, timeout, already-converted candidate and partially cleaned clone. Assert no mutating stub is called until ownership and explicit confirmation pass; failed lookup must not be treated as absence. If no executable helper is introduced, do not invent one for testing: record this as manual-instruction coverage and keep live acceptance pending.
 
-- [ ] **Step 5: GREEN, review and commit.** Run focused tests and offline validation. Subject: `feat: teach safe nixos-template sealing and clone checks`.
+- [x] **Step 5: GREEN, review and commit.** Run focused tests and offline validation. Subject: `feat: teach safe nixos-template sealing and clone checks`.
 
 ### Task 4: Profile handoff, complete guide and installed-wheel coverage
 
@@ -240,7 +240,7 @@ Run focused tests; expect missing lessons. Add OS-specific regression cases for 
 
 **Interfaces:** Produces the final seven-lesson course. Learner creates a new named `ProxmoxProfile` using the existing schema. Read-only provider health and downstream compatibility are learner-invoked only after setup; no profile is loaded by the course session itself.
 
-- [ ] **Step 1: Add RED final-order and cleanup-boundary tests.**
+- [x] **Step 1: Add RED final-order and cleanup-boundary tests.**
 
 ```python
 def test_complete_lesson_order_and_handoff():
@@ -255,13 +255,13 @@ def test_complete_lesson_order_and_handoff():
 
 Run focused tests; expect missing final lesson/order mismatch. Supplement this token check with review of the actual prohibition: LearnLab cannot destroy untracked clones.
 
-- [ ] **Step 2: Complete handoff and cleanup instructions.** Explain all current profile fields by adapting the existing README schema to local learner inputs; leave real values out of the course. Preserve existing profiles/defaults and store only the secret environment-variable name. Teach positional `learnlab provider test "$PROFILE"` and `learnlab validate COURSE --provider "$PROFILE"` for matching nginx/nftables/systemd paths. Distinguish compatibility assertions from live success and clone permission testing. Clean up only the two learner-owned test clones through Proxmox after full identity/confirmation checks; verify absence, retain template and source, and stop on uncertainty. Do not execute any of these commands during offline tests.
+- [x] **Step 2: Complete handoff and cleanup instructions.** Explain all current profile fields by adapting the existing README schema to local learner inputs; leave real values out of the course. Preserve existing profiles/defaults and store only the secret environment-variable name. Teach positional `learnlab provider test "$PROFILE"` and `learnlab validate COURSE --provider "$PROFILE"` for matching nginx/nftables/systemd paths. Distinguish compatibility assertions from live success and clone permission testing. Clean up only the two learner-owned test clones through Proxmox after full identity/confirmation checks; verify absence, retain template and source, and stop on uncertainty. Do not execute any of these commands during offline tests.
 
-- [ ] **Step 3: Finish standalone guide and README entry.** The guide contains all course steps, terminal labels, actual commands, expected output and concrete troubleshooting. Cite the primary references listed in the spec, record version assumptions, and explicitly label untested procedures. README links it and shows `learnlab start proxmox/nixos-template --include-drafts` without a provider. Distinguish template creation from downstream live course certification.
+- [x] **Step 3: Finish standalone guide and README entry.** The guide contains all course steps, terminal labels, actual commands, expected output and concrete troubleshooting. Cite the primary references listed in the spec, record version assumptions, and explicitly label untested procedures. README links it and shows `learnlab start proxmox/nixos-template --include-drafts` without a provider. Distinguish template creation from downstream live course certification.
 
-- [ ] **Step 4: Extend the existing wheel test without building twice.** In the already-installed wheel subprocess in `tests/test_packaging.py`, load this course from `files("learnlab") / "collections"`, assert NONE/empty dependencies and draft maturity, and run a start/save/resume smoke with forbidden settings/provider access. Preserve all six pending-course checks and any sibling bootstrap checks. In `tests/test_cli.py`, verify no-profile course progress survives save/resume and that runtime results remain self-attested, not a live-certificate grant. Do not delete unrelated CLI fixtures or bypass draft gating globally.
+- [x] **Step 4: Extend the existing wheel test without building twice.** In the already-installed wheel subprocess in `tests/test_packaging.py`, load this course from `files("learnlab") / "collections"`, assert NONE/empty dependencies and draft maturity, and run a start/save/resume smoke with forbidden settings/provider access. Preserve all six pending-course checks and any sibling bootstrap checks. In `tests/test_cli.py`, verify no-profile course progress survives save/resume and that runtime results remain self-attested, not a live-certificate grant. Do not delete unrelated CLI fixtures or bypass draft gating globally.
 
-- [ ] **Step 5: GREEN and commit.** Run focused course tests, relevant CLI tests, `tests/test_packaging.py`, and offline validation. Subject: `docs: finish nixos-template provider handoff and guide`.
+- [x] **Step 5: GREEN and commit.** Run focused course tests, relevant CLI tests, `tests/test_packaging.py`, and offline validation. Subject: `docs: finish nixos-template provider handoff and guide`.
 
 ### Task 5: Full offline gate, review and optional live acceptance
 
@@ -269,7 +269,7 @@ Run focused tests; expect missing final lesson/order mismatch. Supplement this t
 
 **Interfaces:** Consumes final course contents, `course_digest`, existing strict certification schema and all prior task evidence. Produces an honest acceptance report and either draft status with blockers or an exact-digest live record.
 
-- [ ] **Step 1: Run and record full offline verification.**
+- [x] **Step 1: Run and record full offline verification.**
 
 ```bash
 .venv/bin/python -m pytest -m 'not live' -q
@@ -281,7 +281,7 @@ git diff --check
 
 The full suite includes wheel build/install. Do not rerun packaging without a new relevant change. Review each lesson against the spec, including every destructive checkpoint and each negative knowledge case. Keep the three pre-existing proxmox-admin warnings separate from any new course finding; do not update snapshots to hide a new warning.
 
-- [ ] **Step 2: Record final digest and non-secret blockers.**
+- [x] **Step 2: Record final digest and non-secret blockers.**
 
 ```bash
 PYTHONPATH=src .venv/bin/python - <<'DIGEST'
@@ -293,7 +293,7 @@ DIGEST
 
 Record actual date/revision, offline commands/results, exact digest, OS/ISO version assumptions and all untested live steps. Do not record worksheet values, private material or raw clone identities. Recalculate if any course file changes after review.
 
-- [ ] **Step 3: Stop before live resource actions unless separately authorized.** Present exact scratch candidate/template/clone identities, expected storage/network effects and cleanup/retention behavior to the operator privately. Approval to implement curriculum is not approval to partition, create, seal, convert or delete resources. If no live authorization, leave the registry untouched, report draft blockers and finish the offline implementation without pretending live completion.
+- [x] **Step 3: Stop before live resource actions unless separately authorized.** Present exact scratch candidate/template/clone identities, expected storage/network effects and cleanup/retention behavior to the operator privately. Approval to implement curriculum is not approval to partition, create, seal, convert or delete resources. If no live authorization, leave the registry untouched, report draft blockers and finish the offline implementation without pretending live completion.
 
 - [ ] **Step 4: If approved, complete the seven-lesson live traversal.** Fresh ISO installation; intentional safe failure and remediation; save/resume; successful sealing; two full clones with distinct identities; per-clone reboot identity stability; guest access/tool/configuration checks; profile health/compatibility; stop/destroy only test clones and verify absence while retaining intended template. Checkpoints remain pending until observed. An uncertain result blocks certification and requires reconciliation. The course engine must still make zero provider/SSH calls during its session.
 
