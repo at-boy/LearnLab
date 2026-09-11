@@ -2,10 +2,11 @@
 
 Status: **draft; offline gate passed; live acceptance not performed**.
 Recorded 2026-09-11. The filename follows the design/plan date, 2026-09-10.
-Tested LearnLab revision: `6462a1b9ff0e96f51aa7863dac4f2b2acd93e3d2` on
-`feature/nixos-template-course`. This report and plan bookkeeping are the only
-subsequent tracked changes in the acceptance commit. Final whole-branch review
-is still pending; no merge or push is implied.
+Tested content revision: `9f0df3bd15b45e1575e5071668e594f07a373c74`
+on `feature/nixos-template-course`. This report is the only subsequent tracked
+change in the acceptance-evidence commit. The final whole-branch review finding
+about lingering SSH sessions is addressed at the tested content revision; Task 5
+Step 5 remains unchecked as instructed. No merge or push is implied.
 
 Course: `proxmox/nixos-template`, seven ordered lessons, effective
 `environment.scope: none`, no provider or guest capabilities, and only exact
@@ -16,7 +17,7 @@ guest, disk, sealing, clone or cleanup operation was executed for this acceptanc
 ## Exact course digest
 
 ```text
-d92ae91cf62011b98494f13b48d1d40b1c908886b2867ed6e0437ef0a18e95a9
+215c57675abd952e4d84382b7ba63645dd38ea6972e2bc7bedae26db04a7f91c
 ```
 
 Computed on the tested revision with this read-only command (exit 0):
@@ -29,18 +30,19 @@ print(course_digest(Path("src/learnlab/collections/proxmox/courses/nixos-templat
 DIGEST
 ```
 
-No course file changed during Task 5. The digest matches the initial gate's
-digest at `8d33390`; the intervening reviewed changes only corrected a curriculum
-safety test. Recompute the digest after any future course change.
+The final review fix changed the sealing lesson, so the previous digest is stale.
+This digest was recomputed after the fix at `9f0df3b`; recompute it after any
+future course change.
 
 ## Offline verification
 
 Commands ran in the isolated `template-bootstrap-course` worktree on 2026-09-11
-(resumed gate started at 16:37:10 +02:00). Each command below exited 0:
+(fresh final-fix gate; pytest completed before 21:09:02 +02:00). Each command
+below exited 0:
 
 ```text
 .venv/bin/python -m pytest -m 'not live' -q
-550 passed, 1 deselected in 33.49s
+552 passed, 1 deselected in 33.54s
 
 .venv/bin/ruff check .
 All checks passed!
@@ -66,8 +68,10 @@ The first Task 5 gate at `8d33390` reported `1 failed, 539 passed, 1 deselected
 in 33.55s`: the existing secret-material test rejected the required instructional
 field name `token_secret_env` as the substring `token_secret`. Reviewed commits
 `fb1e54b` and `6462a1b` corrected that policy and added positive/negative secret
-and provider-key cases. The curriculum was unchanged. The complete gate above
-was rerun once after that relevant test change and supersedes the failing result.
+and provider-key cases. The curriculum was unchanged at that point. The earlier
+accepted gate at `102c591` reported 550 passed and 1 deselected. This final review
+fix changed course content and added two regression cases; the complete gate above
+supersedes both earlier results.
 
 Additional read-only `.venv/bin/learnlab validate --format json` exited 0 with
 `schema_version: 1`, `ok: true` and exactly these pre-existing warnings, all for
@@ -96,7 +100,7 @@ stopped state, with shutdown-task success only when a management task was initia
 | `create-installer-vm` | Official minimal x86_64 ISO/revision/checksum, collision/ownership inspection, Q35/OVMF and Secure Boot choice, separate EFI state disk, new OS disk and DHCP/DNS/HTTPS prerequisites. |
 | `install-nixos` | Actual disk/signature/mount inspection; explicit destructive confirmation before interactive GPT/1 GiB EFI/ext4 writes; preserved hardware configuration; installation versus verification distinction; console recovery before ISO detachment and disk-only boot. |
 | `configure-lab-access` | Public-key-only configuration, explicit disposable-lab sudo policy, bounded test/switch activation, effective SSH/agent/tool checks, console-authenticated isolated host trust, fresh SSH transport and key/sudo proof before disabling password SSH. |
-| `seal-and-convert` | Recoverable source preservation, full ownership/snapshot checks, actual NixOS path/mount/D-Bus/generated-unit inspection, explicit console sealing checkpoint, SSH stop before exact per-file removal, no reboot/restart, verified poweroff and separately confirmed snapshot-free conversion. |
+| `seal-and-convert` | Recoverable source preservation, full ownership/snapshot checks, actual NixOS path/mount/D-Bus/generated-unit inspection, every effective SSH port recorded before service stop, separate listener/established-connection/remaining-sshd-process gates with empty output required, explicit console sealing checkpoint before exact per-file removal, no reboot/restart, verified poweroff and separately confirmed snapshot-free conversion. |
 | `test-two-clones` | Separate deliberate full-clone creation, independent disks/firmware/MACs, console-trusted SSH, distinct nonempty machine IDs/host keys, both clean rebuilds, deliberate per-clone reboot and stable identities against private baselines. |
 | `configure-provider` | Every current profile field and capability union; preserve profiles/defaults; secret environment-variable name only; read-only health/compatibility limits; independent shutdown/destruction confirmations and positive absence checks for only the two learner-owned clones; retain template/source. |
 
@@ -185,9 +189,13 @@ separate authorization:
    test activation, successful permanent activation and reboot recovery.
 4. Inspect actual machine-ID types/mounts/D-Bus fallback, boot identity overrides,
    configured SSH host keys and generated missing-key service dependency. Observe
-   console-only sealing, absence/empty-state checks, persistence through poweroff,
-   positively verified stopped state and snapshot-free template conversion.
-   Unexpected layouts, regeneration, timeout or uncertain task results block
+   every effective SSH port from the actual target configuration before stopping
+   SSH. From the console after service stop, require no established connection on
+   any recorded port and no remaining sshd process; listener inspection alone is
+   insufficient. Observe the remaining console-only sealing, absence/empty-state
+   checks, persistence through poweroff, positively verified stopped state and
+   snapshot-free template conversion. Unknown ports, permission/output ambiguity,
+   unexpected layouts, regeneration, timeout or uncertain task results block
    progression and require reconciliation, not blind retry.
 5. Create two separately confirmed full clones. Verify independent copied disks,
    firmware UUIDs and MACs, disk-only boot, guest-agent/network/tool/configuration
@@ -219,11 +227,12 @@ than inventing registry fields. Any uncertain observation keeps the course draft
 Both commands exited 0 with no output on the tested revision:
 
 ```text
-git diff --exit-code 8d33390 -- src/learnlab/collections/certifications.yaml
-git diff --exit-code HEAD -- src/learnlab/collections/certifications.yaml
+git diff --exit-code 102c591 -- src/learnlab/collections/certifications.yaml
+git diff --exit-code 9f0df3b -- src/learnlab/collections/certifications.yaml
 ```
 
-The registry is byte-for-byte unchanged from `8d33390` and the tested HEAD.
+The registry is byte-for-byte unchanged from pre-fix `102c591` and tested content
+revision `9f0df3b`.
 Read-only catalog loading reports `Course maturity: draft`. The implementation
-plan checks Tasks 1–4 and Task 5 Steps 1–3 only. Live Step 4 and Step 5's final
-whole-branch review remain unchecked; their completion is not claimed here.
+plan checks Tasks 1–4 and Task 5 Steps 1–3 only. Live Step 4 and Task 5 Step 5
+remain unchecked; their completion is not claimed here.
