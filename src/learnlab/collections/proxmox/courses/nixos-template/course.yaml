@@ -7,3 +7,5 @@ lessons:
   - create-installer-vm
   - install-nixos
   - configure-lab-access
+  - seal-and-convert
+  - test-two-clones

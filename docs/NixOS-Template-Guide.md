@@ -1,6 +1,6 @@
 # NixOS 26.05 Template Guide
 
-Draft: documentation-reviewed, not live-tested. This first portion covers installer creation, installation and lab access. The result is an unsealed candidate VM; sealing, conversion and two-clone acceptance are later course tasks. Do not treat these checkpoints as template certification.
+Draft: documentation-reviewed, not live-tested. This guide covers installer creation, installation, lab access, sealing, conversion and two-clone acceptance. Provider handoff and final cleanup are later course tasks. Do not treat these checkpoints as template certification.
 
 LearnLab runs on the controller with `learnlab start proxmox/nixos-template --include-drafts`, without a provider profile. It displays instructions and saves local self-attestations; the learner operates all infrastructure explicitly. A saved answer never establishes current resource ownership.
 
@@ -388,7 +388,11 @@ login. Recheck candidate ownership/address and network path. If your configured
 host-key types differ, adapt the scan to that inspected set and compare it
 fully. Only after exact local comparison, rename candidate-hostkeys to
 known_hosts in this private directory. Keep that directory path in your
-private worksheet; retain it for later sessions. Never delete global host
+private worksheet. This mktemp directory is temporary and may disappear
+between sessions. Missing state requires fresh console-verified reenrollment:
+inspect ownership/address again, create a new private directory, scan and compare
+the full configured key set with the trusted console before enrolling or connecting.
+Never recover trust from an unchecked scan or disable strict checking. Never delete global host
 entries to silence a DHCP address-reuse warning.
 Then make a fresh key-only connection, with your private key still local:
 
@@ -475,6 +479,286 @@ this walkthrough require live verification; offline tests do not execute them.
 
 Local checkpoint: Confirm locally that OS, every required command and the clean base state were inspected.
 
+## Seal identities and convert the candidate
+
+### Inspect ownership and preserve recovery before sealing
+
+Proxmox node (management UI): begin with the previous section's reboot-tested
+NixOS candidate, permanent access configuration, working agent and tools. Reconcile
+node, VMID, name, disks/storage and creation task history with the local owner-only
+worksheet. VMID alone never proves ownership. Preserve every original working
+template, especially one used by another profile. Arrange and verify a separate
+backup or powered-off full preservation clone before sealing; explicitly confirm
+its creation, new identity and storage cost. Keep that recoverable source until
+the new template passes acceptance. Never overwrite an existing resource.
+
+Inspect the candidate's Snapshots tab. Conversion requires a snapshot-free
+candidate; do not create a snapshot immediately before conversion. Existing
+snapshots are a stop condition: preserve the source and choose a separate
+snapshot-free candidate. No automatic snapshot deletion or force conversion.
+Read the locally inspected VMID at this node prompt, then inspect each result:
+
+```sh
+# Proxmox node: read-only inspection
+read -r CANDIDATE_ID
+qm status "$CANDIDATE_ID"
+qm config "$CANDIDATE_ID"
+qm listsnapshot "$CANDIDATE_ID"
+```
+
+Expected: intended name/disks, ordinary VM (template absent or 0), no snapshots
+except a current-state marker, no active task/lock. Failed lookup means unknown
+state. After interruption, inspect task history/config: already a template means
+skip resealing and conversion after verifying completed conversion. Partly sealed
+or running means inspect exact changes through the console before deciding what
+to do. A reboot invalidates known sealed state; repeat the entire inspection phase
+before a deliberate reseal. Do not boot an existing template or rerun blindly.
+
+### Inspect NixOS paths, fallback identity and generated SSH units
+
+Installed guest (trusted Proxmox console): retain console recovery. Do not publish
+raw identities, fingerprints, addresses or logs. Inspect without writing:
+
+```sh
+# Installed guest: read-only inspection
+sudo ls -ld /etc/machine-id /var/lib/dbus /var/lib/dbus/machine-id /etc/ssh
+sudo stat -c '%F %h %U %a %s %n' /etc/machine-id /var/lib/dbus/machine-id
+sudo readlink /etc/machine-id
+sudo readlink /var/lib/dbus/machine-id
+findmnt -T /etc/machine-id
+findmnt -T /var/lib/dbus
+findmnt -M /etc/machine-id
+findmnt -M /var/lib/dbus/machine-id
+cat /proc/cmdline
+systemctl --version
+nixos-option services.openssh.hostKeys
+nixos-option services.openssh.generateHostKeys
+nixos-option services.openssh.startWhenNeeded
+sudo sshd -T
+systemctl cat sshd.service sshd-keygen.service
+systemctl show sshd.service -p Wants -p After -p ExecStartPre -p ExecStart
+```
+
+Readlink returns nonzero/no output for an ordinary file; findmnt -M does likewise
+when the exact path is not a mountpoint. Distinguish these expected outcomes from
+permission/I/O failures. A D-Bus identity is absent only after positively inspecting
+an accessible parent. Require /etc/machine-id to be a root-owned, single-hard-link
+regular file on writable storage, without a bind mount or symlink. D-Bus fallback
+must be absent, a verified symlink resolving exactly to /etc/machine-id, or a
+separate root-owned single-link regular file on writable storage. A separate
+populated D-Bus file can restore the old identity. Stop for read-only storage,
+mountpoints, shared hard links, unknown symlinks, overlays or inaccessible paths;
+do not unmount/remount, force writes or follow links into the Nix store.
+
+Installed guest: inspect boot.kernelParams and imported Nix configuration for
+fixed systemd.machine_id, --machine-id or container_uuid overrides; compare with
+the actual kernel command line. Resolve fixed identity configuration before sealing.
+Proxmox node: inspect the candidate smbios1 firmware UUID and every NIC MAC locally;
+later verify independent clone values. Empty machine-id allows boot initialization,
+but differs from a missing file for first-boot condition handling. This sequence
+does not depend on ConditionFirstBoot units. [systemd identity source](https://github.com/systemd/systemd/blob/main/man/machine-id.xml).
+
+Installed guest: inspect services.openssh.hostKeys and each private/.pub path using
+ls/stat/readlink/findmnt, including parent storage. Require a complete explicit
+set matching sshd -T, ordinary unmounted single-link files, writable parents and
+no shared/store-backed keys. Do not display private key contents. Verify
+generateHostKeys true and startWhenNeeded false. Socket activation/custom units or
+an option lookup failure require reconciliation before proceeding.
+
+The inspected release source uses sshd-keygen.service with an ordering/dependency
+from sshd.service. Do not assume regeneration lives in ExecStartPre. Read generated
+units and referenced store scripts with `sudo less` followed by each observed exact
+path; confirm missing configured keys are generated before SSH at boot. Resolve
+any mismatch with the active generation; Debian cleanup assumptions do not establish
+this behavior. [NixOS 26.05 OpenSSH module](https://github.com/NixOS/nixpkgs/blob/nixos-26.05/nixos/modules/services/networking/ssh/sshd.nix).
+
+### Confirm, seal, verify and power off without rebooting
+
+Installed guest (console): explicitly confirm the candidate identity, recovery
+source and exact list of per-machine files to clear. Read this whole phase first.
+Close all SSH sessions; stop if another operator, rebuild or automatic deployment
+could regenerate state during sealing. Then deliberately stop both services:
+
+```sh
+# Installed guest: deliberate service mutation
+sudo systemctl stop sshd.service sshd-keygen.service
+systemctl is-active sshd.service sshd-keygen.service
+sudo ss -lntp
+```
+
+Require both inactive (nonzero is expected for inactive) and no SSH listener/session.
+Remaining SSH or errors mean stop before removing keys. Only for the inspected
+ordinary writable machine-id file, run `sudo truncate -s 0 /etc/machine-id` in the
+Installed guest and leave the empty file in place. For D-Bus, leave absence alone;
+preserve a verified link to /etc/machine-id and confirm it reads empty. Only if it
+is a separate validated regular file, run `sudo rm -i -- /var/lib/dbus/machine-id`
+and confirm that one deletion. Any other layout is a stop condition.
+
+Installed guest: for each configured host-key pair on the inspected local list,
+type `sudo rm -i --` followed by only the exact private and .pub paths, review the
+full command and explicitly confirm each removal. This is a manual instruction,
+not a placeholder script. No globs, recursive cleanup, authorized_keys deletion
+or controller-key deletion. Do not rebuild or run machine-id setup afterward.
+
+Inspect with ls/stat/readlink/findmnt again. Require /etc/machine-id size 0 and
+ordinary file, D-Bus fallback absent or the verified empty link, all configured
+host-key pairs absent and both services inactive. Partial changes, errors or
+reappearing files mean stop and reconcile through the console. After verification,
+deliberately power off. Do not reboot or restart SSH: either may regenerate
+identities before cloning.
+
+```sh
+# Installed guest: deliberate end of sealing
+sudo systemctl poweroff
+```
+
+Proxmox node (UI): wait for Stopped and successful shutdown task. Timeout or a
+closed console does not prove shutdown; inspect task history/status before acting.
+Do not force-stop or retry sealing automatically.
+
+### Confirm conversion independently
+
+Proxmox node (UI): re-inspect full ownership, stopped ordinary VM, no active
+tasks/locks and no snapshots. If already a template, inspect the completed task
+and skip conversion. Select More -> Convert to template and explicitly confirm
+the displayed candidate identity. Wait for task success; inspect template: 1 and
+the template/disk state. Failure or interruption means unknown state: reconcile
+task history/config before doing anything else. Do not remove locks blindly,
+delete snapshots, force conversion or boot the template. Retain template and
+recovery source. [Proxmox template documentation source](https://github.com/proxmox/pve-docs/blob/master/qm.adoc).
+
+## Accept two full clones
+
+### Create and inspect each clone separately
+
+Proxmox node (UI): verify source node/name/VMID/disks/template flag. Choose two new
+IDs and names, A and B; inspect cluster-wide ID/name collisions, including the
+template and preservation copy. Failed lookup is unknown state; occupied identities
+require inspection or another choice without deletion. Review storage capacity,
+target node/storage, then deliberately create A and B separately using Clone ->
+Full Clone. Wait for each successful task. Full copies have independent storage
+and consume more copy time/space. Inspect new ordinary VM flags, names/IDs/disks,
+detached ISO, disk boot order and guest-agent option.
+
+Compare all NIC MACs and smbios1 firmware UUIDs for A, B and the source locally;
+require distinct values before starting either clone. Proxmox documents new
+MAC/BIOS UUIDs during cloning, but this must be checked on the actual target.
+[Proxmox clone documentation](https://github.com/proxmox/pve-docs/blob/master/qm.adoc).
+Duplicate identity, unexpected disks or a failed/interrupted clone task means stop
+and reconcile resource/config/storage/task history, not repeat creation blindly.
+On resume a partially cleaned clone is not a fresh candidate; never recreate or
+destroy it by VMID alone. Preserve both templates and the recovery source.
+
+### Prove first-boot access and distinct identities
+
+Proxmox node (UI): deliberately start each inspected clone and open its own trusted
+console. Installed guest (each clone): require disk-only login, then inspect:
+
+```sh
+# Installed guest: repeat in A and B consoles
+cat /etc/os-release
+nixos-version
+ip -br address
+ip route
+getent hosts nixos.org
+curl --head --fail --max-time 30 https://nixos.org
+systemctl is-active sshd.service qemu-guest-agent.service
+sudo -n true
+cat /etc/machine-id
+sudo sshd -T
+```
+
+Require NixOS 26.05, DHCP/route/DNS/HTTPS, active services and sudo exit 0. Inspect
+each result. Proxmox Summary must receive agent network data on both clones;
+connectivity alone does not prove the agent. Failure means console inspection of
+guest service, Proxmox option/virtio channel, network and access configuration.
+
+Require nonempty 32-hex-digit machine IDs distinct between A and B (also from the
+pre-sealing source if that baseline was retained). Fingerprint every sshd -T host
+key using `sudo ssh-keygen -lf` plus each exact .pub path in the Installed guest
+console. Require every configured key present and different between A and B for
+each key type. Duplicate/empty identity means inspect D-Bus, fixed boot overrides,
+firmware and generated keygen units/source sealing. Do not regenerate keys merely
+to pass the check. Keep the complete pre-rebuild/reboot baselines only in the
+owner-only controller worksheet outside Git, never on the template or in LearnLab.
+
+### Enroll console-authenticated keys in separate isolated files
+
+Controller: repeat separately for each clone, using its console-inspected address:
+
+```sh
+# Controller
+read -r CLONE_ADDRESS
+read -r KEY_PATH
+read -r LAB_USER
+umask 077
+CLONE_SSH_DIR=$(mktemp -d)
+ssh-keyscan -T 10 -t ed25519,rsa "$CLONE_ADDRESS" > "$CLONE_SSH_DIR/pending-hostkeys"
+ssh-keygen -lf "$CLONE_SSH_DIR/pending-hostkeys"
+```
+
+ssh-keyscan alone is not trust. Compare every fingerprint/type to the full configured
+set in that clone's trusted console; adapt scanned types to the actual set. Empty,
+incomplete or mismatching output means stop before login and recheck ownership,
+address and network. Only after exact comparison rename pending-hostkeys to
+known_hosts in this directory. Record the distinct directory for each clone and
+restore its CLONE_SSH_DIR when switching between clones. Make fresh connections:
+
+```sh
+# Controller
+ssh -i "$KEY_PATH" -o IdentitiesOnly=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$CLONE_SSH_DIR/known_hosts" -o GlobalKnownHostsFile=/dev/null "$LAB_USER@$CLONE_ADDRESS"
+```
+
+Installed guest (fresh SSH session): `whoami`, `sudo -n true`, immediately `echo $?`.
+Require intended account and exit 0 without server password fallback. Local key
+passphrases are separate. Failures require console diagnosis of account/public key,
+firewall and sudo. Keep global known_hosts unchanged when DHCP reuses an address.
+Changed address requires console confirmation and a new isolated enrollment
+checked against the console and retained baseline. Missing temporary trust state
+requires fresh console-verified reenrollment using this entire procedure. Missing
+before-reboot baseline means stability is unproven: establish a new baseline and
+repeat a deliberate reboot/comparison. Never disable strict checking to recover.
+
+### Rebuild each NixOS clone and verify persistence across reboot
+
+Installed guest (each clone console): preserve hardware configuration/stateVersion
+and keep exercise artifacts absent. Inspect command availability and perform a
+deliberate bounded clean configuration rebuild:
+
+```sh
+# Installed guest: repeat for both clones
+command -v cat mkdir chmod stat sha256sum timeout curl nft ip python3 sudo visudo systemctl journalctl systemd-run nixos-rebuild
+ps -p 1 -o comm=
+systemctl --version
+sudo timeout --signal=TERM --kill-after=30s 20m nixos-rebuild test
+echo $?
+```
+
+Require every command available, PID 1 systemd and rebuild exit 0. Recheck services,
+fresh strict key login and sudo. Only after these pass, deliberately run
+`sudo timeout --signal=TERM --kill-after=30s 20m nixos-rebuild switch` in the Installed
+guest and immediately `echo $?`; require 0. Timeout/124/137, interruption or other
+failure means inspect processes/generation/services through console; no blind retry
+or assumed rollback. This NixOS rebuild cannot be replaced by a Debian package
+reconfiguration recipe. A clean rebuild must not require source-specific identity
+or address edits.
+
+Installed guest: explicitly confirm one reboot for A and separately for B, then
+run `sudo systemctl reboot` in each console. Keep the template stopped. After each
+disk-only boot, repeat network/agent, trusted SSH, sudo, OS/tool checks. Compare
+machine ID, every host-key type, firmware UUID and NIC MAC with that clone's
+pre-rebuild/reboot baseline. Require each stable and A different from B. Any changed,
+empty or duplicate identity fails acceptance; inspect mounts, D-Bus, generated
+units and declarative key paths. Do not replace baselines or accept changed keys
+to hide failure. Record only pass/fail in LearnLab or shared reports.
+
+Controller: retain templates/recovery source, both learner-owned clones and their
+private worksheet for the separate provider/cleanup phase. `learnlab destroy` will
+not remove these clones. Cleanup needs its own full ownership inspection, deliberate
+confirmation, stop/destroy and absence verification; uncertain state means stop
+and reconcile without deletion retries by VMID alone. Exact-digest live acceptance
+and final cleanup remain pending; draft status is unchanged.
+
 ## Capability mapping and developer derivation
 
 The 2026-09-11 catalog-derived union below is an output contract for the eventual
@@ -560,6 +844,10 @@ live-acceptance requirements. Stop at any mismatch with the actual target.
   The source is a moving development branch, so confirm labels/options against
   the installed Proxmox version before changing the candidate.
 
-The base should now have only installation and access configuration. Leave it
-unsealed until the separate identity-generalization lesson is available and
-completed. Offline content tests and local knowledge answers cannot certify it.
+The sealing source refresh also read the current upstream systemd machine-ID
+source and NixOS 26.05 OpenSSH module linked above. The rendered systemd identity
+page and Proxmox qm reference could not be retrieved; their upstream sources were
+accessible. Moving branch sources do not establish the exact installed release's
+generated units, path/mount layout, shutdown persistence, snapshot/conversion
+behavior or clone/reboot identity results. These remain explicit live blockers.
+Offline content tests and local knowledge answers cannot certify the template.

@@ -131,7 +131,12 @@ steps:
       host-key types differ, adapt the scan to that inspected set and compare it
       fully. Only after exact local comparison, rename candidate-hostkeys to
       known_hosts in this private directory. Keep that directory path in your
-      private worksheet; retain it for later sessions. Never delete global host
+      private worksheet. This mktemp directory is temporary and may disappear
+      between sessions. If it is absent, do fresh console-verified reenrollment:
+      repeat ownership/address inspection, create a new isolated directory, scan,
+      compare the full configured key set against the trusted console, and only
+      then enroll and connect. Never recreate trust from an unverified scan or
+      disable strict checking. Never delete global host
       entries to silence a DHCP address-reuse warning.
       Then make a fresh key-only connection, with your private key still local:
 

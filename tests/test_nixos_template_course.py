@@ -15,7 +15,9 @@ def load_course():
 
 
 def lesson_text(lesson_id):
-    lesson = next(item for item in load_course().lessons if item.id == lesson_id)
+    lessons = {item.id: item for item in load_course().lessons}
+    assert lesson_id in lessons, f"Missing required lesson: {lesson_id}"
+    lesson = lessons[lesson_id]
     return "\n".join(step.instructions for step in lesson.steps)
 
 
@@ -87,12 +89,74 @@ def test_installer_vm_teaches_media_and_boot_boundary():
         assert concept in text
 
 
+def test_sealing_and_clone_identity_contract():
+    seal = lesson_text("seal-and-convert").lower()
+    clones = lesson_text("test-two-clones").lower()
+    assert "snapshot" in seal and "console" in seal
+    assert "do not reboot" in seal
+    assert "/etc/machine-id" in seal
+    assert "/var/lib/dbus/machine-id" in seal
+    assert "two" in clones and "full clones" in clones
+    assert "distinct" in clones and "stable" in clones
+    assert "known_hosts" in clones
+    assert "ssh-keyscan alone" in clones
+
+
+@pytest.mark.parametrize(
+    "concepts",
+    [
+        ("findmnt", "symlink", "regular file", "read-only", "D-Bus fallback"),
+        (
+            "services.openssh.hostKeys",
+            "sshd.service",
+            "ExecStartPre",
+            "generateHostKeys",
+        ),
+        ("systemd.machine_id", "firmware", "MAC", "snapshot"),
+        ("already a template", "interruption", "another profile", "VMID alone"),
+    ],
+)
+def test_sealing_retains_os_specific_stop_conditions(concepts):
+    text = lesson_text("seal-and-convert")
+    for concept in concepts:
+        assert concept.lower() in text.lower()
+    assert "rm -rf" not in text
+    assert "ssh_host_*" not in text
+
+
+def test_clone_acceptance_requires_nixos_rebuild_and_console_trust():
+    text = lesson_text("test-two-clones").lower()
+    for concept in (
+        "nixos-rebuild",
+        "console",
+        "strictHostKeyChecking=yes".lower(),
+        "sudo -n true",
+        "disk-only",
+        "reboot",
+        "pass/fail",
+        "failed lookup",
+        "fresh console-verified reenrollment",
+        "machine-id",
+        "full clones",
+    ):
+        assert concept in text
+
+
+def test_access_trust_state_loss_requires_console_reenrollment():
+    text = lesson_text("configure-lab-access").lower()
+    guide = (Path(__file__).parents[1] / "docs/NixOS-Template-Guide.md").read_text()
+    assert "fresh console-verified reenrollment" in text
+    assert "fresh console-verified reenrollment" in guide.lower()
+
+
 @pytest.mark.parametrize(
     ("lesson_id", "check_id", "accepted", "rejected"),
     [
         ("create-installer-vm", "media-integrity", "checksum", "skip checksum"),
         ("install-nixos", "install-state-version", "26.05", "latest"),
         ("configure-lab-access", "key-material", "public key", "private key"),
+        ("seal-and-convert", "sealed-next-action", "power off", "reboot"),
+        ("test-two-clones", "clone-identity-rule", "distinct and stable", "same"),
     ],
 )
 def test_added_knowledge_checks_execute_exact_answer_contract(
