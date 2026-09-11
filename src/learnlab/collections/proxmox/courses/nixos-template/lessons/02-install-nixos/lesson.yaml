@@ -1,0 +1,185 @@
+id: install-nixos
+title: Install NixOS on the Verified Disk
+steps:
+  - id: inspect-install-target
+    title: Identify the disk before any writes
+    instructions: |
+      Installer console: prerequisite is the verified 26.05 minimal x86_64 installer,
+      UEFI boot and working network. On resume inspect the VM, mounts and disk
+      signatures first; an already installed system must not be reformatted.
+      Reconcile Proxmox node, name, ID, new storage volume and configured size with
+      the local worksheet. In the root installer shell inspect:
+
+      ```sh
+      # Installer console
+      lsblk -o NAME,PATH,SIZE,MODEL,SERIAL,TYPE,FSTYPE,MOUNTPOINTS
+      findmnt
+      read -r INSTALL_DISK
+      lsblk -o NAME,PATH,SIZE,MODEL,TYPE,FSTYPE,MOUNTPOINTS "$INSTALL_DISK"
+      wipefs --no-act "$INSTALL_DISK"
+      ```
+
+      At the read prompt type the observed whole-disk path, never a guessed /dev/sda
+      or a partition. Match size/model and parent-child layout to the new virtual
+      disk. The ISO is read-only optical media; the EFI variables disk is firmware
+      state, not the OS target. Expected: exactly the intended disposable OS disk,
+      no mounted child partitions and no unexplained filesystem signatures.
+      Unexpected data, extra disks, missing disk or any ownership doubt: stop;
+      recheck the VM Hardware view and worksheet. A path or VMID alone is not proof.
+      Destructive checkpoint: partitioning and formatting erase the selected disk.
+      Before proceeding, explicitly confirm to yourself in the VM console the full
+      observed disk path, size and that its data may be destroyed. LearnLab records
+      only your attestation; it does not inspect or write the disk.
+    verifications:
+      - id: destructive-install-confirmed
+        type: manual-confirmation
+        prompt: Confirm locally that the exact disposable disk was inspected and its destruction is authorized.
+  - id: partition-and-mount
+    title: Create GPT, EFI and root filesystems interactively
+    instructions: |
+      Installer console: only after the preceding identity/destruction checkpoint,
+      launch `cfdisk "$INSTALL_DISK"`. This is an interactive disk editor, not a
+      validation command. Select GPT only for the confirmed empty target. Create
+      a 1 GiB first partition of type EFI System, then a Linux filesystem partition
+      occupying the remaining space. Review the device banner, both sizes and
+      types before selecting Write and typing its requested confirmation. If the
+      target or proposed layout differs, Quit without writing and stop.
+      Re-run `lsblk -o NAME,PATH,SIZE,TYPE,FSTYPE,MOUNTPOINTS "$INSTALL_DISK"`.
+      Identify both resulting partition paths from output; NVMe-style suffixes
+      differ from SCSI paths, so do not concatenate a digit onto the disk variable.
+      If the kernel has not refreshed the layout, stop and inspect before formatting.
+      Formatting is destructive too: confirm each observed partition's parent,
+      size, type and absence of mounts immediately before typing its format command.
+      Type `mkfs.fat -F 32` followed by a space and the verified EFI partition path;
+      separately type `mkfs.ext4` followed by a space and the verified root partition
+      path. No pre-filled formatting command is provided: choose each target only
+      after inspection. Expected: successful filesystem creation, FAT on the small
+      EFI partition and ext4 on root. Any busy-device/error/unexpected signature
+      warning means stop; never add force flags to make it proceed.
+      Enter the observed root and EFI partition paths at these two read prompts:
+
+      ```sh
+      # Installer console
+      read -r ROOT_PART
+      read -r EFI_PART
+      mount "$ROOT_PART" /mnt
+      mkdir -p /mnt/boot
+      mount "$EFI_PART" /mnt/boot
+      findmnt /mnt
+      findmnt /mnt/boot
+      lsblk -f "$INSTALL_DISK"
+      ```
+
+      Expected: selected ext4 root at /mnt and FAT EFI at /mnt/boot. Inspect each
+      command's result before continuing; do not generate configuration with a
+      missing/wrong mount. After interruption re-identify paths and mounts; do not
+      repeat partitioning or formatting on an installed or partly installed disk.
+    verifications:
+      - id: filesystems-mounted
+        type: manual-confirmation
+        prompt: Confirm that the intended GPT layout and both filesystem mounts were inspected locally.
+  - id: configure-installation
+    title: Generate and edit the target configuration
+    instructions: |
+      Installer console: run `nixos-generate-config --root /mnt`. Inspect
+      /mnt/etc/nixos/hardware-configuration.nix: it describes detected hardware and
+      the actual root/boot filesystems. Preserve it and its import; do not replace
+      its UUIDs with examples or paste it into LearnLab. If mounts are wrong, stop
+      and correct those before regenerating, preserving any intentional edits.
+      Interactively edit /mnt/etc/nixos/configuration.nix with `nano` (or `vi`).
+      Merge these settings inside its existing outer braces, avoiding duplicate
+      definitions. `lab` is a disposable local account name; choose another if
+      desired and consistently replace it throughout this walkthrough. The generated
+      imports must continue to include ./hardware-configuration.nix.
+
+      ```nix
+      # Installer console: edit /mnt/etc/nixos/configuration.nix
+      boot.loader.systemd-boot.enable = true;
+      boot.loader.efi.canTouchEfiVariables = true;
+      networking.useDHCP = true;
+      users.users.lab = {
+        isNormalUser = true;
+        extraGroups = [ "wheel" ];
+      };
+      services.openssh.enable = true;
+      services.openssh.settings.PermitRootLogin = "no";
+      services.qemuGuest.enable = true;
+      environment.systemPackages = with pkgs; [
+        curl nftables iproute2 python3 coreutils sudo systemd nano
+      ];
+      system.stateVersion = "26.05";
+      ```
+
+      Classic writable /etc/nixos configuration is intentional. No flakes,
+      cloud-init, nginx sites, restrictive firewall exercises or systemd exercise
+      units belong in this base. Keep detected storage/boot settings, and do not
+      include passwords, private keys, API secrets or password hashes in Nix files
+      or the Nix store. `system.stateVersion` selects compatibility defaults; leave
+      it at the original installation release, including during routine upgrades.
+      Expected: one coherent configuration with both services enabled and the
+      correct generated hardware import. If syntax or option meaning is unclear,
+      stop and compare the release manual before installing.
+    verifications:
+      - id: install-configuration-reviewed
+        type: manual-confirmation
+        prompt: Confirm that you reviewed the target configuration and preserved generated hardware settings.
+  - id: explain-state-version
+    title: Keep the installation compatibility version
+    instructions: |
+      Installer console: a system installed by this 26.05 walkthrough keeps its
+      system.stateVersion at 26.05. This is a knowledge question, not a rebuild.
+    verifications:
+      - id: install-state-version
+        type: text-evidence
+        prompt: 'Which installation compatibility version stays set here? Enter 26.05.'
+        equals: '26.05'
+        failure_message: Keep the original installation version; do not replace it with latest.
+  - id: install-and-console-recovery
+    title: Install and establish console credentials
+    instructions: |
+      Installer console: recheck `findmnt /mnt` and `findmnt /mnt/boot` against the
+      worksheet. Confirm that you are ready to write the installed OS to these
+      mounts. Run `nixos-install` interactively. This downloads/builds packages,
+      writes the OS and installs its bootloader; it is not read-only verification.
+      Set the requested root password interactively, outside Nix files, shell
+      arguments, LearnLab answers and notes. After successful installation, run
+      `nixos-enter --root /mnt -c 'passwd lab'` to set the learner console password
+      interactively (substitute your chosen account name). Password entry is a
+      learner action; do not capture it in evidence.
+      Expected: installer exits successfully and both password operations succeed.
+      Failed fetch: inspect previous network checks. No space: inspect `df -h /mnt`
+      and available VM RAM/storage; stop before resizing/retrying. Bootloader error:
+      inspect UEFI and /mnt/boot. Interrupted installation: inspect mounts, generated
+      configuration and whether an installer is still running before any retry;
+      do not format again or claim installation complete.
+      Proxmox node (management UI): keep the ISO attached as recovery media but set
+      the verified SCSI disk first in boot order. Installer console: `reboot` only
+      after installation succeeded. Installed guest: confirm `findmnt /` shows
+      installed ext4 root rather than live media, and `nixos-version` shows 26.05.
+      Log in through the Proxmox console as the chosen learner; check `sudo -v`
+      with the console password. Keep a tested root console recovery route.
+      If the installer reappears, stop and correct disk boot order; if login fails,
+      use the root console or deliberately boot the ISO recovery path and inspect
+      the installed account. Do not remove recovery media until console login works.
+    verifications:
+      - id: installed-console-ready
+        type: manual-confirmation
+        prompt: Confirm successful OS installation and an actual installed-system console login with recovery access.
+  - id: verify-disk-only-boot
+    title: Detach the ISO and test the installed disk
+    instructions: |
+      Installed guest: after a tested console login, run `poweroff` with appropriate
+      console privilege and wait for the VM to be stopped in Proxmox.
+      Proxmox node (management UI): inspect candidate identity again, set CD/DVD to
+      no media, and enable only the installed SCSI disk in boot order. Retain its
+      separate EFI variables disk. Start this same candidate and use its console.
+      Installed guest: log in, inspect `nixos-version`, `findmnt /`, `findmnt /boot`,
+      `ip -br address`, `ip route`, and the earlier DNS/HTTPS checks. Expected: 26.05,
+      ext4 root, mounted FAT EFI, DHCP and working HTTPS with no ISO available.
+      Firmware shell or missing boot entry: stop, inspect SCSI boot order, OVMF and
+      EFI disk; use retained installation media for deliberate recovery if needed.
+      Do not continue to access setup until disk-only boot and console recovery pass.
+    verifications:
+      - id: disk-only-boot-confirmed
+        type: manual-confirmation
+        prompt: Confirm that the installed guest booted and accepted console login with the ISO detached.

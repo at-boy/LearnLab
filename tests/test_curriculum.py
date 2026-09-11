@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -669,10 +670,43 @@ def test_course_path_requires_collection_slash_course(
         CurriculumCatalog(collections_dir).load_course(invalid_path)
 
 
-def test_curriculum_contains_no_provider_configuration_or_secret_material(
-    collections_dir: Path,
-):
-    prohibited_text = {"token_secret", "PVEAPIToken=", "private-value"}
+def _contains_prohibited_provider_or_secret_text(source: str) -> bool:
+    prohibited_text = {"PVEAPIToken=", "private-value"}
+    return bool(re.search(r"\btoken_secret\b", source)) or any(
+        value in source for value in prohibited_text
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        pytest.param(
+            'token_secret_env: "LEARNLAB_PROXMOX_TOKEN_SECRET"',
+            False,
+            id="safe-token-secret-env-instruction",
+        ),
+        pytest.param(
+            'token_secret = "legacy-secret"',
+            True,
+            id="standalone-token-secret",
+        ),
+        pytest.param(
+            'Authorization: PVEAPIToken=user@pam!learnlab=secret',
+            True,
+            id="api-token-authorization",
+        ),
+        pytest.param(
+            'token = "private-value"',
+            True,
+            id="private-value",
+        ),
+    ],
+)
+def test_provider_and_secret_text_policy(source: str, expected: bool) -> None:
+    assert _contains_prohibited_provider_or_secret_text(source) is expected
+
+
+def _contains_prohibited_provider_keys(parsed: dict[str, Any]) -> bool:
     prohibited_keys = {
         "template_vmid",
         "node",
@@ -681,13 +715,35 @@ def test_curriculum_contains_no_provider_configuration_or_secret_material(
         "api_url",
         "provider_profile",
     }
+    return not prohibited_keys.isdisjoint(parsed)
 
+
+@pytest.mark.parametrize(
+    "prohibited_key",
+    [
+        "template_vmid",
+        "node",
+        "storage",
+        "network",
+        "api_url",
+        "provider_profile",
+    ],
+)
+def test_provider_key_policy_rejects_each_prohibited_key(
+    prohibited_key: str,
+) -> None:
+    assert _contains_prohibited_provider_keys({prohibited_key: "configured"})
+
+
+def test_curriculum_contains_no_provider_configuration_or_secret_material(
+    collections_dir: Path,
+):
     for path in collections_dir.rglob("*.yaml"):
         source = path.read_text(encoding="utf-8")
-        assert not any(value in source for value in prohibited_text)
+        assert not _contains_prohibited_provider_or_secret_text(source)
         parsed = yaml.safe_load(source)
         assert isinstance(parsed, dict)
-        assert prohibited_keys.isdisjoint(parsed)
+        assert not _contains_prohibited_provider_keys(parsed)
 
 
 @pytest.mark.parametrize(

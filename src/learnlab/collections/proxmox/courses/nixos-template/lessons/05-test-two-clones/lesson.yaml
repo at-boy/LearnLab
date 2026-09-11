@@ -1,0 +1,201 @@
+id: test-two-clones
+title: Accept Two Distinct and Stable Clones
+steps:
+  - id: create-owned-full-clones
+    title: Inspect and deliberately create two full clones
+    instructions: |
+      Proxmox node (UI): prerequisite is a successfully sealed/converted retained
+      template and a preserved recovery source. These resources are learner-owned;
+      LearnLab will neither create nor adopt them. Resume by reconciling task history
+      and the worksheet with current resources before repeating any action.
+      Inspect source node, name, VMID, template flag and disks. VMID alone is not
+      ownership. Select two new IDs and distinct names for clone A and clone B.
+      Inspect the cluster-wide resource list for both ID and name collisions,
+      including the template/recovery source. An occupied identity means choose
+      another; a failed lookup means unknown state, not permission to create.
+      Review full-copy storage space and each destination node/storage first.
+      Deliberately confirm creation of A, then B separately using the template's
+      Clone dialog, selecting Full Clone rather than Linked Clone. Wait for each
+      task to succeed before continuing. These must be two full clones.
+      Inspect each config and disk allocation: correct new name/node/ID, ordinary
+      VM (not a template), independent copied disks, detached ISO, disk boot order,
+      QEMU agent option enabled, and unique smbios1 firmware UUIDs and NIC MACs.
+      Compare A, B and source locally. Proxmox normally regenerates MAC/firmware
+      identities on clone, but verify actual values before starting either VM.
+      A duplicate or unexpected resource means stop before boot; investigate without
+      overwriting it. A clone timeout/interruption requires task/config/storage
+      reconciliation; never blindly retry clone creation. A partially cleaned clone
+      on resume is not a fresh clone: stop and reconcile the worksheet, do not
+      recreate or destroy by ID alone. Retain the candidate and original template.
+    verifications:
+      - id: two-full-clones-created
+        type: manual-confirmation
+        prompt: Confirm separate deliberate creation of two owned full clones with inspected disks and distinct firmware/network identities.
+  - id: inspect-first-boot-identities
+    title: Boot each clone from disk and compare identities locally
+    instructions: |
+      Proxmox node (UI): deliberately start each inspected clone and open its own
+      trusted console. Confirm disk-only boot with no installer media attached.
+      Installed guest (each clone console): log in, inspect the following locally:
+
+      ```sh
+      # Installed guest: repeat in clone A and clone B consoles
+      cat /etc/os-release
+      nixos-version
+      ip -br address
+      ip route
+      getent hosts nixos.org
+      curl --head --fail --max-time 30 https://nixos.org
+      systemctl is-active sshd.service qemu-guest-agent.service
+      sudo -n true
+      cat /etc/machine-id
+      sudo sshd -T
+      ```
+
+      Expected: NixOS 26.05, DHCP and route, DNS/HTTPS success, both services active,
+      sudo exit 0. Inspect each result, not just the last command's status. Proxmox
+      Summary must also report guest-agent network data for each clone. Inactive
+      agent means inspect enabled guest service, Proxmox option and virtio channel;
+      IP connectivity alone does not prove agent operation. No boot/network/access
+      means console recovery and a failed checkpoint, not editing the template.
+      Compare the nonempty 32-hex-digit machine IDs locally: A must differ from B
+      (and from the pre-sealing source if retained locally). Empty or duplicate IDs
+      mean stop and inspect D-Bus fallback, fixed boot identity and firmware UUIDs.
+      From sshd -T identify every configured host key; use `sudo ssh-keygen -lf`
+      plus each exact observed .pub path at the Installed guest console. Require
+      every expected key to exist and compare matching key types between clones:
+      all must differ. Equal/missing keys mean stop and inspect the generated
+      sshd/keygen units and source sealing. Do not regenerate keys merely to make
+      this test pass; investigate and prepare a new candidate after recovery review.
+      Keep before-reboot identity/key observations only in the owner-only controller
+      worksheet outside Git; never on the template image or in LearnLab evidence.
+      This baseline is needed for the stability comparison; record only pass/fail
+      in shared reports. Hostname equality is not proof of machine identity equality.
+    verifications:
+      - id: first-boot-identities-distinct
+        type: manual-confirmation
+        prompt: Confirm local disk-only boot, agent/network checks and nonempty distinct machine IDs and every host-key type; share no raw identities.
+  - id: enroll-each-clone
+    title: Authenticate each clone's host keys through its console
+    instructions: |
+      Controller: make a separate isolated known_hosts directory for each clone;
+      do not reuse the sealed candidate's host entry. Enter only the current
+      console-inspected address, controller private-key path and selected user
+      at the local read prompts. The private key never leaves the controller.
+
+      ```sh
+      # Controller: repeat separately for each clone
+      read -r CLONE_ADDRESS
+      read -r KEY_PATH
+      read -r LAB_USER
+      umask 077
+      CLONE_SSH_DIR=$(mktemp -d)
+      ssh-keyscan -T 10 -t ed25519,rsa "$CLONE_ADDRESS" > "$CLONE_SSH_DIR/pending-hostkeys"
+      ssh-keygen -lf "$CLONE_SSH_DIR/pending-hostkeys"
+      ```
+
+      ssh-keyscan alone is not trust. Compare every key/type from the scan against
+      that clone's complete configured set seen in its trusted Proxmox console.
+      Adapt key types to the inspected set when needed. Empty, incomplete or
+      mismatching output means stop before enrollment/login and recheck ownership,
+      address and path. Only after exact local comparison deliberately rename
+      pending-hostkeys to known_hosts in this private directory. Record which
+      directory belongs to A and B in the private worksheet; restore the appropriate
+      CLONE_SSH_DIR on each use. Then make a fresh strict key-only connection:
+
+      ```sh
+      # Controller
+      ssh -i "$KEY_PATH" -o ControlPath=none -o IdentitiesOnly=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$CLONE_SSH_DIR/known_hosts" -o GlobalKnownHostsFile=/dev/null "$LAB_USER@$CLONE_ADDRESS"
+      ```
+
+      ControlPath=none disables connection sharing; retain it on every repeated
+      acceptance connection so host-key exchange and authentication run again.
+      Installed guest (fresh SSH session): run `whoami`, `sudo -n true` and immediately
+      `echo $?`; expect the intended account and exit 0 without a server password.
+      A passphrase prompt for the local private key is separate. Any failed check
+      means use the console to inspect account/public key, firewall and sudo rule.
+      Keep global known_hosts unchanged even after DHCP address reuse. If the address
+      changes, confirm it via console and enroll that address in a new isolated file
+      only after checking against both console and retained identity baseline.
+      These mktemp directories may disappear between sessions. Missing trust state
+      requires fresh console-verified reenrollment using the complete procedure.
+      It does not authorize StrictHostKeyChecking=no or accepting a scan unchecked.
+      If the before-reboot baseline is lost too, stability is unproven: establish a
+      new baseline and repeat a deliberate reboot/comparison before claiming success.
+    verifications:
+      - id: both-clones-trusted-access
+        type: manual-confirmation
+        prompt: Confirm both clones have separately console-authenticated host keys, fresh key-only SSH and noninteractive sudo.
+  - id: rebuild-and-reboot-each-clone
+    title: Verify clean NixOS rebuilds and stable identities after reboot
+    instructions: |
+      Installed guest (each clone console): preserve hardware-configuration.nix,
+      system.stateVersion and the clean base configuration. Inspect services and
+      the downstream command contract, then deliberately run a clean configuration
+      rebuild without adding exercise artifacts. This is NixOS-specific; a Debian
+      package/service reconfiguration recipe does not prove NixOS key generation.
+
+      ```sh
+      # Installed guest: repeat on each clone
+      command -v cat mkdir chmod stat sha256sum timeout curl nft ip python3 sudo visudo systemctl journalctl systemd-run nixos-rebuild
+      ps -p 1 -o comm=
+      systemctl --version
+      sudo timeout --signal=TERM --kill-after=30s 20m nixos-rebuild test
+      echo $?
+      ```
+
+      Require every command available, PID 1 systemd and rebuild exit 0. Then inspect
+      active SSH/agent and key-only login/sudo again. Only after those pass, deliberately
+      run `sudo timeout --signal=TERM --kill-after=30s 20m nixos-rebuild switch` at
+      the Installed guest console and immediately `echo $?`; require exit 0.
+      Nonzero/124/137, timeout or interruption: inspect processes, generation and
+      service state using the console; no blind retry or assumed rollback. A clean
+      rebuild must not require changing fixed source-specific addresses or identities.
+      After successful permanent activation, deliberately confirm one reboot for
+      clone A and separately for clone B, then run `sudo systemctl reboot` in each
+      Installed guest console. Keep the template stopped; never reboot/seal it here.
+      Wait for disk-only console login and repeat the preceding boot/network/agent,
+      fresh strict SSH, sudo and command checks. Compare each clone's machine ID and
+      every host-key type with its own stored pre-rebuild/reboot baseline: each must
+      remain stable, while A and B remain distinct. Also recheck firmware UUID/MAC
+      against each clone's baseline. This tests persistence, not only generation.
+      A changed or empty identity means fail and inspect mounts, D-Bus fallback,
+      declarative host-key paths and generated units. Do not overwrite the baseline
+      or accept a new host key to hide a stability failure. Report only pass/fail.
+    verifications:
+      - id: both-clones-stable-after-reboot
+        type: manual-confirmation
+        prompt: Confirm both clean NixOS rebuilds, deliberate reboots and stable per-clone identities with all access/tool checks still passing.
+  - id: explain-identity-acceptance
+    title: State the complete identity rule
+    instructions: |
+      Controller: the two clones must be distinct from each other, and each clone's
+      identity must remain stable across its own reboot. Both conditions matter.
+    verifications:
+      - id: clone-identity-rule
+        type: text-evidence
+        prompt: 'What must clone identities be? Enter distinct and stable.'
+        equals: distinct and stable
+        failure_message: Require distinct identities between clones and stable identities within each clone after reboot.
+  - id: retain-template-and-handoff
+    title: Retain the template and reconcile the learner-owned clones
+    instructions: |
+      Controller: record only pass/fail for the two-clone acceptance checkpoints;
+      keep identities, addresses, fingerprints and local paths out of LearnLab
+      answers and shared reports. Retain candidate and original working templates
+      and the recovery source. Course status remains draft pending separate approved
+      exact-digest live acceptance. Offline validation does not certify these VMs.
+      Proxmox node: retain the two test clones and their worksheet for the provider
+      handoff/explicit cleanup phase. These are learner-owned resources, so
+      `learnlab destroy` will not remove them. Do not perform cleanup as a check.
+      Cleanup requires its own full ownership inspection, deliberate confirmation,
+      stop/destroy and absence verification; uncertain or partially cleaned state
+      means stop and reconcile, never retry deletion by VMID alone.
+      Documentation: https://github.com/proxmox/pve-docs/blob/master/qm.adoc
+      explains full clones and regenerated MAC/firmware UUIDs; verify actual target
+      behavior. NixOS rebuild and generated-service behavior and all reboot identity
+      checks remain live acceptance requirements, not claims from source inspection.
+    verifications:
+      - id: clone-acceptance-handoff-recorded
+        type: manual-confirmation
+        prompt: Confirm only local comparison results were recorded and retained resources are identified for a separate handoff and cleanup phase.

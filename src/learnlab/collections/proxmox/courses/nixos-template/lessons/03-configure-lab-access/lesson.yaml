@@ -1,0 +1,232 @@
+id: configure-lab-access
+title: Configure Trusted Lab Access
+steps:
+  - id: prepare-public-key
+    title: Keep the private key on the controller
+    instructions: |
+      Installed guest: prerequisite is disk-only 26.05 boot, DHCP/HTTPS, learner
+      console login and separate root console recovery. On resume inspect current
+      services and configuration before repeating an activation. Keep the Proxmox
+      console open throughout access changes. This course records attestations only.
+      Controller: select an existing suitable SSH key pair or create a dedicated
+      one interactively with `ssh-keygen -t ed25519`; choose a new owner-only path,
+      never overwrite an existing key, and enter any passphrase interactively.
+      Record paths locally. The private key stays on the controller, protected by
+      local permissions/agent policy. Copy only the single-line public key into the
+      guest configuration using the trusted console. Never paste either key into
+      LearnLab answers; never put private keys, passwords or API tokens in Nix/store.
+      Installed guest: use `sudo nano /etc/nixos/configuration.nix` to merge the
+      following, replacing the marker with your actual public key locally. Keep
+      the learner account name consistent with installation; a marker is not a key.
+
+      ```nix
+      # Installed guest: merge inside the existing configuration
+      users.users.lab.openssh.authorizedKeys.keys = [
+        "REPLACE_WITH_YOUR_SINGLE_LINE_PUBLIC_KEY"
+      ];
+      services.openssh.enable = true;
+      services.openssh.settings = {
+        PermitRootLogin = "no";
+        PasswordAuthentication = true;
+        KbdInteractiveAuthentication = true;
+      };
+      services.qemuGuest.enable = true;
+      security.sudo.enable = true;
+      security.sudo.extraRules = [ {
+        users = [ "lab" ];
+        commands = [ { command = "ALL"; options = [ "NOPASSWD" ]; } ];
+      } ];
+      environment.systemPackages = with pkgs; [
+        curl nftables iproute2 python3 coreutils sudo systemd nano
+      ];
+      ```
+
+      Replace earlier duplicate settings rather than defining the same option
+      twice. Preserve hardware-configuration.nix, boot settings and stateVersion.
+      The explicit per-account NOPASSWD rule grants full root control to this
+      disposable lab user. It is intentional for automated labs, unsuitable as a
+      general production policy, and requires protecting that controller key.
+      Do not disable passwords yet: first prove key-only login and `sudo -n true`.
+      Expected: public key only, exactly the intended user in the sudo rule, and
+      both agent endpoints enabled (Proxmox Options -> QEMU Guest Agent and guest
+      services.qemuGuest.enable). If the key/account/rule is uncertain, stop before
+      activation and keep working console access.
+    verifications:
+      - id: access-configuration-reviewed
+        type: manual-confirmation
+        prompt: Confirm the local public-key, lab-only sudo and service configuration review without sharing key material.
+  - id: explain-key-material
+    title: Choose the key material safe for guest configuration
+    instructions: |
+      Controller: SSH proves possession of the private key without copying it to
+      the guest. The matching public key belongs in authorizedKeys; configuration
+      and the Nix store are not secret storage.
+    verifications:
+      - id: key-material
+        type: text-evidence
+        prompt: 'Which key goes into guest configuration? Enter public key.'
+        equals: public key
+        failure_message: Only the public key belongs in guest configuration; the private key stays on the controller.
+  - id: test-activation-and-agent
+    title: Test the configuration with a bounded activation
+    instructions: |
+      Installed guest (Proxmox console): run the bounded command below from the
+      console, then inspect its exit status immediately. This changes the running
+      system; `test` does not make it the boot default and is not a read-only check.
+
+      ```sh
+      # Installed guest
+      sudo timeout --signal=TERM --kill-after=30s 20m nixos-rebuild test
+      echo $?
+      sudo visudo -c
+      sudo -l -U lab
+      systemctl is-active sshd.service qemu-guest-agent.service
+      sudo journalctl -b -u sshd.service -u qemu-guest-agent.service --no-pager -n 50
+      ```
+
+      Substitute your account for lab. Expected: rebuild exit 0, sudoers syntax OK,
+      the intended NOPASSWD rule and both services active. Read logs only locally.
+      Exit 124/137, interruption or any nonzero result: stop. A timeout can leave
+      partial activation or ongoing build work. Inspect running processes, service
+      state and console access; do not blindly rerun or assume automatic rollback.
+      Syntax/unknown option: inspect the local Nix edit. Agent inactive: confirm
+      Proxmox agent option and guest virtio channel; after a needed virtual hardware
+      change arrange a deliberate shutdown/start and recheck. SSH inactive: inspect
+      `systemctl status sshd.service` and its local journal before attempting access.
+      Proxmox node (management UI): the candidate Summary should obtain network
+      information through the guest agent. If not, inspect agent settings, channel
+      and logs even if a DHCP address is otherwise visible. Do not claim agent
+      operation from an enabled checkbox alone.
+    verifications:
+      - id: activation-and-agent-tested
+        type: manual-confirmation
+        prompt: Confirm successful bounded test activation, checked sudo policy and working guest-agent/service state.
+  - id: enroll-trusted-host
+    title: Verify the SSH server identity before login
+    instructions: |
+      Installed guest (trusted Proxmox console): determine its current DHCP address
+      locally using `ip -br address`. Inspect the effective host-key configuration
+      with `sudo sshd -T` and fingerprint the configured public host keys using
+      `sudo ssh-keygen -lf` followed by each observed .pub path. Keep identities
+      in the owner-only worksheet, never in LearnLab answers or tracked files.
+      Controller: enter this candidate's inspected address and your key path at
+      the read prompts. Create a fresh isolated known_hosts file for this candidate:
+
+      ```sh
+      # Controller
+      read -r GUEST_ADDRESS
+      read -r KEY_PATH
+      read -r LAB_USER
+      umask 077
+      LAB_SSH_DIR=$(mktemp -d)
+      ssh-keyscan -T 10 -t ed25519,rsa "$GUEST_ADDRESS" > "$LAB_SSH_DIR/candidate-hostkeys"
+      ssh-keygen -lf "$LAB_SSH_DIR/candidate-hostkeys"
+      ```
+
+      Enter the chosen guest username at LAB_USER. ssh-keyscan discovers keys; it
+      does not establish trust. Compare every discovered key fingerprint/type with
+      the actual configured keys shown through the trusted console. Empty output,
+      unexpected key types, missing expected keys or any mismatch means stop before
+      login. Recheck candidate ownership/address and network path. If your configured
+      host-key types differ, adapt the scan to that inspected set and compare it
+      fully. Only after exact local comparison, rename candidate-hostkeys to
+      known_hosts in this private directory. Keep that directory path in your
+      private worksheet. This mktemp directory is temporary and may disappear
+      between sessions. If it is absent, do fresh console-verified reenrollment:
+      repeat ownership/address inspection, create a new isolated directory, scan,
+      compare the full configured key set against the trusted console, and only
+      then enroll and connect. Never recreate trust from an unverified scan or
+      disable strict checking. Never delete global host
+      entries to silence a DHCP address-reuse warning.
+      Then make a fresh key-only connection, with your private key still local:
+
+      ```sh
+      # Controller
+      ssh -i "$KEY_PATH" -o ControlPath=none -o IdentitiesOnly=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$LAB_SSH_DIR/known_hosts" -o GlobalKnownHostsFile=/dev/null "$LAB_USER@$GUEST_ADDRESS"
+      ```
+
+      ControlPath=none disables connection sharing so this checks a new transport
+      and authentication instead of reusing an existing SSH connection.
+      A local private-key passphrase prompt is different from a server account
+      password prompt. Expected: learner shell without server password fallback
+      or an unverified host prompt. If unavailable, use the console to inspect the
+      configured public key/account, sshd state and SSH firewall path; stop before
+      changing authentication restrictions.
+      Installed guest (new SSH session): run `whoami`, then `sudo -n true` and
+      immediately `echo $?`. Expected: chosen user and status 0, no password prompt.
+      Nonzero sudo result: inspect the exact per-user rule with console recovery.
+      Do not declare success just because an older session remains connected.
+    verifications:
+      - id: trusted-key-and-sudo-tested
+        type: manual-confirmation
+        prompt: Confirm console-verified host enrollment, a fresh key-only login and successful noninteractive sudo.
+  - id: make-access-permanent
+    title: Disable password SSH only after the access checkpoint
+    instructions: |
+      Installed guest (console): after the previous key-login/sudo attestation,
+      edit the existing services.openssh.settings block to set
+      PasswordAuthentication = false; and KbdInteractiveAuthentication = false;
+      while retaining PermitRootLogin = "no". This does not remove console password
+      recovery. Run the same bounded `nixos-rebuild test` and check exit 0; verify
+      effective settings with `sudo sshd -T` (passwordauthentication no,
+      kbdinteractiveauthentication no, permitrootlogin no). Open another fresh
+      strict key-only controller session using the preceding command; verify
+      `sudo -n true` again. If any check fails, stop and correct via the open
+      console; do not close the recovery path or continue to permanent activation.
+      Once these checks pass, make the tested configuration persistent:
+
+      ```sh
+      # Installed guest: permanent activation, not read-only
+      sudo timeout --signal=TERM --kill-after=30s 20m nixos-rebuild switch
+      echo $?
+      ```
+
+      Expected: exit 0. On timeout/error, inspect state and console as above; do
+      not claim a permanent generation. After successful switch, deliberately
+      reboot from the console, then verify console login, fresh trusted key-only
+      SSH, `sudo -n true`, both services active, agent network reporting, DHCP,
+      DNS and HTTPS again. Expected: all survive disk-only reboot. A failed boot
+      means use the console boot menu's prior generation and inspect the Nix edit;
+      stop before template preparation. Do not change system.stateVersion to fix it.
+    verifications:
+      - id: permanent-access-confirmed
+        type: manual-confirmation
+        prompt: Confirm permanent activation and reboot-tested key-only SSH, sudo, agent and separate console recovery.
+  - id: verify-template-tools
+    title: Verify the downstream command contract locally
+    instructions: |
+      Installed guest: confirm /etc/os-release identifies NixOS and nixos-version
+      reports 26.05. The derived downstream union is os.nixos, tool.coreutils,
+      tool.curl, tool.ip, tool.journalctl, tool.nft, tool.nixos-rebuild, tool.python3,
+      tool.sudo, tool.systemctl, tool.systemd, tool.systemd-run and tool.timeout.
+      This bootstrap lesson declares none of those as managed guest capabilities.
+      Installed packages supply curl -> curl; nftables -> nft; iproute2 -> ip;
+      python3 -> python3; coreutils -> cat, mkdir, chmod, stat, sha256sum, timeout;
+      sudo -> sudo/visudo; systemd -> systemctl, journalctl, systemd-run and the
+      running systemd manager. NixOS supplies nixos-rebuild as a system tool,
+      not a package named tool.nixos-rebuild. Inspect actual command availability:
+
+      ```sh
+      # Installed guest
+      cat /etc/os-release
+      nixos-version
+      command -v cat mkdir chmod stat sha256sum timeout curl nft ip python3 sudo visudo systemctl journalctl systemd-run nixos-rebuild
+      ps -p 1 -o comm=
+      systemctl --version
+      ```
+
+      Expected: each named command resolves, PID 1 is systemd and OS is NixOS.
+      Check each command result/output, not only the last command's exit status.
+      Missing command: inspect environment.systemPackages and the activated
+      generation; correct through the bounded test/switch sequence and repeat the
+      affected checks. Do not claim capabilities by merely listing them in TOML.
+      Keep nginx exercise sites, nftables exercise rules, systemd exercise units
+      and capstone artifacts absent. Save only local pass/fail for this checkpoint;
+      the candidate remains a running unsealed VM, not a certified template.
+      Documentation: https://nixos.org/manual/nixos/stable/ and release options at
+      https://search.nixos.org/options?channel=26.05 . Package/service behavior and
+      this walkthrough require live verification; offline tests do not execute them.
+    verifications:
+      - id: template-tool-contract-confirmed
+        type: manual-confirmation
+        prompt: Confirm locally that OS, every required command and the clean base state were inspected.

@@ -1,0 +1,65 @@
+id: prerequisites-and-safety
+title: Prerequisites and Safety
+steps:
+  - id: understand-ownership
+    title: Who operates the infrastructure?
+    instructions: |
+      Controller: LearnLab records progress. You operate Proxmox and the guest
+      explicitly. A saved lesson does not prove that a VM still exists or owns
+      the same ID. Inspect your local resource worksheet before resuming.
+    verifications:
+      - id: infrastructure-owner
+        type: text-evidence
+        prompt: 'Who operates the infrastructure here? Enter learner or learnlab.'
+        equals: learner
+        failure_message: The learner operates Proxmox; LearnLab only guides this course.
+  - id: distinguish-systems
+    title: Distinguish controller, node, and guest
+    instructions: |
+      The controller is the computer where you run LearnLab and keep local
+      progress. The Proxmox node is the virtualization host you administer.
+      The guest is the virtual machine that will become the template. Keep
+      these roles distinct when a later lesson asks you to perform an action.
+    verifications:
+      - id: roles-understood
+        type: manual-confirmation
+        prompt: Confirm that you can identify your controller, Proxmox node, and guest.
+  - id: prepare-private-worksheet
+    title: Keep an owner-only resource worksheet
+    instructions: |
+      Before later lessons, prepare a private, owner-only worksheet outside
+      this course. Record the node, guest VM ID and name, storage, network,
+      installation media, and any other local choices you will need. Do not
+      paste passwords, API tokens, private keys, or personal infrastructure
+      values into LearnLab, course files, shell history, or shared notes.
+    verifications:
+      - id: private-worksheet-ready
+        type: manual-confirmation
+        prompt: Confirm that your local worksheet is private and contains no secrets.
+  - id: understand-no-profile-start
+    title: Start without a provider profile
+    instructions: |
+      This draft course has no managed environment. Start it with
+      `learnlab start proxmox/nixos-template --include-drafts` and do not pass
+      a provider profile. LearnLab presents guidance and records your answers;
+      it does not contact Proxmox, create a VM, change a guest, or clean up
+      infrastructure for you.
+    verifications:
+      - id: no-profile-understood
+        type: manual-confirmation
+        prompt: Confirm that this course starts without a provider profile.
+  - id: stop-and-resume-safely
+    title: Save progress without assuming infrastructure state
+    instructions: |
+      Manual confirmations and saved progress record only what you attested at
+      the time. They do not inspect current infrastructure or prove that a VM,
+      VM ID, node, or guest state is unchanged. To stop safely, leave any
+      manually operated task in a known state, update your private worksheet,
+      then save and exit. Before resuming, inspect the worksheet and verify the
+      real node and guest state yourself. LearnLab performs no automatic
+      cleanup, so you remain responsible for stopping, removing, or preserving
+      every resource you created.
+    verifications:
+      - id: resume-boundary-understood
+        type: manual-confirmation
+        prompt: Confirm that you will verify real infrastructure state before resuming.

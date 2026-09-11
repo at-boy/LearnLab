@@ -1,0 +1,104 @@
+id: create-installer-vm
+title: Create the Installer VM
+steps:
+  - id: select-media
+    title: Select and verify the official installer
+    instructions: |
+      Controller: prerequisite is the private worksheet and permission to create
+      a disposable VM. On resume, inspect your existing ISO and VM before downloading
+      or creating anything again. This draft walkthrough has not been live tested.
+      Open https://nixos.org/download/ over HTTPS. Under Minimal ISO image choose
+      64-bit Intel/AMD (x86_64), release 26.05, not ARM or a graphical ISO. Follow
+      the official channels.nixos.org link to its resolved release artifact. Record
+      that exact filename/revision and URL locally; a moving channel URL alone is
+      insufficient. Obtain the matching SHA-256 checksum from that same official
+      release directory over HTTPS. Do not substitute a checksum from a forum.
+      Save both locally. In a controller terminal, enter the actual downloaded ISO
+      path into ISO_PATH using `read -r ISO_PATH`, then run `sha256sum "$ISO_PATH"`.
+      Compare the entire digest with the official digest and the filename/revision
+      with the intended image. A checksum catches damaged/mismatched downloads;
+      HTTPS and the official source establish where the expected digest came from.
+      Expected: exact match and a 26.05 minimal x86_64 artifact. On any mismatch,
+      missing checksum, unexpected redirect or TLS failure, stop before upload;
+      recheck the official release and download. Never disable TLS verification.
+    verifications:
+      - id: media-verified
+        type: manual-confirmation
+        prompt: Confirm locally that the official ISO revision and full checksum match; do not paste them here.
+  - id: understand-checksum
+    title: Explain the media integrity check
+    instructions: |
+      Controller: the checksum comparison checks that the downloaded bytes match
+      the expected official artifact. This concept answer is not ISO verification.
+    verifications:
+      - id: media-integrity
+        type: text-evidence
+        prompt: 'What do you compare for download integrity? Enter checksum.'
+        equals: checksum
+        failure_message: Compare the complete checksum against the matching official artifact.
+  - id: create-disposable-vm
+    title: Create and inspect a new candidate
+    instructions: |
+      Proxmox node (management UI): inspect the chosen node, available storage and
+      existing IDs/names. Reserve a new VM ID and distinctive candidate name in
+      your owner-only worksheet. Existing or ambiguous identity means stop and
+      inspect or choose another; never delete a VM to make the ID available.
+      Upload the verified ISO to storage supporting ISO images. If using Download
+      from URL instead, supply the exact official URL and verified SHA-256 in the
+      UI, and require successful verification before using that upload.
+      Create VM: General = chosen node, unused ID and chosen name; OS = verified ISO,
+      Linux guest type; System = Q35 machine, OVMF (UEFI) BIOS, EFI disk on selected
+      storage (4m EFI type), and VirtIO SCSI single controller. Disable Pre-Enroll keys / Secure
+      Boot for this installer; an unsigned installer may be rejected by Secure Boot.
+      This deliberate lab firmware choice is not production hardening. Keep the
+      EFI variables disk distinct from the single OS data disk. Disk = one new SCSI
+      disk on selected storage, capacity chosen for downloads/builds. CPU = a type
+      compatible with intended nodes and adequate cores. Memory = adequate fixed
+      RAM for installation/builds. 2 vCPU, 2 GiB RAM and 20 GiB disk are illustrative
+      starting sizes, not defaults or a guarantee; allocate more if needed.
+      Network = VirtIO NIC, your existing ordinary LAN bridge with DHCP; no new
+      VLAN, SDN or cloud-init drive. Check local firewall policy permits DHCP and
+      controller SSH. Do not disable shared network protections as a workaround.
+      Confirm page: leave automatic startup unchecked and inspect all settings.
+      After creation, Options -> QEMU Guest Agent = enabled; boot order = ISO first
+      for installation, chosen SCSI disk next. Inspect Hardware and Options against
+      the worksheet, including storage volume, MAC and disk size; VMID alone does
+      not establish ownership. No guest-agent response is expected until the guest
+      service is installed. If storage, firmware or network differs, stop and
+      correct this new candidate's settings before booting it.
+    verifications:
+      - id: candidate-inspected
+        type: manual-confirmation
+        prompt: Confirm that you inspected the new candidate and matched its hardware and ownership locally.
+  - id: boot-and-network
+    title: Boot the minimal installer and diagnose connectivity
+    instructions: |
+      Proxmox node (management UI): start only the inspected candidate and open its
+      console. Expected: the NixOS minimal installer shell. A firmware shell means
+      inspect ISO attachment and boot order; a security violation means inspect the
+      deliberate Secure Boot choice. Stop if this is another VM or release.
+      Installer console: obtain a root shell with `sudo -i`. Run these read-only
+      checks, one at a time; keep output and addresses local:
+
+      ```sh
+      # Installer console
+      nixos-version
+      test -d /sys/firmware/efi && echo UEFI
+      ip -br link
+      ip -br address
+      ip route
+      getent hosts cache.nixos.org
+      curl --fail --show-error --location --max-time 30 https://cache.nixos.org/nix-cache-info
+      ```
+
+      Expected: 26.05, UEFI, an UP non-loopback NIC with DHCP address, a usable
+      default route, resolved cache address and HTTPS cache metadata without TLS
+      errors. No link/address: inspect NIC/bridge/cable-connected and DHCP service.
+      Address but no route: inspect DHCP/router. Route but failed lookup: inspect
+      resolver configuration. DNS works but HTTPS fails: inspect clock with `date`,
+      egress policy and TLS trust. Do not format until all checks pass. Stop and
+      record the last confirmed phase locally if network or firmware stays wrong.
+    verifications:
+      - id: installer-network-ready
+        type: manual-confirmation
+        prompt: Confirm that the intended installer has UEFI, DHCP, route, DNS and verified HTTPS access.

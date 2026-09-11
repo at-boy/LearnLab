@@ -1,0 +1,232 @@
+id: seal-and-convert
+title: Seal Identities and Convert the Candidate
+steps:
+  - id: inspect-recovery-and-ownership
+    title: Preserve a recoverable source and inspect the candidate
+    instructions: |
+      Proxmox node (management UI): prerequisite is the previous lesson's working
+      NixOS 26.05 disk-only boot, permanent configuration, SSH/sudo/tools and agent.
+      LearnLab records only your attestations; it performs no infrastructure action.
+      Reconcile the owner-only worksheet with node, VMID, name, disks/storage and
+      creation task history. VMID alone never establishes ownership. Never mutate
+      a working template used by another profile or the original working template.
+      Keep a recoverable source until the new candidate passes two-clone acceptance:
+      before sealing, arrange and verify a separate backup or powered-off full
+      preservation clone through the UI, with its own verified identity. Confirm
+      the storage cost and explicit creation checkpoint; never overwrite a resource.
+      A candidate snapshot is not the recovery strategy for template conversion.
+      Inspect the candidate's Snapshots tab now: conversion requires no snapshots.
+      If snapshots exist, stop and choose a separately preserved, snapshot-free
+      candidate. Never automatically delete snapshots or use force flags to convert.
+      Proxmox node: after rechecking the selected node and worksheet, read the
+      candidate VMID locally; these are read-only inspections, not ownership guards:
+
+      ```sh
+      # Proxmox node
+      read -r CANDIDATE_ID
+      qm status "$CANDIDATE_ID"
+      qm config "$CANDIDATE_ID"
+      qm listsnapshot "$CANDIDATE_ID"
+      ```
+
+      Expected: correct name/disks, ordinary VM (template absent or 0), no snapshots
+      apart from the current-state marker, no active lock/task. Failed lookup is
+      unknown state, never absence. On interruption inspect status and task history:
+      if already a template, do not boot or reseal it; go to clone acceptance after
+      confirming completed conversion. If partly sealed/running, retain console
+      control, inspect exactly what changed and stop before further mutation. An
+      accidentally rebooted candidate is no longer known sealed; repeat the whole
+      inspection phase before deliberately sealing again. Never blindly rerun.
+    verifications:
+      - id: candidate-and-recovery-reviewed
+        type: manual-confirmation
+        prompt: Confirm candidate ownership, preserved recovery source, no snapshots and a reconciled running unsealed state.
+  - id: inspect-nixos-identity
+    title: Inspect actual machine-ID paths and SSH regeneration
+    instructions: |
+      Installed guest (trusted Proxmox console): keep console recovery and close
+      other SSH sessions before sealing. Read the following locally; never paste
+      raw machine IDs, firmware UUIDs, host fingerprints or configuration into
+      LearnLab. First inspect path types and mounts, without following unknown
+      symlinks for a write:
+
+      ```sh
+      # Installed guest: read-only inspection
+      sudo ls -ld /etc/machine-id /var/lib/dbus /var/lib/dbus/machine-id /etc/ssh
+      sudo stat -c '%F %h %U %a %s %n' /etc/machine-id /var/lib/dbus/machine-id
+      sudo readlink /etc/machine-id
+      sudo readlink /var/lib/dbus/machine-id
+      findmnt -T /etc/machine-id
+      findmnt -T /var/lib/dbus
+      findmnt -M /etc/machine-id
+      findmnt -M /var/lib/dbus/machine-id
+      cat /proc/cmdline
+      systemctl --version
+      nixos-option services.openssh.hostKeys
+      nixos-option services.openssh.generateHostKeys
+      nixos-option services.openssh.startWhenNeeded
+      sudo sshd -T
+      systemctl cat sshd.service sshd-keygen.service
+      systemctl show sshd.service -p Wants -p After -p ExecStartPre -p ExecStart
+      ```
+
+      Interpret each result: readlink has no output/nonzero for an ordinary file;
+      findmnt -M has no entry/nonzero for a path that is not a mountpoint. A missing
+      D-Bus identity can be normal only when its parent is accessible and absence
+      was positively inspected. Permission/I/O errors are not evidence of absence.
+      Expected supported layout: /etc/machine-id is a root-owned regular file with
+      one hard link on writable storage, not a symlink or bind mount. D-Bus fallback
+      at /var/lib/dbus/machine-id is either absent, a symlink resolving exactly to
+      /etc/machine-id, or its own root-owned, single-link regular file on writable
+      storage. A separate populated D-Bus file could restore the old identity.
+      Stop for a read-only filesystem, mountpoint, hard-link sharing, unexpected
+      symlink target, persistence overlay, inaccessible path or unknown layout.
+      Do not unmount, remount, follow a link into the Nix store or force truncation.
+      Resolve the target-specific configuration before returning to inspection.
+      Inspect boot.kernelParams and imported configuration locally for fixed
+      systemd.machine_id, --machine-id or container_uuid overrides; compare with
+      /proc/cmdline. Do not bake a fixed identity into clones. Proxmox node: inspect
+      smbios1 firmware UUID and NIC MAC in the candidate config; later both clones
+      must receive distinct values, not copied overrides.
+      NixOS 26.05 source currently uses sshd-keygen.service and sshd.service's
+      Wants/After dependency; older layouts may use ExecStartPre. Read generated
+      units and any store scripts they reference with `sudo less` plus the observed
+      exact path. Verify missing configured keys will be generated at boot before
+      SSH, generateHostKeys is true and startWhenNeeded is false. Socket activation
+      or an unverified custom unit is a stop condition for this walkthrough.
+      Inspect every hostKeys private path and its .pub counterpart with ls, stat,
+      readlink and findmnt as above; require ordinary unmounted single-link files,
+      writable parent directories, no shared/store-backed keys and a complete
+      explicit list matching sshd -T. Do not display private key contents.
+      Option lookup failure or disagreement with the active unit means stop and
+      reconcile the active generation; do not borrow Debian cleanup assumptions.
+    verifications:
+      - id: identity-layout-reviewed
+        type: manual-confirmation
+        prompt: Confirm supported path/mount layout, no fixed boot identity and verified NixOS missing-key generation without sharing identities.
+  - id: explain-sealed-boundary
+    title: Choose the next action after sealing
+    instructions: |
+      Installed guest: sealing removes per-machine identity from the disk image.
+      Do not reboot or restart SSH afterward: doing so can generate identities
+      before cloning. The next action after verification is to power off.
+    verifications:
+      - id: sealed-next-action
+        type: text-evidence
+        prompt: 'After sealing and verification, what is next? Enter power off.'
+        equals: power off
+        failure_message: Power off the sealed candidate; a reboot can regenerate identity before cloning.
+  - id: confirm-sealing-write
+    title: Deliberately authorize the console-only sealing phase
+    instructions: |
+      Installed guest (console): recheck candidate ownership and recovery source.
+      Make a local explicit decision to stop SSH and clear only the inspected
+      machine-ID state and configured host-key pairs on this disposable candidate.
+      Read all following instructions first. Do not proceed if an active rebuild,
+      automatic deployment or another operator can regenerate these files. This
+      phase must end in poweroff. Confirmation is self-attestation, not a guard.
+    verifications:
+      - id: sealing-write-confirmed
+        type: manual-confirmation
+        prompt: Confirm you deliberately selected this verified disposable candidate for the identity-clearing and poweroff phase.
+  - id: seal-verified-state
+    title: Stop SSH, clear only inspected state and power off
+    instructions: |
+      Installed guest (Proxmox console): before stopping SSH, determine and
+      record every effective SSH port from this target's actual configuration:
+
+      ```sh
+      # Installed guest: read-only effective configuration inspection
+      sudo sshd -T
+      ```
+
+      Record every `port <number>` line locally. Require a nonempty list of
+      valid ports and a successful, unambiguous command. An empty or malformed
+      port list, a configuration or permission error, or uncertainty about an
+      Include/custom unit/socket means stop and reconcile through the console.
+      Close every remote SSH session, then run:
+
+      ```sh
+      # Installed guest: deliberate service mutation
+      sudo systemctl stop sshd.service sshd-keygen.service
+      systemctl is-active sshd.service sshd-keygen.service
+      sudo ss -Hlnpt
+      # Repeat separately for every recorded port, replacing PORT with its number.
+      sudo ss -Htnp state established 'sport = :PORT'
+      sudo pgrep -a -x sshd
+      ```
+
+      `ss -Hlnpt` displays listening sockets; listening sockets alone do not prove
+      sessions ended. NixOS 26.05 configures `sshd.service` with `KillMode=process`,
+      so stopping it can leave sshd session children alive. Require both services
+      inactive and no listener on the recorded ports, then inspect established
+      connections on every effective SSH port and remaining sshd processes
+      independently. The required state is no output from
+      every established-connection query and no output from `pgrep`; inactive and
+      no-match statuses are nonzero as expected. Any matching connection/process,
+      unexpected output, permission failure, incomplete port coverage or uncertainty
+      about whether a command failed is a stop condition: keep console access and do
+      not delete keys or machine identity.
+      Only for the ordinary writable /etc/machine-id layout already inspected,
+      deliberately run `sudo truncate -s 0 /etc/machine-id` in the Installed guest.
+      Leave the empty file in place. Empty and missing have different first-boot
+      semantics; this recipe does not rely on ConditionFirstBoot units.
+      D-Bus branch: if absent, leave absent. If its inspected symlink resolves
+      exactly to /etc/machine-id, preserve the link and confirm it now reads empty.
+      If a separate validated regular file, run in the Installed guest
+      `sudo rm -i -- /var/lib/dbus/machine-id` and explicitly confirm that single
+      removal. Any other layout: stop; never use a universal deletion/truncation
+      script. Do not run machine-id setup or a rebuild after this checkpoint.
+      Installed guest: for each configured host-key pair on the reviewed local
+      list, type `sudo rm -i --` followed by only its exact private and .pub paths;
+      inspect the full command and confirm each removal. This is a manual action,
+      not an executable placeholder block. Do not use globs or recursive cleanup,
+      and do not remove authorized_keys, sshd_config or controller keys.
+      Verify locally using ls/stat/readlink/findmnt: /etc/machine-id remains an
+      empty regular file (size 0), D-Bus fallback is absent or the verified empty
+      link, and every configured host-key pair is absent. Recheck service inactivity.
+      Any permission error, reappearing file or partial change means stop, keep
+      console access and reconcile; do not label the candidate sealed. After all
+      expected checks pass, deliberately power off; do not reboot or restart SSH:
+
+      ```sh
+      # Installed guest: deliberate end of sealing
+      sudo systemctl poweroff
+      ```
+
+      Proxmox node (UI): positively verify Stopped for the inspected candidate.
+      Guest-side systemctl poweroff may not create a Proxmox shutdown task.
+      Require task success only if an actual management shutdown task was initiated.
+      A timeout or closed console does not prove shutdown; inspect current VM
+      state and any initiated task before acting. Stop on uncertainty; do not
+      convert a running candidate, force-stop or automatically retry sealing.
+    verifications:
+      - id: sealed-and-powered-off
+        type: manual-confirmation
+        prompt: Confirm locally verified empty/absent per-machine state and successful poweroff without reboot or SSH restart.
+  - id: confirm-template-conversion
+    title: Inspect and confirm conversion separately
+    instructions: |
+      Proxmox node (UI): inspect the worksheet and candidate config again: intended
+      name/node/disks, stopped ordinary VM, no snapshots, no lock/running task.
+      Preserve the original working template and recovery source. If any snapshot
+      exists, stop; do not delete snapshots automatically or create a snapshot now.
+      Read-only node commands from the first step can assist. If already a template,
+      inspect the completed task and skip conversion; do not rerun it.
+      Deliberately choose More -> Convert to template for this verified candidate
+      and review the displayed identity before confirming. Wait for task success.
+      Then inspect config for template: 1 and the UI template state/disk ownership.
+      A failure, timeout or interrupted UI is unknown state: inspect task history,
+      locks and config before deciding what happened. Do not retry by VMID alone,
+      remove locks blindly, force conversion or try booting a template.
+      Keep this template stopped and retained for the next lesson's two full clones.
+      Source checks: NixOS release module at
+      https://github.com/NixOS/nixpkgs/blob/nixos-26.05/nixos/modules/services/networking/ssh/sshd.nix ;
+      systemd identity at https://github.com/systemd/systemd/blob/main/man/machine-id.xml ;
+      Proxmox templates at https://github.com/proxmox/pve-docs/blob/master/qm.adoc .
+      These are documentation evidence only. Target generated units, shutdown
+      persistence and snapshot/conversion behavior remain live blockers until tested.
+    verifications:
+      - id: conversion-confirmed
+        type: manual-confirmation
+        prompt: Confirm deliberate conversion completed for the owned snapshot-free candidate and both recovery source and template are retained.
