@@ -44,6 +44,23 @@ two-clone acceptance, a new named profile and cleanup of only those test clones.
 Template creation and read-only profile checks do not certify downstream courses;
 their live acceptance remains separate. The walkthrough has not been live-tested.
 
+## Choose a Proxmox course
+
+* `proxmox/provider-bootstrap` — optional NONE-scope guidance for creating a
+  named profile.
+* `proxmox/nixos-template` — learner-operated template construction, also NONE
+  scope.
+* `proxmox/proxmox-admin` — provider-backed disposable VM course after a
+  working profile exists.
+
+Start the draft provider-bootstrap guidance on the controller with:
+
+```bash
+learnlab start proxmox/provider-bootstrap --include-drafts
+```
+
+Completion and self-attestation are not provider validation and not live certification.
+
 The following is the complete schema for a named profile. The concrete
 resource names below are **Checkpoint 05 example values**, not LearnLab
 defaults: replace the API host, token identity, template, node, storage,

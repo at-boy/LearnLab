@@ -59,6 +59,21 @@ def test_complete_lesson_order():
     ]
 
 
+def test_readme_distinguishes_provider_and_template_bootstrap_paths():
+    readme = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
+    for fragment in (
+        "proxmox/provider-bootstrap",
+        "proxmox/nixos-template",
+        "proxmox/proxmox-admin",
+        "optional",
+        "provider-backed",
+        "learnlab start proxmox/provider-bootstrap --include-drafts",
+        "self-attestation",
+        "not live certification",
+    ):
+        assert fragment in readme
+
+
 def test_inventory_is_private_read_only_and_fails_closed():
     text = lesson_text("read-only-inventory")
     for fragment in (

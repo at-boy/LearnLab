@@ -4,6 +4,13 @@ steps:
   - id: create-profile
     title: Add a new named profile without replacing existing configuration
     instructions: |
+      Controller: optional guided path: leave this NONE-scope course and start
+      `learnlab start proxmox/provider-bootstrap --include-drafts` on the
+      controller. It is guidance, not a prerequisite, and it does not make
+      provider calls. An authorized advanced operator may instead perform the
+      same scoped setup directly; this direct advanced setup keeps the
+      requirements below.
+
       Controller: prerequisite is successful two-clone acceptance, including
       each clone's rebuild and stable identities after reboot. On resume,
       inspect the private worksheet and actual template/clone state again.

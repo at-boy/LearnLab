@@ -78,6 +78,19 @@ def test_complete_lesson_order_and_handoff():
         assert concept in handoff
 
 
+def test_provider_bootstrap_cross_link_is_optional_and_keeps_none_scope():
+    text = lesson_text("configure-provider")
+    assert "proxmox/provider-bootstrap" in text
+    assert "optional" in text.lower()
+    assert "direct advanced setup" in text.lower()
+    assert "not a prerequisite" in text.lower()
+    policy = load_course().effective_environment(
+        next(item for item in load_course().lessons if item.id == "configure-provider")
+    )
+    assert policy.scope is EnvironmentScope.NONE
+    assert policy.provider_capability is None
+
+
 def test_installer_teaches_target_specific_steps():
     text = lesson_text("install-nixos")
     for concept in [
