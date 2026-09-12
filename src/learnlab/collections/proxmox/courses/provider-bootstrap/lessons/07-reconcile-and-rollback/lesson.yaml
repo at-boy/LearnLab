@@ -1,0 +1,58 @@
+id: reconcile-and-rollback
+title: Reconcile Cleanup and Choose Retention or Revocation
+steps:
+  - id: prove-positive-cleanup
+    title: Require positive evidence for the exact scratch identity
+    instructions: |
+      Proxmox node: Prerequisite: the separately approved lifecycle has reached cleanup, and the private worksheet and protected state backup from before destroy remain available. Keep the runtime permissions needed for recovery until all reconciliation and independent confirmation below are complete.
+      Proxmox node: Resume/reinspection: after any interruption, the authorized administrator must refresh complete inventory and task/storage observations, compare them with protected ownership evidence, and recheck the authorization and access-object worksheet before continuing. Saved progress, a previous missing row, and a CLI success summary are not current cleanup proof.
+      Proxmox node: Reconcile the generated name and VMID with the protected pre-destroy ownership record and private worksheet, including recorded node, provider/profile identity, source template ancestry, attached scratch storage, and task references. Reject any identity or ownership mismatch; never delete or adopt an object merely because its name or VMID looks familiar.
+      Proxmox node: Require all positive cleanup evidence together: a completed delete task stopped successfully with exitstatus OK for the exact managed identity; no active or unresolved task for it; authorized refreshed inventory proving that exact managed identity absent; expected attached scratch storage no longer present; and the source template still present with its expected identity and storage intact.
+      Proxmox node: Retain completed task history as audit evidence. Completed task history is not a residual resource to delete. A 404, missing row, failed query, filtered inventory, or missing local environment record alone is insufficient to prove absence, even when normal destroy reported success.
+      Proxmox node: Expected outcome: correlated, private evidence of successful delete and absent scratch VM/storage, with the source template preserved and task history retained. Nothing from the worksheet, inventory, database, task output, or secret mechanism is submitted as a LearnLab answer.
+      Proxmox node: Stop condition: residual storage, a remaining VM, unresolved task, uncertain deletion, or denied/filtered inventory blocks acceptance, local state cleanup, and access revocation. Troubleshooting: preserve the protected state backup, worksheet, original state, and cleanup authority; the authorized administrator investigates full identity and task/storage state. Do not retry deletion, broaden privileges, erase evidence, or interpret a missing row as permission to continue.
+    verifications:
+      - id: positive-cleanup-self-attestation
+        type: manual-confirmation
+        prompt: 'Self-attestation: confirm exact scratch identity, completed deletion, authorized inventory absence, absent scratch storage, retained task history, and intact source template were reconciled privately; submit no identifiers or output here.'
+  - id: obtain-independent-confirmation
+    title: Obtain confirmation independent of the runtime token
+    instructions: |
+      Proxmox node: An independent administrator using their existing authorized identity, other than the runtime token, confirms that no scratch VM, active or unresolved task, or residual scratch storage remains. The administrator may be the authorized bootstrap administrator but must inspect through authority independent of the runtime token and corroborate the private ownership and task/storage evidence.
+      Proxmox node: Confirm inventory visibility is sufficient to prove absence and independently verify the source template still present. Record the confirmation privately as pass/fail; keep any person, resource, task, or endpoint identifiers outside LearnLab answers and shared evidence.
+      Proxmox node: Expected outcome: positive independent cleanup confirmation before permissions are changed. Until that confirmation, retain the private worksheet, protected state backup, and runtime permissions for recovery, even if LearnLab already removed its local ownership row.
+      Proxmox node: Stop condition: the administrator cannot establish visibility or disagrees with any observation. Troubleshooting: reconcile the exact VM identity, task history, and attached storage with authorized fresh observations; do not substitute the runtime token's missing row or revoke access to make the inventory appear empty.
+    verifications:
+      - id: independent-cleanup-self-attestation
+        type: manual-confirmation
+        prompt: 'Self-attestation: confirm an authorized administrator independently proved cleanup before any permission change, with confirmation kept private and no identifiers submitted here.'
+  - id: choose-retain-or-revoke
+    title: Retain reviewed access or revoke in reverse order
+    instructions: |
+      Proxmox node: Prerequisite: all positive cleanup evidence and independent administrator confirmation are complete, with no resource or unresolved task that remains or might remain. Review the original before-state and bootstrap-created access-object worksheet, current installed command help, and effective user/token permissions before each proposed change. The learner chooses Retain or Revoke explicitly; completing this course chooses neither automatically.
+      Proxmox node: Retain: keep the named profile, dedicated user/token, custom roles, and scoped ACLs for future LearnLab use under periodic review. Preserve the token secret only in the approved external secret mechanism; future resource mutation requires its own authorization. Recheck ownership, references, effective intersection, propagation, and installed privilege definitions regularly.
+      Proxmox node: Revoke: use the authorized administrator's identity and itemized worksheet to disable/delete the token first. Confirm that exact bootstrap-created token and its current references before the action, then re-inventory and confirm it no longer grants access. Keep independent administrator authority available throughout rollback.
+      Proxmox node: Continue in reverse order: remove only bootstrap-created token/user ACL entries, one exact path, role, identity, and propagation entry at a time; re-inventory after every action and verify the intended entry alone is gone. If token deletion already removed an ACL automatically, establish that through authorized inventory and skip the now-absent entry rather than repeating a guessed removal.
+      Proxmox node: Remove the dedicated user only after proving it has no remaining ownership, use, tokens, or unrelated references. Remove custom roles only after proving they are unreferenced by ACLs or users. Re-inventory after each reverse-order action, including user and each role removal, and compare with the private before-state. Expected result at each stage is removal of exactly the approved bootstrap object while unrelated access and resources remain intact.
+      Proxmox node: Never remove shared roles, shared users, pre-existing ACLs, source templates, storage, networks, or unrelated VMs. An unexpected reference, ownership mismatch, denied query, filtered inventory, or ambiguous outcome stops rollback immediately. Troubleshooting: preserve the remaining access objects and worksheet for administrator reconciliation; do not blindly retry deletion, remove the reference, broaden permissions, or recreate access merely to repeat rollback.
+      Controller: Under Revoke, retire only the new scratch profile and its dedicated external secret entry after confirming neither is referenced by other work and after administrator rollback reconciliation. Inspect the owner-only config before editing, preserve every other provider and existing default_provider, and keep the pre-change backup. If this profile is referenced by a default or another workflow, stop for an explicit replacement decision; do not leave a dangling default or restore an old whole-config backup over later changes. Verify the resulting config and external secret removal privately without displaying secret values.
+      Controller: For either choice, after independent cleanup confirmation, clear the process secret through the approved local mechanism with tracing off, then return this separate shell to normal state selection:
+      Controller: unset XDG_STATE_HOME
+      Controller: Expected outcome: a privately recorded Retain or reconciled Revoke decision. Retain or remove the isolated state directory only under the separately approved evidence-retention decision; keep the protected state backup, private worksheet, and completed task history for their approved retention period. Erasing lesson progress is not authorization to erase recovery or audit evidence. If retention authority is unclear, retain the protected evidence and stop directory cleanup.
+    verifications:
+      - id: access-disposition-self-attestation
+        type: manual-confirmation
+        prompt: 'Self-attestation: confirm an explicit Retain or safely reconciled Revoke decision followed independent cleanup confirmation, with evidence retention handled separately and no private values submitted here.'
+  - id: separate-progress-from-certification
+    title: Distinguish self-attestation from live certification
+    instructions: |
+      Controller: Completion records self-attested progress. Concept answers and manual confirmations do not independently validate infrastructure, permissions, cleanup, operator actions, or a token; this NONE-scope course never executed the displayed commands.
+      Controller: The course remains draft until a separately authorized exact-digest live acceptance is recorded. Offline tests, a provider health PASS, capability declarations, historical PVE observations, a successful clone, or course completion do not certify this course, the scratch profile, source template, permission model, or downstream course.
+      Controller: Expected outcome: a bounded private Retain/Revoke and cleanup result. Any later shared live review records only generic pass/fail observations, installed PVE version, LearnLab revision, and the final provider-bootstrap course digest; exclude all deployment identifiers, paths, task IDs, fingerprints, identity values, and secrets.
+      Controller: Stop condition: any unproven installed mapping, unsafe or ambiguous denial evidence, filtered inventory, incomplete lifecycle observation, or uncertain cleanup remains a live acceptance blocker. Troubleshooting: retain private recovery evidence, return to the authorized administrator, and keep the course draft; do not create a certification record from self-attestation or reuse acceptance for a different digest.
+    verifications:
+      - id: progress-kind
+        type: text-evidence
+        prompt: 'What does completing this course record? Enter self-attested progress.'
+        equals: self-attested progress
+        failure_message: Course completion records self-attested progress and does not certify live acceptance.

@@ -1,0 +1,93 @@
+id: authorize-scratch-lifecycle
+title: Authorize One Isolated Scratch Lifecycle
+steps:
+  - id: request-live-authorization
+    title: Obtain a separate bounded authorization
+    instructions: |
+      Controller: Prerequisite: understand the GET-only health and compatibility results, reconcile the dedicated user/token intersection and installed permission matrix with the administrator, and have a private worksheet and approved external secret mechanism. GET-only success and reaching this lesson grant no mutation authority.
+      Controller: Obtain separate explicit authorization naming privately the scratch profile, exact source template identity and ancestry, intended storage/network targets, time window, exactly one disposable lifecycle, cleanup obligation, and independent reconciler. Production resources and existing managed environments are excluded. If the existing human administrator cannot approve that scope, stop here.
+      Controller: Resume/reinspection: after any interruption, inspect current ownership state, tasks, inventory visibility, worksheet, profile identity, user/token permissions, and remaining authorization window with the administrator before continuing. A saved lesson is not renewed approval. Never repeat start merely because a previous run did not finish.
+      Controller: This NONE-scope course displays but never executes these commands. Every command below is deliberately learner-operated in a separate Controller shell outside this course's dependency graph; this course does not load settings, resolve secrets, construct a provider, open SSH, or perform lifecycle/network operations.
+      Controller: Expected outcome: approval for one approved scratch lifecycle, with a cleanup and evidence-retention decision recorded privately. Keep profile values, VMIDs, generated names, task IDs, endpoints, fingerprints, token identity, ACL output, and every secret out of course answers and shared evidence.
+      Controller: Stop condition: an ambiguous target, collision, unresolved prior task, absent independent reconciler, or expired approval blocks live work. Troubleshooting: ask the authorized administrator to reconcile the exact scope and current inventory; do not substitute another profile, broaden roles, or create another environment.
+    verifications:
+      - id: authorization-scope
+        type: text-evidence
+        prompt: 'What does the separate authorization cover? Enter one approved scratch lifecycle.'
+        equals: one approved scratch lifecycle
+        failure_message: Approval covers only one approved scratch lifecycle with its cleanup obligation.
+  - id: prepare-isolated-state
+    title: Isolate empty state while keeping the normal configuration
+    instructions: |
+      Controller: Use a fresh separate controller shell with no existing XDG_STATE_HOME override. Keep the normal configuration root unchanged: do not change XDG_CONFIG_HOME. Confirm privately that the normal owner-only configuration still supplies the explicitly selected scratch profile in PROFILE; reject an empty or mismatched selection and keep TLS verification enabled.
+      Controller: Choose SCRATCH_STATE_PARENT as an unused absolute private directory outside the repository, separate from normal LearnLab state, shared directories, and all existing evidence. Before running these commands, inspect the chosen path and its parents privately: reject an existing target, symlink, ownership mismatch, ambiguous path, or untrusted writable parent. Do not use a filesystem root or home directory as the target.
+      Controller: # Controller: create a private isolated state root; do not change XDG_CONFIG_HOME
+      Controller: read -r SCRATCH_STATE_PARENT
+      Controller: install -d -m 700 "$SCRATCH_STATE_PARENT"
+      Controller: export XDG_STATE_HOME="$SCRATCH_STATE_PARENT/state"
+      Controller: install -d -m 700 "$XDG_STATE_HOME"
+      Controller: find "$XDG_STATE_HOME" -mindepth 1 -maxdepth 1 -print -quit
+      Controller: Expected outcome: the final find prints nothing, both new directories are owned by the current user with mode 700, and XDG_STATE_HOME resolves to that new state directory. Inspect identity, ownership, and mode privately before proceeding. If find prints anything, stop and choose a different empty directory; never erase an existing state root to make this check pass. A command error or inaccessible listing is not an empty result.
+      Controller: Set the private creation mask in this separate shell before starting LearnLab, so the lifecycle database is created owner-only:
+      Controller: umask 077
+      Controller: Confirm normal configuration selection again without printing settings or environment contents. Securely repopulate the profile's named secret environment variable through the approved external hidden mechanism, with shell tracing off; the previous health lesson cleared it. No secret enters arguments, shell history, output, SQLite, or this course.
+      Controller: Stop condition: uncertain state/config selection or permissions blocks start. Troubleshooting: resolve the selected paths and profile privately with the administrator; never repair ambiguity by deleting old state or choosing a default provider.
+    verifications:
+      - id: isolated-state-self-attestation
+        type: manual-confirmation
+        prompt: 'Self-attestation: confirm separate bounded authorization with an independent reconciler, a new empty owner-only isolated state root, unchanged normal configuration, and the intended scratch profile; submit no private details here.'
+  - id: run-one-managed-environment
+    title: Observe the current lifecycle and guest path
+    instructions: |
+      Controller: Check that approval is still active, inventory is authorized and complete, the source template and storage/network match the worksheet, and no scratch environment or unresolved task already exists. Run once, only in the isolated controller shell:
+      Controller: # Controller: only inside the separately approved window
+      Controller: learnlab start proxmox/proxmox-admin --provider "$PROFILE" --include-drafts
+      Controller: Select the ordinary first lesson and complete enough of it to observe the single managed environment, guest-agent readiness, discovered address, and ordinary guest/SSH path under the existing host-key verification workflow. Exit cleanly before any backup or destroy. Do not start a second lesson/environment or manually stop the guest; the successful acceptance should exercise normal stop during destroy.
+      Controller: Expected lifecycle call order, after the health preflight, is exactly:
+      Controller: 1. GET /cluster/nextid allocates a cluster-global VMID; it does not prove ownership or reserve a safe target by itself.
+      Controller: 2. POST /nodes/{profile_node}/qemu/{template_vmid}/clone sends newid, generated name, full=1, and configured storage; no pool parameter is sent.
+      Controller: 3. clone task wait: GET /nodes/{node}/tasks/{upid}/status repeats until stopped with exitstatus OK.
+      Controller: 4. post-clone locate: GET /cluster/resources?type=vm reconciles the new VM and generated name.
+      Controller: 5. POST /nodes/{node}/qemu/{vmid}/status/start starts that managed target.
+      Controller: 6. start task wait: GET /nodes/{node}/tasks/{upid}/status repeats until stopped with exitstatus OK.
+      Controller: 7. POST /nodes/{node}/qemu/{vmid}/agent/ping repeats until ready; this is semantically read-only despite HTTP POST.
+      Controller: 8. GET /nodes/{node}/qemu/{vmid}/agent/network-get-interfaces repeats until a usable IPv4 address appears.
+      Controller: 9. cleanup preflight locate: GET /cluster/resources?type=vm reconciles the target against recorded ownership.
+      Controller: 10. POST /nodes/{node}/qemu/{vmid}/status/stop runs if the target is running.
+      Controller: 11. stop task wait: GET /nodes/{node}/tasks/{upid}/status repeats until stopped with exitstatus OK when stop was required.
+      Controller: 12. DELETE /nodes/{node}/qemu/{vmid} requests removal of the exact reconciled target.
+      Controller: 13. delete task wait: GET /nodes/{node}/tasks/{upid}/status repeats until stopped with exitstatus OK.
+      Controller: 14. final locate: GET /cluster/resources?type=vm observes absence; independent positive reconciliation is still required.
+      Controller: The first-lesson provider checks may repeat observations from the earlier matrix; they do not replace the ordered lifecycle. If the target stopped unexpectedly and normal stop was not exercised, record that evidence gap and ask the administrator to reconcile it; do not restart or expand the one approved lifecycle to obtain a passing observation.
+      Controller: Expected outcome: one managed environment and its guest path observed, then a clean session exit, with non-secret generated name/VMID, node, template ancestry, storage artifacts, and task references kept only in the private worksheet and lifecycle ownership state. A successful clone alone is not acceptance.
+      Proxmox node: The authorized administrator requires safe denial-boundary evidence, using installed-version inspection and separately approved negative checks only where they can avoid uncertain state. Confirm that Datastore.Allocate, VM.GuestAgent.FileRead, VM.GuestAgent.FileWrite, VM.GuestAgent.FileSystemMgmt, and VM.GuestAgent.Unrestricted remain absent and unnecessary for the successful lifecycle. Treat every mapping as installed-version/live-confirmation-required. Do not invoke a destructive or guest-file operation just to seek a denial, remove cleanup rights during a live lifecycle, or add a broad privilege to make a negative check pass.
+      Proxmox node: Include safe collision/403 or equivalent denial-handling evidence only where the administrator can obtain it without uncertain resource state. Missing safe evidence or an ambiguous denial test blocks acceptance and returns to administrator review; it never invites broader rights, an unseparated token, Administrator, or PVEAdmin.
+      Controller: Stop condition: a collision, 403, timeout, malformed response, transport loss, uncertain clone/delete, or filtered inventory blocks retry, state cleanup, and ACL revocation until administrator reconciliation. In that situation, do not retry start, clone, destroy, or delete; do not follow automatic retry/cleanup advice without independently reconciled ownership. Troubleshooting: preserve all existing state and the worksheet, report only generic failure here, and have the administrator inspect exact identity, task status, effective user/token/path authority, and visibility. Never delete based only on a VMID, name, or nextid result.
+    verifications:
+      - id: scratch-lifecycle-observation-self-attestation
+        type: manual-confirmation
+        prompt: 'Self-attestation: confirm the one authorized environment and guest path were observed with a clean exit and safely reconciled denial evidence, without submitting command output or identifiers here.'
+  - id: back-up-before-destroy
+    title: Protect ownership evidence and choose the normal destroy option
+    instructions: |
+      Controller: Prerequisite: the start session exited cleanly, there is exactly one approved scratch environment, and its current generated name, VMID, node, source ancestry, profile fingerprint, and attached storage match the private worksheet and isolated ownership record. Privately inspect the closed database read-only with an approved local viewer; never paste its contents into LearnLab. Confirm the profile and secret mechanism still match, the approval covers deletion now, and all state paths remain owner-only and outside the repository.
+      Controller: Before normal learnlab destroy, make an owner-only backup of the isolated lifecycle ownership state and retain the private worksheet. Close every process using this isolated database first. SQLite uses WAL: if writers remain or a nonempty WAL/pending sidecar makes a standalone database copy ambiguous, stop and have the administrator resolve backup consistency; never discard sidecars to force a copy.
+      Controller: Verify privately that the source is a regular non-symlink database owned by you with mode 600, its resolved path is the expected isolated database, and the backup directory and destination below are unused with no symlink or ownership ambiguity. Existing recovery evidence must not be overwritten.
+      Controller: # Controller: after start exits and before destroy
+      Controller: install -d -m 700 "$SCRATCH_STATE_PARENT/backup"
+      Controller: install -m 600 "$XDG_STATE_HOME/learnlab/learnlab.db" \
+      Controller:   "$SCRATCH_STATE_PARENT/backup/learnlab.db.pre-destroy"
+      Controller: Expected outcome: both database paths are owner-only, the backup directory has mode 700, the backup remains outside the repository, and a private read-only inspection of the copy confirms the one expected ownership record matches the source and worksheet. If the source database is absent, the copy fails, or either permission/identity/consistency check is ambiguous, stop before destroy.
+      Controller: The current adapter can interpret ACL-filtered inventory that omits a real VM as absence and may then remove local ownership state, including after a final lookup. A success summary or a vanished local row is not proof of cleanup. The protected pre-destroy backup and private worksheet remain authoritative recovery evidence until independent administrator reconciliation.
+      Controller: The normal destroy command has no profile filter: it targets all recorded environments under the active state root. Inspect the isolated ownership record before using either choice below; require exactly the one approved scratch target. Keep XDG_STATE_HOME set to the verified isolated directory through destroy and cleanup reconciliation. More than one target, an unexpected profile, or an unknown identity stops destruction.
+      Controller: Choose exactly one progress policy yourself. These are alternatives, never a sequence; both require --yes under the current CLI and both delete the managed environment. --preserve-progress retains completed lessons in this isolated state; --erase-progress erases their progress. Neither option authorizes deleting the protected backup or audit evidence.
+      Controller: # Controller: alternative A, only if you choose to preserve completed progress
+      Controller: learnlab destroy --yes --preserve-progress
+      Controller: # Controller: alternative B, only if you choose to erase completed progress
+      Controller: learnlab destroy --yes --erase-progress
+      Controller: Expected outcome: the normal stop/delete task waits and final locate complete for the one approved target. Proceed to positive cleanup reconciliation even if destroy reports success. If deletion fails or its outcome is uncertain, do not retry, clean local state, or revoke ACLs; retain the protected backup, worksheet, and cleanup authority while the administrator reconciles the exact resource and task history.
+      Controller: Only after independent cleanup confirmation in the next lesson, unset XDG_STATE_HOME in this separate shell. Retain or remove the isolated directory only according to the separately approved evidence-retention decision; no directory removal command is prescribed here. The worksheet, pre-destroy backup, and completed task history follow that decision separately from course progress.
+    verifications:
+      - id: protected-destroy-self-attestation
+        type: manual-confirmation
+        prompt: 'Self-attestation: confirm verified protected ownership backup preceded the chosen normal destroy flow and all recovery evidence is retained for independent cleanup reconciliation; submit no state or identifiers here.'

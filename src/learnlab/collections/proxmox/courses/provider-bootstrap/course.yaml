@@ -9,3 +9,5 @@ lessons:
   - create-identity-roles-and-acls
   - add-named-profile
   - run-get-only-health
+  - authorize-scratch-lifecycle
+  - reconcile-and-rollback

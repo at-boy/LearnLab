@@ -1,4 +1,7 @@
+import re
 from pathlib import Path
+
+import pytest
 
 from learnlab.course_certification import CourseMaturity
 from learnlab.curriculum import CurriculumCatalog, EnvironmentScope, VerificationType
@@ -24,17 +27,9 @@ def lesson_steps(lesson_id: str):
     return next(item for item in load_course().lessons if item.id == lesson_id).steps
 
 
-def test_initial_bootstrap_slice_is_draft_and_has_no_managed_environment():
+def test_bootstrap_is_draft_and_has_no_managed_environment():
     course = load_course()
     assert course.maturity is CourseMaturity.DRAFT
-    assert [lesson.id for lesson in course.lessons] == [
-        "safety-and-private-worksheet",
-        "read-only-inventory",
-        "map-provider-authority",
-        "create-identity-roles-and-acls",
-        "add-named-profile",
-        "run-get-only-health",
-    ]
     for lesson in course.lessons:
         policy = course.effective_environment(lesson)
         assert policy.scope is EnvironmentScope.NONE
@@ -49,6 +44,19 @@ def test_initial_bootstrap_slice_is_draft_and_has_no_managed_environment():
             for step in lesson.steps
             for check in step.verifications
         )
+
+
+def test_complete_lesson_order():
+    assert [lesson.id for lesson in load_course().lessons] == [
+        "safety-and-private-worksheet",
+        "read-only-inventory",
+        "map-provider-authority",
+        "create-identity-roles-and-acls",
+        "add-named-profile",
+        "run-get-only-health",
+        "authorize-scratch-lifecycle",
+        "reconcile-and-rollback",
+    ]
 
 
 def test_inventory_is_private_read_only_and_fails_closed():
@@ -465,3 +473,184 @@ def test_authority_lessons_keep_step_and_concept_answer_contracts():
         for check in checks.values()
         if check.type is VerificationType.MANUAL_CONFIRMATION
     )
+
+
+def test_live_protocol_is_separate_isolated_and_fail_closed():
+    text = lesson_text("authorize-scratch-lifecycle")
+    for fragment in (
+        "separate explicit authorization",
+        "scratch profile",
+        "isolated",
+        "XDG",
+        "empty",
+        "proxmox/proxmox-admin",
+        '--provider "$PROFILE"',
+        "--include-drafts",
+        "owner-only backup",
+        "preserve-progress",
+        "erase-progress",
+        "filtered inventory",
+        "uncertain",
+        "do not retry",
+    ):
+        assert fragment in text
+
+
+def test_cleanup_precedes_revocation_and_keeps_recovery_evidence():
+    text = lesson_text("reconcile-and-rollback")
+    for fragment in (
+        "completed delete task",
+        "authorized refreshed inventory",
+        "attached scratch storage",
+        "source template still present",
+        "independent administrator",
+        "protected state backup",
+        "Retain",
+        "Revoke",
+        "token first",
+        "reverse order",
+        "unexpected reference",
+        "course remains draft",
+    ):
+        assert fragment in text
+
+
+@pytest.mark.parametrize(
+    ("lesson_id", "check_id", "accepted", "rejected"),
+    [
+        (
+            "safety-and-private-worksheet",
+            "course-operation-boundary",
+            "learner-operated",
+            "automated",
+        ),
+        ("read-only-inventory", "inventory-mode", "read-only inventory", "mutation"),
+        (
+            "map-provider-authority",
+            "permission-proof",
+            "installed and live",
+            "built-in role",
+        ),
+        (
+            "create-identity-roles-and-acls",
+            "token-authority",
+            "intersection",
+            "user only",
+        ),
+        (
+            "add-named-profile",
+            "secret-storage",
+            "environment-variable name",
+            "secret value",
+        ),
+        (
+            "run-get-only-health",
+            "health-proof",
+            "GET-only observation",
+            "lifecycle authorized",
+        ),
+        (
+            "authorize-scratch-lifecycle",
+            "authorization-scope",
+            "one approved scratch lifecycle",
+            "general permission",
+        ),
+        (
+            "reconcile-and-rollback",
+            "progress-kind",
+            "self-attested progress",
+            "certified",
+        ),
+    ],
+)
+def test_knowledge_checks_execute_exact_answer_contract(
+    lesson_id, check_id, accepted, rejected
+):
+    class AnswerPrompt:
+        def __init__(self, answer):
+            self.answer = answer
+
+        def ask_text(self, prompt):
+            return self.answer
+
+    from learnlab.validation import TextEvidenceValidator, ValidationContext
+
+    lesson = next(item for item in load_course().lessons if item.id == lesson_id)
+    checks = {
+        check.id: check
+        for step in lesson.steps
+        for check in step.verifications
+        if check.type is VerificationType.TEXT_EVIDENCE
+    }
+    assert set(checks) == {check_id}
+    for answer, expected in (
+        (accepted, True),
+        (rejected, False),
+        ("", False),
+        ("unrelated", False),
+    ):
+        result = TextEvidenceValidator().validate(
+            ValidationContext(prompt=AnswerPrompt(answer)), checks[check_id]
+        )
+        assert result.passed is expected
+
+
+def test_course_has_no_unfinished_or_live_deployment_values():
+    text = all_course_text()
+    for forbidden in (
+        "T" + "ODO",
+        "T" + "BD",
+        "192.168.",
+        "pve02",
+        "learnlab@pve",
+        "!provider",
+        "vm-103",
+        "local-lvm",
+        "local-ssd",
+    ):
+        assert forbidden not in text
+    assert not re.search(r"https?://(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?", text)
+    assert not re.search(
+        r"(?i)\b(?:vmid|template_vmid)\s*(?:=|:)\s*[1-9]\d{2,8}\b", text
+    )
+
+
+def test_lifecycle_and_cleanup_lessons_keep_step_contracts():
+    expected_steps = {
+        "authorize-scratch-lifecycle": [
+            "request-live-authorization",
+            "prepare-isolated-state",
+            "run-one-managed-environment",
+            "back-up-before-destroy",
+        ],
+        "reconcile-and-rollback": [
+            "prove-positive-cleanup",
+            "obtain-independent-confirmation",
+            "choose-retain-or-revoke",
+            "separate-progress-from-certification",
+        ],
+    }
+    for lesson_id, step_ids in expected_steps.items():
+        assert [step.id for step in lesson_steps(lesson_id)] == step_ids
+
+
+def test_scratch_protocol_preserves_lifecycle_request_order():
+    text = lesson_text("authorize-scratch-lifecycle")
+    operations = (
+        "GET /cluster/nextid",
+        "POST /nodes/{profile_node}/qemu/{template_vmid}/clone",
+        "clone task wait: GET /nodes/{node}/tasks/{upid}/status",
+        "post-clone locate: GET /cluster/resources?type=vm",
+        "POST /nodes/{node}/qemu/{vmid}/status/start",
+        "start task wait: GET /nodes/{node}/tasks/{upid}/status",
+        "POST /nodes/{node}/qemu/{vmid}/agent/ping",
+        "GET /nodes/{node}/qemu/{vmid}/agent/network-get-interfaces",
+        "cleanup preflight locate: GET /cluster/resources?type=vm",
+        "POST /nodes/{node}/qemu/{vmid}/status/stop",
+        "stop task wait: GET /nodes/{node}/tasks/{upid}/status",
+        "DELETE /nodes/{node}/qemu/{vmid}",
+        "delete task wait: GET /nodes/{node}/tasks/{upid}/status",
+        "final locate: GET /cluster/resources?type=vm",
+    )
+    positions = [text.index(operation) for operation in operations]
+    assert positions == sorted(positions)
