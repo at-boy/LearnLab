@@ -328,6 +328,14 @@ def test_health_four_gets_are_the_complete_successful_path():
     assert "The health check makes exactly four GET requests" not in text
 
 
+def test_capability_findings_are_independent_of_health_success():
+    text = lesson_text("run-get-only-health")
+    assert "Capability comparison is independent of health success" in text
+    assert "health failures can coexist with capability findings" in text
+    assert "does not prove guest execution or mutation" in text
+    assert "only when health permits" not in text
+
+
 def test_profile_and_health_lessons_keep_step_and_concept_answer_contracts():
     expected_steps = {
         "add-named-profile": [
