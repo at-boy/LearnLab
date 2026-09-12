@@ -1,0 +1,84 @@
+id: map-provider-authority
+title: Map Provider Authority
+steps:
+  - id: map-health-surface
+    title: Trace health and lifecycle requests in code order
+    instructions: |
+      Controller: Prerequisite: complete read-only inventory, confirm the authorized administrator and private worksheet, and have the installed PVE help available. This lesson designs authority without performing requests or changing ACLs.
+      Controller: Resume/reinspection: after any interruption, refresh authorized inventory and compare the installed version and current LearnLab provider/lifecycle source with this request map. Stop on drift, denied or filtered results, collisions, or uncertain ownership.
+      Controller: The following is the code-derived request order for health, then a new disposable lifecycle and cleanup. These are API descriptions, not commands to run. LearnLab only displays them in this NONE-scope course.
+      Controller: Health 1: GET /version observes API reachability and version only.
+      Controller: Health 2: GET /nodes checks configured node visibility; a missing node may be permission-filtered.
+      Controller: Health 3: GET /cluster/resources?type=vm matches the configured source template VMID, name, node, and template flag.
+      Controller: Health 4: GET /nodes/{node}/qemu/{template_vmid}/config inspects primary boot disk storage and the net0 bridge. Storage and network matches are inferred from template configuration, not direct ACL queries or proof of use rights.
+      Controller: Lifecycle 1: GET /cluster/nextid returns a cluster-global VMID candidate; it is neither an ownership proof nor permission to overwrite an existing resource.
+      Controller: Lifecycle 2: POST /nodes/{profile_node}/qemu/{template_vmid}/clone supplies newid, generated name, full=1, and configured storage. There is no pool parameter, no network override, and no template-conversion operation.
+      Controller: Lifecycle 3, clone task wait: GET /nodes/{node}/tasks/{upid}/status repeats on the profile node until the clone task stops with successful exit status.
+      Controller: Lifecycle 4, post-clone locate: GET /cluster/resources?type=vm finds the new VM and compares its generated name with recorded ownership; subsequent calls use the located node.
+      Controller: Lifecycle 5: POST /nodes/{node}/qemu/{vmid}/status/start requests startup.
+      Controller: Lifecycle 6, start task wait: GET /nodes/{node}/tasks/{upid}/status must complete successfully before address discovery.
+      Controller: Lifecycle 7: POST /nodes/{node}/qemu/{vmid}/agent/ping repeats until the guest agent responds. This POST is semantically read-only; HTTP method alone does not define guest mutation or required authority.
+      Controller: Lifecycle 8: GET /nodes/{node}/qemu/{vmid}/agent/network-get-interfaces repeats until the adapter finds a non-loopback IPv4 address. An address observation does not prove guest SSH readiness or the intended route.
+      Controller: Cleanup 1, cleanup preflight locate: GET /cluster/resources?type=vm reconciles the target generated name with the ownership record after provider fingerprint verification.
+      Controller: Cleanup 2: POST /nodes/{node}/qemu/{vmid}/status/stop occurs only when the located VM is running.
+      Controller: Cleanup 3, stop task wait: GET /nodes/{node}/tasks/{upid}/status must succeed if stop was requested; an already stopped VM skips these two stop operations.
+      Controller: Cleanup 4: DELETE /nodes/{node}/qemu/{vmid} requests removal of the owned target.
+      Controller: Cleanup 5, delete task wait: GET /nodes/{node}/tasks/{upid}/status must finish successfully.
+      Controller: Cleanup 6, final locate: GET /cluster/resources?type=vm checks for a remaining row. Missing or filtered output alone cannot independently prove absence. The adapter can remove its local ownership record when a filtered preflight or final lookup omits the target; preserve the private worksheet and a protected pre-destroy state backup for administrator reconciliation.
+      Controller: The four curriculum check IDs are separate observations: api-reachable repeats only the version request; template-visible repeats the resource-list template identity comparison. Neither requires a managed environment. vm-running requires one, looks up its VMID, checks its expected name when recorded and running status, but does not compare the returned node with the recorded node. guest-agent-ready requires a managed environment and uses the semantically read-only POST ping. None of these checks is executed by this bootstrap course.
+      Controller: Expected outcome: distinguish the four GET-only health requests from next-ID, clone, task polling, power, agent queries, and deletion. Health success and the existing mutation-permission warning do not prove scoped mutation rights or authorize a live lifecycle.
+      Controller: Troubleshooting: a source mismatch, 403, filtered inventory, malformed response, timeout, or transport loss requires exact administrator reconciliation. Do not retry an uncertain clone/delete or infer absence from one missing row. Keep live acceptance separately authorized.
+    verifications:
+      - id: request-map-self-attestation
+        type: manual-confirmation
+        prompt: 'Self-attestation: confirm that you reviewed the request map and its health and cleanup limits without running requests or copying deployment values into LearnLab.'
+  - id: separate-actors
+    title: Separate human, validation, and runtime authority
+    instructions: |
+      Controller: The already-authorized bootstrap administrator inspects installed privileges, creates the dedicated access objects, confirms cleanup independently, and performs optional rollback. Access-control administration remains human authority; do not elevate an unqualified learner or give that authority to the runtime identity.
+      Controller: The human template builder maintains the selected source template and its storage through the separate template workflow. Template creation/conversion and its storage permissions are not part of the LearnLab runtime role.
+      Controller: A validation-only caller needs only installed-confirmed reading of the API, configured node, source template identity, and template config. It receives no allocation, clone, power, guest-agent, or delete authority by default. Passing health does not prove any of those rights.
+      Controller: The LearnLab runtime user must be a dedicated non-human user with a privilege-separated token. Give both only the intended resource grants. Effective token authority is the intersection of user permissions and token permissions: a user grant alone does not grant the separated token access, and a token ACL cannot exceed its user.
+      Controller: Expected outcome: the private worksheet names each actor and their separate responsibilities, without placing deployment identifiers in LearnLab answers. A built-in role name never proves least privilege.
+      Controller: Stop condition and troubleshooting: if responsibilities overlap ambiguously or effective authority is unknown, stop and have the authorized administrator separate the grants before creation. Never borrow a human administrator token for runtime use.
+    verifications:
+      - id: actor-separation-self-attestation
+        type: manual-confirmation
+        prompt: 'Self-attestation: confirm that the private actor plan separates administrator, template-builder, validation-only, and runtime responsibilities without entering identities here.'
+  - id: map-resource-scopes
+    title: Match each resource scope to provisional authority
+    instructions: |
+      Controller: Build a private resource matrix from the request order above. Each row below is a candidate mapping, never a finished privilege recipe. Inspect installed CLI help, role definitions, and API permission metadata before creation; then prove each selected mapping during separately authorized live acceptance, including safe negative tests for omitted rights.
+      Controller: API root/version | authenticated API access; no additional privilege asserted | installed-version/live-confirmation-required: prove reachability on the installed release.
+      Controller: Configured node visibility | Sys.Audit candidate at the exact node scope | installed-version/live-confirmation-required: unproven; own visibility and built-in auditor behavior need isolation testing. Filtered results are a stop condition.
+      Controller: Source template identity/config and managed target VM visibility | VM.Audit candidate on the source template and inherited target paths | installed-version/live-confirmation-required: prove exact template visibility and newly created target visibility using the separated token.
+      Controller: Source template clone | VM.Clone and normally VM.Audit candidates at the exact source-template path | installed-version/live-confirmation-required: prove a full clone without unrelated source configuration rights.
+      Controller: Global next-ID | installed-specific audit/allocation authority, minimal privilege not named | installed-version/live-confirmation-required: unproven; inspect and isolate the endpoint requirement before claiming sufficiency.
+      Controller: New target VM allocation | VM.Allocate candidate inherited from a propagated ACL at /vms | installed-version/live-confirmation-required: prove creation without unrelated VM configuration rights; the target-specific path does not exist before allocation.
+      Controller: Target datastore full-copy use | Datastore.AllocateSpace and Datastore.Audit candidates at the configured storage leaf | installed-version/live-confirmation-required: prove allocation and cleanup of full-copy disks; do not add datastore administration or human template-builder rights.
+      Controller: Configured bridge/network use | SDN.Use and, only if visibility requires it, SDN.Audit candidates at the exact installed bridge/SDN ACL path | installed-version/live-confirmation-required: local path and minimal privilege set need installed inspection and live proof; template bridge matching alone is insufficient.
+      Controller: Task visibility | own-task access and possibly Sys.Audit at the relevant node scope | installed-version/live-confirmation-required: unproven; confirm the separated token can read clone, start, stop, and delete tasks it creates before adding node audit authority.
+      Controller: Target start/stop lifecycle | VM.PowerMgmt candidate inherited from /vms | installed-version/live-confirmation-required: prove both task completion paths with the same separated token.
+      Controller: Guest agent query on a running target | likely VM.GuestAgent.Audit candidate on the target | installed-version/live-confirmation-required: unproven; isolate ping and network-interface queries on the installed version.
+      Controller: Target delete lifecycle | VM.Allocate candidate inherited from /vms plus any proven installed storage-cleanup requirement | installed-version/live-confirmation-required: prove deletion, task success, and independent positive cleanup; clone success does not prove delete rights.
+      Controller: Do not add VM.GuestAgent.FileRead, VM.GuestAgent.FileWrite, VM.GuestAgent.FileSystemMgmt, or VM.GuestAgent.Unrestricted without evidence. Console and monitor rights are also excluded without evidence; the current request surface does not request those actions. Do not assign broad VM configuration rights to make a candidate mapping pass.
+      Controller: Expected outcome: separate roles for source clone, target lifecycle, storage leaf, network leaf, and only proven node/task audit needs. Exact local role names and paths remain private. Every unresolved mapping stays a live blocker, even if a role can be created successfully.
+      Controller: Stop condition and troubleshooting: when metadata, role definition, effective permissions, and expected scope disagree, stop and reconcile the exact actor/path/request. An unproven mapping cannot be promoted to a proven minimum by documentation, offline tests, or course progress.
+    verifications:
+      - id: permission-proof
+        type: text-evidence
+        prompt: 'What two kinds of confirmation do candidate permission mappings require? Enter installed and live.'
+        equals: installed and live
+        failure_message: Candidate permission mappings require installed and live confirmation.
+  - id: accept-current-vms-limit
+    title: Acknowledge the propagated VM authority limit
+    instructions: |
+      Controller: The adapter requests a cluster-global VMID and sends no pool in its clone request. The target VM has no existing ACL path before creation, so the current design requires installed-confirmed allocation and target lifecycle grants inherited from a propagated ACL at /vms. A non-propagating source-template grant is insufficient.
+      Controller: This authority is broader than a pool-scoped design and can affect more VM paths than the disposable target. A generated name, isolated local state, or scratch profile does not constrain Proxmox authorization. Accept this limit explicitly with the administrator before creating grants; if unacceptable, stop this bootstrap. Pool support and VMID reservation require a separate provider design.
+      Controller: Mitigate with the dedicated user and separated token, narrow custom roles, source-template-specific clone scope, storage and network leaf ACLs, effective-permission review, and optional revocation only after positive cleanup. Do not claim these measures remove the propagated /vms exposure.
+      Controller: Expected outcome: the private worksheet records the accepted propagation scope and the people responsible for cleanup. No live action is authorized by this lesson or its confirmation.
+      Controller: Stop condition and troubleshooting: unexpected inherited authority or unwillingness to accept broader VM scope blocks creation. Do not silently remove propagation and declare the provider supported; bring the limitation to the administrator for a separate design decision.
+    verifications:
+      - id: vms-limit-self-attestation
+        type: manual-confirmation
+        prompt: 'Self-attestation: confirm that you and the authorized administrator explicitly accepted the current propagated /vms limitation privately; no live lifecycle is authorized by this answer.'

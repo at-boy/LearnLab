@@ -5,3 +5,5 @@ environment:
 lessons:
   - safety-and-private-worksheet
   - read-only-inventory
+  - map-provider-authority
+  - create-identity-roles-and-acls
