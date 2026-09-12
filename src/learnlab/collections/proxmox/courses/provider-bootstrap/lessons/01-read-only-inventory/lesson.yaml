@@ -1,0 +1,42 @@
+id: read-only-inventory
+title: Read-Only Inventory
+steps:
+  - id: inspect-installed-version
+    title: Inspect installed PVE guidance before examples
+    instructions: |
+      Proxmox node: Inspect the installed PVE version, installed command help, and installed privilege names before using any command shape or example.
+      Proxmox node: Use only read-only inspection for this lesson; LearnLab does not execute a provider, network, SSH, or infrastructure call for you.
+      Proxmox node: Expected outcome: the private worksheet identifies the installed PVE version and the command help that governs later administrator-run work.
+      Proxmox node: Stop condition: stop if installed help is unavailable, a query fails, access is denied, or the result is incomplete or filtered.
+      Proxmox node: Troubleshooting: ask the authorized administrator to clarify visibility; never broaden permission, create an object, or delete an object to diagnose a denied query.
+    verifications:
+      - id: installed-guidance-self-attestation
+        type: manual-confirmation
+        prompt: 'Self-attestation: confirm that you inspected installed PVE version, command help, and privilege guidance without copying output into LearnLab.'
+  - id: inventory-resources
+    title: Inventory resource identities and collisions
+    instructions: |
+      Proxmox node: Use read-only inventory to inspect the cluster, intended node, source template, storage, and network.
+      Proxmox node: Confirm the source template by multiple identity attributes, not by VMID or name alone, and record only the permitted non-secret identity details in the private worksheet.
+      Proxmox node: Check every proposed name and scratch target for a collision, duplicate identity, or unexpected existing object before any later action.
+      Proxmox node: Expected outcome: the intended source template and candidate scratch target are uniquely identified without changing any resource.
+      Proxmox node: Stop condition: every failed query, 403, incomplete or filtered list, collision, duplicate identity, or unexpected existing object means stop.
+      Proxmox node: Troubleshooting: do not create over, overwrite, or delete a conflicting object; preserve the worksheet and request administrator reconciliation.
+    verifications:
+      - id: inventory-mode
+        type: text-evidence
+        prompt: 'What is the required mode for this lesson? Enter read-only inventory.'
+        equals: read-only inventory
+        failure_message: This lesson requires read-only inventory.
+  - id: inventory-access-objects
+    title: Inventory existing access objects
+    instructions: |
+      Proxmox node: Use read-only inventory to inspect current users, tokens, roles, and ACLs before designing any later identity or access change.
+      Proxmox node: Compare proposed user and token identities with the inventory and treat any duplicate identity, unexpected membership, inheritance, or ACL as a stop condition.
+      Proxmox node: Expected outcome: the private worksheet has a non-secret baseline for users, tokens, roles, and ACLs without retaining a copied full listing.
+      Proxmox node: Stop condition: a failed query, 403, incomplete or filtered list, collision, duplicate identity, or unexpected existing object is never permission to create over or delete it.
+      Proxmox node: Troubleshooting: preserve the private worksheet and have an authorized administrator reconcile visibility or ownership before continuing.
+    verifications:
+      - id: access-inventory-self-attestation
+        type: manual-confirmation
+        prompt: 'Self-attestation: confirm that users, tokens, roles, and ACLs were inspected read-only without entering command output or deployment values into LearnLab.'

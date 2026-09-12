@@ -1,0 +1,7 @@
+id: provider-bootstrap
+title: Bootstrap a Proxmox Provider for LearnLab
+environment:
+  scope: none
+lessons:
+  - safety-and-private-worksheet
+  - read-only-inventory

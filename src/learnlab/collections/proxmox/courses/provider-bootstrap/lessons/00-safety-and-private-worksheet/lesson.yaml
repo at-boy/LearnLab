@@ -1,0 +1,46 @@
+id: safety-and-private-worksheet
+title: Safety and Private Worksheet
+steps:
+  - id: establish-boundary
+    title: Establish the learner-operated boundary
+    instructions: |
+      Controller: LearnLab only displays instructions and records progress; you are responsible for every command run outside this session.
+      Controller: Confirm that an existing human administrator has authority before proceeding; LearnLab does not provide or verify that authority.
+      Controller: Identify and keep separate the administrator authority, the dedicated runtime identity to be created later, and one scratch lifecycle authorized for destruction.
+      Controller: Keep production resources and existing LearnLab-managed environments out of scope for this course.
+      Controller: Expected outcome: you can name the three boundaries without entering command output or any deployment value into LearnLab.
+      Controller: Stop condition: stop and seek the administrator if authority, ownership, or the scratch boundary is ambiguous.
+      Controller: Troubleshooting: if a proposed target overlaps a production or existing managed environment, choose no replacement here and stop for owner review.
+    verifications:
+      - id: course-operation-boundary
+        type: text-evidence
+        prompt: 'Who operates the commands outside this course? Enter learner-operated.'
+        equals: learner-operated
+        failure_message: LearnLab provides guidance only; the learner operates the commands.
+  - id: prepare-private-worksheet
+    title: Prepare an owner-only private worksheet
+    instructions: |
+      Controller: Create an owner-only private worksheet outside the repository before recording any local reconciliation information.
+      Controller: Record only non-secret local identifiers needed for reconciliation: installed PVE version, intended node, source template, storage, network, placeholder-to-local role mapping, intended user and token identity, ACL paths and propagation flags, scratch ownership observations, and rollback items.
+      Controller: Record a full identity for every resource rather than a VMID or name alone.
+      Controller: The worksheet remains outside the repository and contains no token secret, password, private key, authorization header, or raw secret-manager output. No worksheet value or inventory output is pasted into LearnLab.
+      Controller: Expected outcome: the worksheet is private, external, non-secret, and sufficient to re-identify intended resources.
+      Controller: Stop condition: stop if a secret or shared deployment value would be recorded, or if the worksheet cannot be owner-only.
+      Controller: Troubleshooting: remove any inappropriate copied value from the worksheet through the approved local handling process before continuing; do not paste it into LearnLab.
+    verifications:
+      - id: private-worksheet-self-attestation
+        type: manual-confirmation
+        prompt: 'Self-attestation: confirm the owner-only worksheet is outside the repository and contains no secrets, command output, or deployment values.'
+  - id: confirm-resume-rules
+    title: Reinspect before resuming
+    instructions: |
+      Controller: After any interruption, save and exit only after noting the last known state in the private worksheet.
+      Controller: Before resuming, reinspect the private worksheet and the real administrator, source template, node, storage, network, access-object, and scratch-target state yourself.
+      Controller: Treat saved progress and manual confirmations as historical self-attestations, not proof that infrastructure state still exists or is unchanged.
+      Controller: Expected outcome: resuming begins with a fresh reinspection rather than an assumption based on a VMID or name alone.
+      Controller: Stop condition: stop if reinspection is incomplete, filtered, denied, or inconsistent with the worksheet.
+      Controller: Troubleshooting: if identity or ownership changed during the interruption, preserve the worksheet and ask the administrator to reconcile it before continuing.
+    verifications:
+      - id: resume-reinspection-self-attestation
+        type: manual-confirmation
+        prompt: 'Self-attestation: confirm that you will reinspect actual infrastructure and the private worksheet after every interruption.'
