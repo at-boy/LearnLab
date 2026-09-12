@@ -30,7 +30,7 @@ steps:
     verifications:
       - id: private-worksheet-self-attestation
         type: manual-confirmation
-        prompt: 'Self-attestation: confirm the owner-only worksheet is outside the repository and contains no secrets, command output, or deployment values.'
+        prompt: 'Self-attestation: confirm the owner-only worksheet contains no secrets and that private worksheet values or inventory output were not pasted into LearnLab.'
   - id: confirm-resume-rules
     title: Reinspect before resuming
     instructions: |

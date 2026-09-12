@@ -4,6 +4,8 @@ steps:
   - id: inspect-installed-version
     title: Inspect installed PVE guidance before examples
     instructions: |
+      Proxmox node: Prerequisite: before beginning this lesson, confirm the private worksheet and existing human administrator authority are current and sufficient for read-only inventory.
+      Proxmox node: Resume/reinspection: After any interruption, reinspect the private worksheet and authorized cluster, node, source template, storage, network, users, tokens, roles, and ACLs before relying on a previous list.
       Proxmox node: Inspect the installed PVE version, installed command help, and installed privilege names before using any command shape or example.
       Proxmox node: Use only read-only inspection for this lesson; LearnLab does not execute a provider, network, SSH, or infrastructure call for you.
       Proxmox node: Expected outcome: the private worksheet identifies the installed PVE version and the command help that governs later administrator-run work.
