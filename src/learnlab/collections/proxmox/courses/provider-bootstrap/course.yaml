@@ -7,3 +7,5 @@ lessons:
   - read-only-inventory
   - map-provider-authority
   - create-identity-roles-and-acls
+  - add-named-profile
+  - run-get-only-health

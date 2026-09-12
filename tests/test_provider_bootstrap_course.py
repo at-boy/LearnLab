@@ -32,6 +32,8 @@ def test_initial_bootstrap_slice_is_draft_and_has_no_managed_environment():
         "read-only-inventory",
         "map-provider-authority",
         "create-identity-roles-and-acls",
+        "add-named-profile",
+        "run-get-only-health",
     ]
     for lesson in course.lessons:
         policy = course.effective_environment(lesson)
@@ -224,6 +226,84 @@ def test_acl_setup_forbids_broad_fallback_and_requires_reconciliation():
         assert fragment in text
     assert "Do not assign Administrator" in text
     assert "Do not add Datastore.Allocate" in text
+
+
+def test_named_profile_is_additive_secret_free_and_tls_verified():
+    text = lesson_text("add-named-profile")
+    for field in (
+        "type",
+        "api_url",
+        "token_id",
+        "token_secret_env",
+        "template_vmid",
+        "template_name",
+        "node",
+        "storage",
+        "network",
+        "ssh_user",
+        "ssh_identity_file",
+        "tls_verify",
+        "template_capabilities",
+    ):
+        assert field in text
+    for fragment in (
+        "preserve every existing provider",
+        "preserve existing default_provider",
+        "external hidden shell read",
+        "LearnLab resolves only the environment variable",
+        "tls_verify = true",
+        "shell tracing",
+        "unset",
+    ):
+        assert fragment in text
+
+
+def test_health_lesson_distinguishes_observation_from_mutation_proof():
+    text = lesson_text("run-get-only-health")
+    assert 'learnlab provider test "$PROFILE"' in text
+    assert 'learnlab validate "$COURSE" --provider "$PROFILE"' in text
+    for fragment in (
+        "four GET requests",
+        "necessary but not sufficient",
+        "storage",
+        "network",
+        "inferred",
+        "403",
+        "do not broaden",
+        "does not certify",
+    ):
+        assert fragment in text
+
+
+def test_profile_and_health_lessons_keep_step_and_concept_answer_contracts():
+    expected_steps = {
+        "add-named-profile": [
+            "back-up-config",
+            "add-unused-profile",
+            "supply-secret-externally",
+            "inspect-without-copying",
+        ],
+        "run-get-only-health": [
+            "select-profile",
+            "run-provider-health",
+            "run-provider-aware-validation",
+            "interpret-failures",
+        ],
+    }
+    for lesson_id, step_ids in expected_steps.items():
+        assert [step.id for step in lesson_steps(lesson_id)] == step_ids
+    checks = {
+        check.id: check
+        for lesson_id in expected_steps
+        for step in lesson_steps(lesson_id)
+        for check in step.verifications
+    }
+    for check_id, answer in (
+        ("secret-storage", "environment-variable name"),
+        ("health-proof", "GET-only observation"),
+    ):
+        assert checks[check_id].type is VerificationType.TEXT_EVIDENCE
+        assert checks[check_id].equals == answer
 
 
 def test_provider_authority_names_every_current_request_and_limit():

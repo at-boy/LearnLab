@@ -1,0 +1,77 @@
+id: add-named-profile
+title: Add a Secret-Safe Named Profile
+steps:
+  - id: back-up-config
+    title: Protect the existing configuration
+    instructions: |
+      Controller: Prerequisite: the dedicated user, privilege-separated token, roles, ACLs, and effective user/token intersection have been reconciled against the private worksheet. Profile entry does not prove that authority is sufficient.
+      Controller: Locate the LearnLab XDG configuration and edit it locally. Before any edit, create a separate owner-only backup and verify that the backup and configuration are readable only by their owner. Keep both outside the repository, progress store, screenshots, snapshots, tests, and evidence.
+      Controller: Inventory every existing provider table and the current default_provider before editing. The change must preserve every existing provider and preserve existing default_provider exactly.
+      Controller: Only a genuinely new configuration with no default_provider may receive a new default. Even then, later commands explicitly select the new profile rather than relying on the default.
+      Controller: Expected outcome: an owner-only recoverable before-state and a written private list of the configuration entries that must remain unchanged.
+      Controller: Stop condition: stop if the configuration is unreadable, its ownership or permissions are unsafe, the backup is incomplete, or existing providers/defaults cannot be identified without ambiguity.
+      Controller: Troubleshooting: restore only from the verified owner-only backup after reconciling why the edit failed; do not replace or reconstruct unrelated provider tables from memory.
+    verifications:
+      - id: profile-backup-self-attestation
+        type: manual-confirmation
+        prompt: 'Self-attestation: confirm that you created and verified an owner-only backup and identified every existing provider and default without entering configuration values here.'
+  - id: add-unused-profile
+    title: Add one unused named profile
+    instructions: |
+      Controller: Choose an unused, non-conflicting provider table name and verify it is absent before editing. A duplicate or ambiguous table name is a stop condition, not permission to replace, merge, or adopt it.
+      Controller: Add exactly one table using visibly synthetic metavariables until each value has been resolved privately for the intended deployment. This is a generic field map, not a deployable profile:
+      Controller: [providers."CHOSEN_PROFILE"]
+      Controller: type = "proxmox"
+      Controller: api_url = "HTTPS_API_ORIGIN"
+      Controller: token_id = "DEDICATED_USER_AND_TOKEN_ID"
+      Controller: token_secret_env = "UNIQUE_SECRET_VARIABLE_NAME"
+      Controller: template_vmid = POSITIVE_TEMPLATE_ID
+      Controller: template_name = "EXACT_TEMPLATE_NAME"
+      Controller: node = "TEMPLATE_NODE"
+      Controller: storage = "TARGET_STORAGE"
+      Controller: network = "TARGET_BRIDGE"
+      Controller: ssh_user = "GUEST_LEARNER_USER"
+      Controller: ssh_identity_file = "CONTROLLER_PRIVATE_KEY_PATH"
+      Controller: tls_verify = true
+      Controller: template_capabilities = ["VERIFIED_CAPABILITY_ID"]
+      Controller: Field meaning: type selects the Proxmox adapter; api_url is the HTTPS API origin; token_id is the dedicated user-and-token identifier; token_secret_env is only the unique environment-variable name that will hold the secret outside the file.
+      Controller: Field meaning: template_vmid is the positive numeric identity of the exact source template; template_name is its exact expected name; node is the configured template node; storage is the target datastore; network is the target bridge.
+      Controller: Field meaning: ssh_user is the learner account expected inside disposable guests; ssh_identity_file is the controller-side private-key path; tls_verify keeps certificate verification enabled; optional template_capabilities lists only capability IDs verified for that exact template.
+      Controller: Keep tls_verify = true. Repair certificate trust, CA configuration, hostname matching, or clock problems rather than bypassing verification.
+      Controller: Preserve all unrelated keys, preserve every existing provider, and preserve existing default_provider. Select this profile explicitly in every later command.
+      Controller: Expected outcome: one new, uniquely named, schema-complete profile with no real value copied into LearnLab and no existing entry changed.
+      Controller: Stop condition: stop on a duplicate name, unresolved metavariable, conflicting template identity, unexpected diff, or any pressure to disable TLS verification.
+      Controller: Troubleshooting: compare the edit field by field with the owner-only backup and private worksheet; resolve the exact mismatch instead of deleting or overwriting another profile.
+    verifications:
+      - id: profile-entry-self-attestation
+        type: manual-confirmation
+        prompt: 'Self-attestation: confirm that one unused named profile was added while preserving all existing providers and the existing default, without entering profile values here.'
+  - id: supply-secret-externally
+    title: Supply the token secret outside LearnLab
+    instructions: |
+      Controller: token_secret_env stores only an environment-variable name, never the token secret. The token's secret value remains in the approved external hidden mechanism established during token creation.
+      Controller: Before LearnLab starts, use an external hidden shell read or an approved secret manager to populate that exact named environment variable. Keep shell tracing and terminal recording off. LearnLab resolves only the environment variable; LearnLab has no token-secret stdin or interactive-prompt resolver.
+      Controller: Never place the secret in TOML, command arguments, shell history, ordinary output, repository files, curriculum YAML, SQLite, progress, logs, exceptions, screenshots, snapshots, tests, approval transcripts, or evidence. Never paste it into a LearnLab answer.
+      Controller: Keep the variable scoped to the intended controller process and unset the selected variable after use. Closing the intended process must not leave the secret in an unrelated long-lived shell or environment.
+      Controller: Expected outcome: LearnLab can resolve the secret only from the named process environment while the configuration, worksheet, progress, and evidence remain secret-free.
+      Controller: Stop condition: stop if the secret was displayed, logged, persisted, inherited too broadly, or cannot be supplied without exposure. Treat a lost or exposed token secret as an administrator credential incident; do not continue to health validation.
+      Controller: Troubleshooting: have the authorized administrator rotate or revoke an exposed token using the private rollback record, then re-establish the approved hidden mechanism. Do not copy the old value into another channel.
+    verifications:
+      - id: secret-storage
+        type: text-evidence
+        prompt: 'What does token_secret_env store? Enter environment-variable name.'
+        equals: environment-variable name
+        failure_message: token_secret_env stores the environment-variable name, not the secret value.
+  - id: inspect-without-copying
+    title: Inspect structure without copying sensitive values
+    instructions: |
+      Controller: Re-open the local configuration and compare its structure privately with the schema and backup. Confirm the selected table name is unique, every required field is present, the template identity fields agree with the private worksheet, tls_verify remains true, and unrelated providers/defaults are byte-for-byte unchanged where practical.
+      Controller: Inspect only locally; do not print the table, environment, secret variable, endpoint, identifiers, paths, or diff into LearnLab, progress, logs, screenshots, snapshots, tests, or evidence. Record only a short private pass/fail observation.
+      Controller: Confirm that subsequent commands will name the new profile explicitly and that no live lifecycle has been authorized by adding or inspecting it.
+      Controller: Expected outcome: a privately inspected additive profile ready for the separate GET-only checks, with the secret still external and TLS verification enabled.
+      Controller: Stop condition: any missing field, unexpected changed provider/default, exposed value, or unresolved identity blocks validation.
+      Controller: Troubleshooting: restore the owner-only backup if necessary, reconcile the intended single-table change, and repeat the private structural inspection without broadening scope.
+    verifications:
+      - id: profile-inspection-self-attestation
+        type: manual-confirmation
+        prompt: 'Self-attestation: confirm that you privately inspected the additive profile structure, preserved existing configuration, and copied no values or secret material here.'
