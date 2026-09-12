@@ -96,15 +96,6 @@ def test_introductory_lessons_keep_stable_steps_checks_and_execution_locations()
             for line in step.instructions.splitlines()
             if line
         )
-        assert all(
-            not {check.type for check in step.verifications}
-            >= {
-                VerificationType.TEXT_EVIDENCE,
-                VerificationType.MANUAL_CONFIRMATION,
-            }
-            for step in steps
-        )
-
     checks = {
         check.id: check
         for lesson_id in expected_steps
@@ -113,6 +104,37 @@ def test_introductory_lessons_keep_stable_steps_checks_and_execution_locations()
     }
     assert checks["course-operation-boundary"].equals == "learner-operated"
     assert checks["inventory-mode"].equals == "read-only inventory"
+
+
+def test_introductory_verification_types_separate_answers_and_self_attestations():
+    checks = {
+        check.id: check
+        for lesson in load_course().lessons
+        for step in lesson.steps
+        for check in step.verifications
+    }
+
+    assert {
+        check_id: checks[check_id].type
+        for check_id in ("course-operation-boundary", "inventory-mode")
+    } == {
+        "course-operation-boundary": VerificationType.TEXT_EVIDENCE,
+        "inventory-mode": VerificationType.TEXT_EVIDENCE,
+    }
+    assert {
+        check_id: checks[check_id].type
+        for check_id in (
+            "private-worksheet-self-attestation",
+            "resume-reinspection-self-attestation",
+            "installed-guidance-self-attestation",
+            "access-inventory-self-attestation",
+        )
+    } == {
+        "private-worksheet-self-attestation": VerificationType.MANUAL_CONFIRMATION,
+        "resume-reinspection-self-attestation": VerificationType.MANUAL_CONFIRMATION,
+        "installed-guidance-self-attestation": VerificationType.MANUAL_CONFIRMATION,
+        "access-inventory-self-attestation": VerificationType.MANUAL_CONFIRMATION,
+    }
 
 
 def test_introductory_lessons_require_prerequisite_and_reinspection_on_resume():
