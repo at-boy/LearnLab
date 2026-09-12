@@ -275,6 +275,59 @@ def test_health_lesson_distinguishes_observation_from_mutation_proof():
         assert fragment in text
 
 
+def test_profile_and_health_lessons_reinspect_before_resume():
+    profile = lesson_text("add-named-profile")
+    health = lesson_text("run-get-only-health")
+
+    for fragment in (
+        "Resume/reinspection: after any interruption",
+        "partially edited table",
+        "owner-only backup",
+        "private absent-config before-state",
+        "do not blindly re-add",
+    ):
+        assert fragment in profile
+    for fragment in (
+        "Resume/reinspection: after any interruption",
+        "recheck the selected profile",
+        "TLS verification",
+        "effective user/token authority",
+        "securely repopulate the process secret environment",
+        "before repeating",
+    ):
+        assert fragment in health
+
+
+def test_profile_before_state_supports_existing_and_genuinely_new_configs():
+    text = lesson_text("add-named-profile")
+    for fragment in (
+        "positively verify that the configuration is absent",
+        "record the private absent-config before-state",
+        "create the configuration owner-only",
+        "genuinely new configuration",
+    ):
+        assert fragment in text
+
+    check = next(
+        check
+        for step in lesson_steps("add-named-profile")
+        for check in step.verifications
+        if check.id == "profile-backup-self-attestation"
+    )
+    assert check.type is VerificationType.MANUAL_CONFIRMATION
+    assert check.prompt is not None
+    assert "verified owner-only backup" in check.prompt
+    assert "verified absence before creation" in check.prompt
+
+
+def test_health_four_gets_are_the_complete_successful_path():
+    text = lesson_text("run-get-only-health")
+    assert "complete successful health path makes four GET requests" in text
+    assert "If GET /version fails, health returns early" in text
+    assert "a failed health run can issue fewer than four requests" in text
+    assert "The health check makes exactly four GET requests" not in text
+
+
 def test_profile_and_health_lessons_keep_step_and_concept_answer_contracts():
     expected_steps = {
         "add-named-profile": [

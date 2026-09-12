@@ -5,6 +5,7 @@ steps:
     title: Select the named profile explicitly
     instructions: |
       Controller: Prerequisite: the additive profile passed private structural inspection, TLS verification remains enabled, and the named secret environment variable was populated before LearnLab starts through the approved external hidden mechanism.
+      Controller: Resume/reinspection: after any interruption, recheck the selected profile against the owner-only configuration and private worksheet, confirm TLS verification is still enabled, reconcile effective user/token authority, and securely repopulate the process secret environment through the approved external hidden mechanism before repeating any health or validation check. Saved progress and an inherited shell are not current evidence.
       Controller: In the separate learner-operated controller shell, select the profile name without copying its value into LearnLab:
       Controller: # Controller
       Controller: read -r PROFILE
@@ -21,24 +22,25 @@ steps:
     instructions: |
       Controller: Run only the learner-operated health command shape below; this NONE-scope course does not execute it, load settings, resolve secrets, construct a provider, or make HTTP requests:
       Controller: learnlab provider test "$PROFILE"
-      Controller: The health check makes exactly four GET requests in this order: GET /version; GET /nodes; GET /cluster/resources?type=vm; and GET /nodes/{node}/qemu/{template_vmid}/config.
+      Controller: The complete successful health path makes four GET requests in this order: GET /version; GET /nodes; GET /cluster/resources?type=vm; and GET /nodes/{node}/qemu/{template_vmid}/config.
+      Controller: If GET /version fails, health returns early without attempting the later three requests, so a failed health run can issue fewer than four requests. Later request failures are also reported according to the current health-check control flow; do not infer unattempted observations.
       Controller: GET /version observes API reachability/version. GET /nodes observes whether the configured node is visible. GET /cluster/resources?type=vm matches the configured template VMID, name, node, and template flag. GET /nodes/{node}/qemu/{template_vmid}/config inspects the template disk and net0 bridge.
       Controller: The storage and network results are inferred from the template configuration. They are not direct storage/network authorization queries and do not prove allocation, bridge-use, clone, power, guest-agent, task, stop, or delete rights.
       Controller: A PASS is necessary but not sufficient for the later runtime lifecycle. It proves GET-only observation of the configured health surface, authorizes no mutation or lifecycle, and does not certify the course, template, profile, token, ACL design, or provider.
-      Controller: Expected outcome: a private pass/fail observation for all four requests and a clear understanding of their limits; do not copy endpoints containing resolved values, response bodies, identifiers, or secret-adjacent output into LearnLab.
+      Controller: Expected outcome: a private pass/fail observation for the requests actually attempted and a clear understanding of the complete successful path and its limits; do not copy endpoints containing resolved values, response bodies, identifiers, or secret-adjacent output into LearnLab.
       Controller: Stop condition: any 403, transport/TLS failure, missing node/template, mismatch, malformed response, or filtered/incomplete result blocks further validation and every lifecycle action.
       Controller: Troubleshooting: return to exact user/token/path permission, visibility, identity, TLS, and clock reconciliation with the administrator; do not broaden roles, replace a profile, disable TLS, or infer absence from a missing object.
     verifications:
       - id: provider-health-self-attestation
         type: manual-confirmation
-        prompt: 'Self-attestation: confirm that you privately observed the four health results and treated them only as GET-only health, without submitting output or identifiers here.'
+        prompt: 'Self-attestation: confirm that you privately observed the attempted health results and treated them only as GET-only health, without submitting output or identifiers here.'
   - id: run-provider-aware-validation
     title: Run provider-aware course validation
     instructions: |
       Controller: Select the intended course identifier in the learner-operated controller shell, then run the explicitly selected provider-aware validation command:
       Controller: read -r COURSE
       Controller: learnlab validate "$COURSE" --provider "$PROFILE"
-      Controller: Provider-aware validation performs offline curriculum checks, resolves only the selected profile and its named environment secret, constructs that provider, repeats the same four-GET health check, and then compares declared course capabilities with that profile's template_capabilities.
+      Controller: Provider-aware validation performs offline curriculum checks, resolves only the selected profile and its named environment secret, constructs that provider, invokes the same health-check control flow, and then compares declared course capabilities with that profile's template_capabilities only when health permits. Its complete successful health path has the same four GETs; a failed version request returns early.
       Controller: A validation PASS is necessary but not sufficient for lifecycle use. Capability compatibility is a declaration comparison, not a clone, boot, agent, SSH, stop, deletion, cleanup, permission-minimality, or live-certification proof.
       Controller: Expected outcome: a private validation result whose GET-only and declaration limits are understood. Record no course/profile value, endpoint, identifier, response, secret, or full command output in LearnLab.
       Controller: Stop condition: any finding, 403, filtered or denied object, mismatch, or capability conflict blocks lifecycle authorization. Do not switch to a broader profile or broaden access to silence a finding.

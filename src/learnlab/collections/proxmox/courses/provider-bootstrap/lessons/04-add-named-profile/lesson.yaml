@@ -5,16 +5,18 @@ steps:
     title: Protect the existing configuration
     instructions: |
       Controller: Prerequisite: the dedicated user, privilege-separated token, roles, ACLs, and effective user/token intersection have been reconciled against the private worksheet. Profile entry does not prove that authority is sufficient.
-      Controller: Locate the LearnLab XDG configuration and edit it locally. Before any edit, create a separate owner-only backup and verify that the backup and configuration are readable only by their owner. Keep both outside the repository, progress store, screenshots, snapshots, tests, and evidence.
-      Controller: Inventory every existing provider table and the current default_provider before editing. The change must preserve every existing provider and preserve existing default_provider exactly.
+      Controller: Resume/reinspection: after any interruption, first compare the current configuration path with its recorded private before-state. Reconcile any partially edited table against the verified owner-only backup or private absent-config before-state; do not blindly re-add a table, recreate a file, or overwrite an existing provider/default.
+      Controller: Locate the LearnLab XDG configuration before editing. When it exists, verify that it is owner-only, create a separate owner-only backup, verify that backup, and inventory every existing provider table and the current default_provider. Keep the configuration and backup outside the repository, progress store, screenshots, snapshots, tests, and evidence.
+      Controller: When no configuration exists, positively verify that the configuration is absent at the expected XDG path, record the private absent-config before-state, then create the configuration owner-only before adding its first provider. An unreadable or denied path is unknown, not verified absence.
+      Controller: For an existing configuration, the change must preserve every existing provider and preserve existing default_provider exactly.
       Controller: Only a genuinely new configuration with no default_provider may receive a new default. Even then, later commands explicitly select the new profile rather than relying on the default.
-      Controller: Expected outcome: an owner-only recoverable before-state and a written private list of the configuration entries that must remain unchanged.
-      Controller: Stop condition: stop if the configuration is unreadable, its ownership or permissions are unsafe, the backup is incomplete, or existing providers/defaults cannot be identified without ambiguity.
-      Controller: Troubleshooting: restore only from the verified owner-only backup after reconciling why the edit failed; do not replace or reconstruct unrelated provider tables from memory.
+      Controller: Expected outcome: either a verified owner-only backup and private inventory for an existing configuration, or verified absence recorded privately before owner-only creation of a genuinely new configuration.
+      Controller: Stop condition: stop if an existing configuration is unreadable, its ownership or permissions are unsafe, the backup is incomplete, existing providers/defaults are ambiguous, or absence cannot be positively verified.
+      Controller: Troubleshooting: reconcile the current path with the recorded branch. Restore an existing file only from its verified owner-only backup; for a previously absent file, compare the partial file with the private absent-config before-state. Do not replace or reconstruct unrelated provider tables from memory.
     verifications:
       - id: profile-backup-self-attestation
         type: manual-confirmation
-        prompt: 'Self-attestation: confirm that you created and verified an owner-only backup and identified every existing provider and default without entering configuration values here.'
+        prompt: 'Self-attestation: confirm either a verified owner-only backup of the existing configuration or verified absence before creation of a new owner-only configuration, without entering configuration values here.'
   - id: add-unused-profile
     title: Add one unused named profile
     instructions: |
