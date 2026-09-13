@@ -546,6 +546,26 @@ def test_live_protocol_is_separate_isolated_and_fail_closed():
         assert fragment in text
 
 
+def test_scratch_fresh_shell_selects_and_reconciles_profile_before_start():
+    steps = {
+        step.id: step.instructions
+        for step in lesson_steps("authorize-scratch-lifecycle")
+    }
+    fresh_shell = steps["prepare-isolated-state"]
+    startup = steps["run-one-managed-environment"]
+    sequence = fresh_shell + "\n" + startup
+    operations = (
+        "read -r PROFILE",
+        'test -n "$PROFILE"',
+        "reconcile PROFILE privately against the exact approved scratch profile",
+        'learnlab start proxmox/proxmox-admin --provider "$PROFILE" --include-drafts',
+    )
+
+    assert "read -r PROFILE" in fresh_shell
+    positions = [sequence.index(operation) for operation in operations]
+    assert positions == sorted(positions)
+
+
 def test_cleanup_precedes_revocation_and_keeps_recovery_evidence():
     text = lesson_text("reconcile-and-rollback")
     for fragment in (

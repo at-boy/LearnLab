@@ -20,6 +20,8 @@ steps:
     title: Isolate empty state while keeping the normal configuration
     instructions: |
       Controller: Use a fresh separate controller shell with no existing XDG_STATE_HOME override. Keep the normal configuration root unchanged: do not change XDG_CONFIG_HOME. Confirm privately that the normal owner-only configuration still supplies the explicitly selected scratch profile in PROFILE; reject an empty or mismatched selection and keep TLS verification enabled.
+      Controller: # Controller: select the separately approved scratch profile in this fresh shell without printing it
+      Controller: read -r PROFILE
       Controller: Choose SCRATCH_STATE_PARENT as an unused absolute private directory outside the repository, separate from normal LearnLab state, shared directories, and all existing evidence. Before running these commands, inspect the chosen path and its parents privately: reject an existing target, symlink, ownership mismatch, ambiguous path, or untrusted writable parent. Do not use a filesystem root or home directory as the target.
       Controller: # Controller: create a private isolated state root; do not change XDG_CONFIG_HOME
       Controller: read -r SCRATCH_STATE_PARENT
@@ -41,6 +43,8 @@ steps:
     instructions: |
       Controller: Check that approval is still active, inventory is authorized and complete, the source template and storage/network match the worksheet, and no scratch environment or unresolved task already exists. Run once, only in the isolated controller shell:
       Controller: # Controller: only inside the separately approved window
+      Controller: test -n "$PROFILE" || { printf '%s\n' 'PROFILE is required.' >&2; exit 1; }
+      Controller: Before start, reconcile PROFILE privately against the exact approved scratch profile named by the separate authorization. Reject any mismatch without printing profile settings, environment contents, or secrets.
       Controller: learnlab start proxmox/proxmox-admin --provider "$PROFILE" --include-drafts
       Controller: Select the ordinary first lesson and complete enough of it to observe the single managed environment, guest-agent readiness, discovered address, and ordinary guest/SSH path under the existing host-key verification workflow. Exit cleanly before any backup or destroy. Do not start a second lesson/environment or manually stop the guest; the successful acceptance should exercise normal stop during destroy.
       Controller: Expected lifecycle call order, after the health preflight, is exactly:
