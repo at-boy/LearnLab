@@ -300,6 +300,7 @@ with (
         input='1\\n\\nlearner-operated\\n\\ny\\nq\\n',
     )
     assert started.exit_code == 0, started.output
+    assert 'Prepare an owner-only private worksheet' in started.output
     step_path = ('proxmox', 'provider-bootstrap',
                  'safety-and-private-worksheet', 'prepare-private-worksheet')
     [saved] = provider_store.verification_records(step_path)
@@ -308,7 +309,7 @@ with (
         cli.app, ['resume', path], input='1\\n\\ny\\nq\\n'
     )
     assert resumed.exit_code == 0, resumed.output
-    assert 'prepare-private-worksheet' not in resumed.output
+    assert 'Prepare an owner-only private worksheet' not in resumed.output
     assert provider_store.verification_records(step_path) == [saved]
 assert catalog.load_course(path).maturity is CourseMaturity.DRAFT
 assert root.joinpath('certifications.yaml').read_text().strip() == 'certifications: []'

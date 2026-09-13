@@ -946,6 +946,7 @@ def test_provider_bootstrap_start_save_resume_never_touches_external_dependencie
     assert started.exit_code == 0, started.output
     assert "Environment policy: none" in started.output
     assert "Progress saved." in started.output
+    assert "Prepare an owner-only private worksheet" in started.output
     step_path = (
         "proxmox",
         "provider-bootstrap",
@@ -963,7 +964,7 @@ def test_provider_bootstrap_start_save_resume_never_touches_external_dependencie
     )
     assert resumed.exit_code == 0, resumed.output
     assert "[in progress]" in resumed.output
-    assert "prepare-private-worksheet" not in resumed.output
+    assert "Prepare an owner-only private worksheet" not in resumed.output
     assert store.verification_records(step_path) == [saved]
     assert (
         catalog.load_course("proxmox/provider-bootstrap").maturity
