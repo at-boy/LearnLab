@@ -281,6 +281,20 @@ def test_named_profile_is_additive_secret_free_and_tls_verified():
         assert fragment in text
 
 
+def test_profile_edit_branches_create_new_default_and_preserve_existing_defaults():
+    steps = {step.id: step.instructions for step in lesson_steps("add-named-profile")}
+    backup_branch = steps["back-up-config"]
+    profile_example = steps["add-unused-profile"]
+    new_default = 'default_provider = "CHOSEN_PROFILE"'
+    provider_table = '[providers."CHOSEN_PROFILE"]'
+
+    assert new_default in profile_example
+    assert profile_example.index(new_default) < profile_example.index(provider_table)
+    assert "For a genuinely new configuration" in backup_branch
+    assert "For an existing configuration" in backup_branch
+    assert "preserve every existing default exactly" in backup_branch
+
+
 def test_health_lesson_distinguishes_observation_from_mutation_proof():
     text = lesson_text("run-get-only-health")
     assert 'learnlab provider test "$PROFILE"' in text
@@ -296,6 +310,27 @@ def test_health_lesson_distinguishes_observation_from_mutation_proof():
         "does not certify",
     ):
         assert fragment in text
+
+
+def test_scratch_compatibility_validation_has_an_exact_nonblocking_warning_set():
+    text = lesson_text("run-get-only-health")
+    warning_baseline = next(
+        line for line in text.splitlines() if "exactly three warning findings" in line
+    )
+
+    assert 'COURSE="proxmox/proxmox-admin"' in text
+    assert 'learnlab validate "$COURSE" --provider "$PROFILE" --format json' in text
+    assert '"ok": true' in text
+    assert re.findall(r"`([^`]+)`", warning_baseline) == [
+        '"ok": true',
+        "deprecated-requirements",
+        "missing-os-capability",
+        "manual-confirmation-with-objective-check",
+    ]
+    assert "acknowledged and nonblocking" in text
+    assert "changed, new, or unexpected finding" in text
+    assert "separate explicit live authorization remains required" in text
+    assert "any finding" not in text.lower()
 
 
 def test_profile_and_health_lessons_reinspect_before_resume():

@@ -8,8 +8,8 @@ steps:
       Controller: Resume/reinspection: after any interruption, first compare the current configuration path with its recorded private before-state. Reconcile any partially edited table against the verified owner-only backup or private absent-config before-state; do not blindly re-add a table, recreate a file, or overwrite an existing provider/default.
       Controller: Locate the LearnLab XDG configuration before editing. When it exists, verify that it is owner-only, create a separate owner-only backup, verify that backup, and inventory every existing provider table and the current default_provider. Keep the configuration and backup outside the repository, progress store, screenshots, snapshots, tests, and evidence.
       Controller: When no configuration exists, positively verify that the configuration is absent at the expected XDG path, record the private absent-config before-state, then create the configuration owner-only before adding its first provider. An unreadable or denied path is unknown, not verified absence.
-      Controller: For an existing configuration, the change must preserve every existing provider and preserve existing default_provider exactly.
-      Controller: Only a genuinely new configuration with no default_provider may receive a new default. Even then, later commands explicitly select the new profile rather than relying on the default.
+      Controller: For an existing configuration, the change must preserve every existing provider and preserve every existing default exactly, including default_provider. Do not add, replace, or reorder a default.
+      Controller: For a genuinely new configuration, create the required top-level default_provider before the first provider table. Even then, later commands explicitly select the new profile rather than relying on the default.
       Controller: Expected outcome: either a verified owner-only backup and private inventory for an existing configuration, or verified absence recorded privately before owner-only creation of a genuinely new configuration.
       Controller: Stop condition: stop if an existing configuration is unreadable, its ownership or permissions are unsafe, the backup is incomplete, existing providers/defaults are ambiguous, or absence cannot be positively verified.
       Controller: Troubleshooting: reconcile the current path with the recorded branch. Restore an existing file only from its verified owner-only backup; for a previously absent file, compare the partial file with the private absent-config before-state. Do not replace or reconstruct unrelated provider tables from memory.
@@ -21,7 +21,8 @@ steps:
     title: Add one unused named profile
     instructions: |
       Controller: Choose an unused, non-conflicting provider table name and verify it is absent before editing. A duplicate or ambiguous table name is a stop condition, not permission to replace, merge, or adopt it.
-      Controller: Add exactly one table using visibly synthetic metavariables until each value has been resolved privately for the intended deployment. This is a generic field map, not a deployable profile:
+      Controller: Add exactly one table using visibly synthetic metavariables until each value has been resolved privately for the intended deployment. This is a generic field map, not a deployable profile. For a genuinely new configuration only, write this required top-level line before the provider table; for an existing configuration, omit this line and preserve every existing default exactly:
+      Controller: default_provider = "CHOSEN_PROFILE"
       Controller: [providers."CHOSEN_PROFILE"]
       Controller: type = "proxmox"
       Controller: api_url = "HTTPS_API_ORIGIN"
