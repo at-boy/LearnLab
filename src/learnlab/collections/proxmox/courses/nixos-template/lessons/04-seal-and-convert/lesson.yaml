@@ -180,16 +180,17 @@ steps:
       # Repeat separately for every recorded port, replacing PORT with its number.
       sudo ss -Htnp state established 'sport = :PORT'
       sudo pgrep -a -x sshd
+      sudo pgrep -a -x sshd-session
       ```
 
       `ss -Hlnpt` displays listening sockets; listening sockets alone do not prove
       sessions ended. NixOS 26.05 configures `sshd.service` with `KillMode=process`,
       so stopping it can leave sshd session children alive. Require both services
       inactive and no listener on the recorded ports, then inspect established
-      connections on every effective SSH port and remaining sshd processes
-      independently. The required state is no output from
-      every established-connection query and no output from `pgrep`; inactive and
-      no-match statuses are nonzero as expected. Any matching connection/process,
+      connections on every effective SSH port and both `sshd` and OpenSSH 10
+      `sshd-session` processes independently. The required state is no output from
+      every established-connection query and no output from either `pgrep`;
+      inactive and no-match statuses are nonzero as expected. Any matching connection/process,
       unexpected output, permission failure, incomplete port coverage or uncertainty
       about whether a command failed is a stop condition: keep console access and do
       not delete keys or machine identity.

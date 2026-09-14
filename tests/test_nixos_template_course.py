@@ -459,6 +459,7 @@ def test_sealing_checks_established_ssh_sessions_and_processes(source):
     assert "listening sockets alone" in lower
     assert "state established" in lower
     assert "pgrep -a -x sshd" in lower
+    assert "pgrep -a -x sshd-session" in lower
     assert "no output" in lower
     assert "permission" in lower and "stop" in lower
 
