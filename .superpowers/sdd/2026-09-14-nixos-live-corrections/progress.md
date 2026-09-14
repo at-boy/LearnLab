@@ -23,3 +23,14 @@ restart, reboot, conversion, force flag, glob or recursive deletion was added.
 RED: focused QGA regression failed 2/2 because the sealing fallback was absent.
 GREEN: 70 course tests passed; offline validation, Ruff and `git diff --check`
 passed. Live QGA/guest/Proxmox behavior remains pending explicit authorization.
+
+Fix round 1 for `fb896d8`: replace the QGA prose-token regression with isolated
+execution of the actual embedded mutation shell, with stubs and mutation logs.
+RED: 6 unsafe cases reached destructive continuation (active `sshd`, `sshd` or
+`sshd-session` process, failed `ss`, reappearing hostid or host key); 10 other
+guard fixtures already failed closed. The revised identical course/guide script
+uses explicit named error branches, preserves `ss` exit status separately from
+its output, and verifies empty/absent sealed postconditions including dangling
+links before `sync` or poweroff. GREEN: focused QGA execution suite 16 passed;
+course suite 84 passed; validator, Ruff and `git diff --check` passed. Live QGA/
+guest/Proxmox behavior remains pending explicit authorization.

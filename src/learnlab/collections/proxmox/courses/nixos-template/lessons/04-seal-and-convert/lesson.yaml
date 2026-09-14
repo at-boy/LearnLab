@@ -303,55 +303,130 @@ steps:
       effective="$(sshd -G -T)"
       mapfile -t ports < <(printf "%s\n" "$effective" | sed -n "s/^port //p")
       mapfile -t host_keys < <(printf "%s\n" "$effective" | sed -n "s/^hostkey //p")
-      test "${#ports[@]}" -gt 0
-      test "${#host_keys[@]}" -gt 0
-      test "$(printf "%s\n" "${ports[@]}" | sort -u | wc -l)" -eq "${#ports[@]}"
-      test "$(printf "%s\n" "${host_keys[@]}" | sort -u | wc -l)" -eq "${#host_keys[@]}"
+      fail() { printf "QGA sealing guard: %s\n" "$1" >&2; exit 1; }
+      require_regular() {
+        if test -f "$1"; then
+          if test -L "$1"; then fail "$2 is a symlink"; fi
+        else
+          fail "$2 is not a regular file"
+        fi
+      }
+      require_stat() {
+        if actual="$(stat -c "$2" "$1")"; then
+          if [[ "$actual" != "$3" ]]; then fail "$4 has unexpected metadata"; fi
+        else
+          fail "$4 metadata inspection failed"
+        fi
+      }
+      check_ss_empty() {
+        if output="$("${@:2}")"; then
+          if [[ -n "$output" ]]; then fail "$1 has output: $output"; fi
+        else
+          status=$?
+          fail "$1 failed with exit $status"
+        fi
+      }
+      if (( ${#ports[@]} == 0 )); then fail "no effective SSH ports"; fi
+      if (( ${#host_keys[@]} == 0 )); then fail "no effective host keys"; fi
+      if [[ "$(printf "%s\n" "${ports[@]}" | sort -u | wc -l)" != "${#ports[@]}" ]]; then fail "duplicate effective SSH ports"; fi
+      if [[ "$(printf "%s\n" "${host_keys[@]}" | sort -u | wc -l)" != "${#host_keys[@]}" ]]; then fail "duplicate effective host keys"; fi
       for port in "${ports[@]}"; do
-        [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] || exit 1
-        (( port <= 65535 )) || exit 1
+        if [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]]; then :; else fail "invalid SSH port $port"; fi
+        if (( port <= 65535 )); then :; else fail "out-of-range SSH port $port"; fi
       done
-      test -d /etc && test ! -L /etc
-      test "$(stat -c "%U:%G" /etc)" = root:root
-      etc_mode="$(stat -c "%a" /etc)"
-      (( (8#$etc_mode & 022) == 0 )) || exit 1
-      test -f "$machine_id" && test ! -L "$machine_id"
-      test "$(stat -c "%h:%U:%G" "$machine_id")" = 1:root:root
-      test -f "$hostid" && test ! -L "$hostid"
-      test "$(stat -c "%h:%U:%G:%a:%s" "$hostid")" = 1:root:root:444:4
+      if test -d /etc; then
+        if test -L /etc; then fail "/etc is a symlink"; fi
+      else
+        fail "/etc is not a directory"
+      fi
+      require_stat /etc "%U:%G" root:root /etc
+      if etc_mode="$(stat -c "%a" /etc)"; then
+        if (( (8#$etc_mode & 022) != 0 )); then fail "/etc is group/other writable"; fi
+      else
+        fail "/etc mode inspection failed"
+      fi
+      require_regular "$machine_id" machine-id
+      require_stat "$machine_id" "%h:%U:%G" 1:root:root machine-id
+      require_regular "$hostid" hostid
+      require_stat "$hostid" "%h:%U:%G:%a:%s" 1:root:root:444:4 hostid
       dbus_remove=0
       if test -L "$dbus_id"; then
-        test "$(readlink "$dbus_id")" = "$machine_id"
+        if dbus_target="$(readlink "$dbus_id")"; then
+          if [[ "$dbus_target" != "$machine_id" ]]; then fail "D-Bus link target differs"; fi
+        else
+          fail "D-Bus link inspection failed"
+        fi
       elif test -e "$dbus_id"; then
-        test -f "$dbus_id" && test ! -L "$dbus_id"
-        test "$(stat -c "%h:%U:%G" "$dbus_id")" = 1:root:root
+        require_regular "$dbus_id" D-Bus-machine-id
+        require_stat "$dbus_id" "%h:%U:%G" 1:root:root D-Bus-machine-id
         dbus_remove=1
       fi
       for host_key in "${host_keys[@]}"; do
-        test "${host_key:0:1}" = /
-        test -f "$host_key" && test ! -L "$host_key"
-        test "$(stat -c "%h:%U:%G" "$host_key")" = 1:root:root
-        test -f "${host_key}.pub" && test ! -L "${host_key}.pub"
-        test "$(stat -c "%h:%U:%G" "${host_key}.pub")" = 1:root:root
+        if [[ "${host_key:0:1}" != / ]]; then fail "host key path is not absolute"; fi
+        require_regular "$host_key" host-key
+        require_stat "$host_key" "%h:%U:%G" 1:root:root host-key
+        require_regular "${host_key}.pub" host-key-public
+        require_stat "${host_key}.pub" "%h:%U:%G" 1:root:root host-key-public
       done
-      systemctl stop sshd.service sshd-keygen.service
-      ! systemctl is-active --quiet sshd.service
-      ! systemctl is-active --quiet sshd-keygen.service
+      if systemctl stop sshd.service sshd-keygen.service; then :; else fail "unable to stop SSH services"; fi
+      for service in sshd.service sshd-keygen.service; do
+        if systemctl is-active --quiet "$service"; then
+          fail "$service remains active"
+        else
+          status=$?
+          if (( status != 3 )); then fail "$service state lookup failed with exit $status"; fi
+        fi
+      done
       for port in "${ports[@]}"; do
-        test -z "$(ss -Hlnpt "sport = :$port")"
-        test -z "$(ss -Htnp state established "sport = :$port")"
+        check_ss_empty "SSH listener on port $port" ss -Hlnpt "sport = :$port"
+        check_ss_empty "established SSH connection on port $port" ss -Htnp state established "sport = :$port"
       done
-      ! pgrep -a -x sshd
-      ! pgrep -a -x sshd-session
-      truncate -s 0 "$machine_id"
-      if test "$dbus_remove" = 1; then rm -- "$dbus_id"; fi
-      rm -- "$hostid"
-      for host_key in "${host_keys[@]}"; do rm -- "$host_key" "${host_key}.pub"; done
-      test "$(stat -c %s "$machine_id")" = 0
-      test ! -e "$hostid" && test ! -L "$hostid"
-      for host_key in "${host_keys[@]}"; do test ! -e "$host_key" && test ! -L "$host_key"; test ! -e "${host_key}.pub" && test ! -L "${host_key}.pub"; done
-      sync
-      systemctl poweroff
+      for process in sshd sshd-session; do
+        if output="$(pgrep -a -x "$process")"; then
+          fail "$process process remains: $output"
+        else
+          status=$?
+          if (( status != 1 )); then fail "$process lookup failed with exit $status"; fi
+        fi
+      done
+      if truncate -s 0 "$machine_id"; then :; else fail "machine-id truncation failed"; fi
+      if [[ "$dbus_remove" == 1 ]]; then
+        if rm -- "$dbus_id"; then :; else fail "D-Bus-machine-id removal failed"; fi
+      fi
+      if rm -- "$hostid"; then :; else fail "hostid removal failed"; fi
+      for host_key in "${host_keys[@]}"; do
+        if rm -- "$host_key" "${host_key}.pub"; then :; else fail "host-key-pair removal failed"; fi
+      done
+      require_regular "$machine_id" machine-id-postcondition
+      if machine_size="$(stat -c %s "$machine_id")"; then
+        if [[ "$machine_size" != 0 ]]; then fail "machine-id is not empty"; fi
+      else
+        fail "machine-id postcondition inspection failed"
+      fi
+      if test -e "$hostid" || test -L "$hostid"; then fail "hostid reappeared"; fi
+      if [[ "$dbus_remove" == 1 ]]; then
+        if test -e "$dbus_id" || test -L "$dbus_id"; then fail "D-Bus-machine-id reappeared"; fi
+      elif test -L "$dbus_id"; then
+        if dbus_target="$(readlink "$dbus_id")"; then
+          if [[ "$dbus_target" != "$machine_id" ]]; then fail "D-Bus link target changed"; fi
+        else
+          fail "D-Bus postcondition link inspection failed"
+        fi
+        if dbus_size="$(stat -Lc %s "$dbus_id")"; then
+          if [[ "$dbus_size" != 0 ]]; then fail "D-Bus linked machine-id is not empty"; fi
+        else
+          fail "D-Bus linked machine-id inspection failed"
+        fi
+      elif test -e "$dbus_id"; then
+        fail "unexpected D-Bus-machine-id layout"
+      fi
+      for host_key in "${host_keys[@]}"; do
+        for key_file in "$host_key" "${host_key}.pub"; do
+          if test -e "$key_file" || test -L "$key_file"; then fail "host key reappeared: $key_file"; fi
+        done
+      done
+      if sync; then :; else fail "sync failed"; fi
+      if systemctl poweroff; then :; else fail "poweroff request failed"; fi
       '
       ```
 

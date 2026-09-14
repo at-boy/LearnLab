@@ -464,12 +464,145 @@ def test_sealing_checks_established_ssh_sessions_and_processes(source):
     assert "permission" in lower and "stop" in lower
 
 
-@pytest.mark.parametrize("source", ["seal-and-convert", "guide"])
-def test_sealing_allows_qga_only_as_a_trusted_out_of_band_console_fallback(source):
+def qga_sealing_script(source):
     if source == "guide":
         text = (Path(__file__).parents[1] / "docs/NixOS-Template-Guide.md").read_text()
     else:
-        text = lesson_text(source)
+        assert source == "course"
+        text = lesson_text("seal-and-convert")
+    qga_exec_pattern = (
+        r'qm guest exec "\$CANDIDATE_ID" -- /run/current-system/sw/bin/bash -lc \'\n'
+        r"(.*?)\n\s*'"
+    )
+    scripts = re.findall(
+        qga_exec_pattern,
+        text,
+        re.DOTALL,
+    )
+    mutation = next(item for item in scripts if "machine_id=/etc/machine-id" in item)
+    return textwrap.dedent(mutation)
+
+
+@pytest.fixture
+def qga_sealing_sandbox(tmp_path):
+    etc = tmp_path / "etc"
+    ssh = etc / "ssh"
+    dbus_dir = tmp_path / "var/lib/dbus"
+    bin_dir = tmp_path / "bin"
+    log = tmp_path / "actions.log"
+    ssh.mkdir(parents=True)
+    dbus_dir.mkdir(parents=True)
+    bin_dir.mkdir()
+    machine_id = etc / "machine-id"
+    hostid = etc / "hostid"
+    dbus_id = dbus_dir / "machine-id"
+    host_key = ssh / "host_ed25519"
+    machine_id.write_text("1" * 32 + "\n")
+    hostid.write_bytes(b"\x01\x02\x03\x04")
+    dbus_id.write_text("1" * 32 + "\n")
+    host_key.write_text("private\n")
+    (ssh / "host_ed25519.pub").write_text("public\n")
+
+    stubs = {
+        "sshd": """#!/bin/bash
+printf 'port 22\\nhostkey %s/ssh/host_ed25519\\n' "$TEST_ETC"
+""",
+        "systemctl": """#!/bin/bash
+if [[ "$1" == is-active ]]; then
+  [[ "${@: -1}" == "${TEST_ACTIVE_SERVICE:-}" ]] && exit 0
+  exit 3
+fi
+if [[ "$1" == poweroff ]]; then printf 'poweroff\\n' >> "$TEST_LOG"; fi
+exit 0
+""",
+        "pgrep": """#!/bin/bash
+name="${@: -1}"
+if [[ "$name" == "${TEST_PROCESS:-}" ]]; then printf '101 %s\\n' "$name"; exit 0; fi
+exit 1
+""",
+        "ss": """#!/bin/bash
+case "${TEST_SS:-}" in
+  error) exit 77 ;;
+  listener) [[ "$*" == *-Hlnpt* ]] && printf 'listener\\n' ;;
+  established) [[ "$*" == *established* ]] && printf 'established\\n' ;;
+esac
+exit 0
+""",
+        "stat": """#!/bin/bash
+if [[ "$1" == -c ]]; then
+  case "$2" in
+    '%U:%G') printf 'root:root\\n'; exit 0 ;;
+    '%a') printf '755\\n'; exit 0 ;;
+    '%h:%U:%G') printf '1:root:root\\n'; exit 0 ;;
+    '%h:%U:%G:%a:%s') printf '1:root:root:444:4\\n'; exit 0 ;;
+  esac
+fi
+exec /usr/bin/stat "$@"
+""",
+        "truncate": """#!/bin/bash
+printf 'truncate:%s\\n' "$3" >> "$TEST_LOG"
+/usr/bin/truncate "$@"
+if [[ "${TEST_REAPPEAR:-}" == machine ]]; then printf 'reappeared\\n' > "$3"; fi
+""",
+        "rm": """#!/bin/bash
+for arg in "$@"; do
+  [[ "$arg" == -- ]] && continue
+  printf 'rm:%s\\n' "$arg" >> "$TEST_LOG"
+done
+/usr/bin/rm "$@"
+for arg in "$@"; do
+  [[ "$arg" == -- ]] && continue
+  if [[ "${TEST_REAPPEAR:-}" == hostid && "${arg##*/}" == hostid ]] || \
+     [[ "${TEST_REAPPEAR:-}" == dbus && "$arg" == "$TEST_DBUS_ID" ]] || \
+     [[ "${TEST_REAPPEAR:-}" == key && "${arg##*/}" == host_ed25519 ]]; then
+    printf 'reappeared\\n' > "$arg"
+  fi
+done
+""",
+        "sync": """#!/bin/bash
+printf 'sync\\n' >> "$TEST_LOG"
+""",
+    }
+    for name, body in stubs.items():
+        path = bin_dir / name
+        path.write_text(body)
+        path.chmod(0o700)
+
+    def run(script, **overrides):
+        translated = script.replace("/var/lib/dbus", str(dbus_dir)).replace(
+            "/etc", str(etc)
+        )
+        return subprocess.run(  # noqa: S603
+            ["/bin/bash", "-c", translated],
+            env={
+                **os.environ,
+                "PATH": f"{bin_dir}:/usr/bin:/bin",
+                "TEST_ETC": str(etc),
+                "TEST_DBUS_ID": str(dbus_id),
+                "TEST_LOG": str(log),
+                **overrides,
+            },
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+    def actions():
+        return log.read_text().splitlines() if log.exists() else []
+
+    return {
+        "dbus_id": dbus_id,
+        "etc": etc,
+        "host_key": host_key,
+        "hostid": hostid,
+        "machine_id": machine_id,
+        "run": run,
+        "actions": actions,
+    }
+
+
+def test_sealing_allows_qga_only_as_a_trusted_out_of_band_console_fallback():
+    text = lesson_text("seal-and-convert")
     lower = text.lower()
     qga_text = text[lower.index("trusted qga") :]
     qga_lower = qga_text.lower()
@@ -490,6 +623,59 @@ def test_sealing_allows_qga_only_as_a_trusted_out_of_band_console_fallback(sourc
     assert "no rebuild" in qga_lower
     assert "do not blindly rerun" in qga_lower
     assert "positively verify stopped" in qga_lower
+
+
+def test_qga_sealing_script_is_identical_in_course_and_guide():
+    assert qga_sealing_script("course") == qga_sealing_script("guide")
+
+
+@pytest.mark.parametrize(
+    ("fault", "overrides"),
+    [
+        ("active sshd service", {"TEST_ACTIVE_SERVICE": "sshd.service"}),
+        ("live sshd process", {"TEST_PROCESS": "sshd"}),
+        ("live sshd-session process", {"TEST_PROCESS": "sshd-session"}),
+        ("ss failure", {"TEST_SS": "error"}),
+        ("ssh listener", {"TEST_SS": "listener"}),
+        ("established ssh connection", {"TEST_SS": "established"}),
+    ],
+)
+def test_qga_sealing_blocks_runtime_ssh_hazards_before_mutation(
+    qga_sealing_sandbox, fault, overrides
+):
+    result = qga_sealing_sandbox["run"](qga_sealing_script("course"), **overrides)
+
+    assert result.returncode != 0, fault
+    assert qga_sealing_sandbox["actions"]() == []
+
+
+@pytest.mark.parametrize("unsafe_path", ["machine_id", "hostid", "dbus_id", "host_key"])
+def test_qga_sealing_blocks_unsupported_identity_layout_before_mutation(
+    qga_sealing_sandbox, unsafe_path
+):
+    path = qga_sealing_sandbox[unsafe_path]
+    path.rename(path.with_name(f"{path.name}.original"))
+    path.symlink_to(path.with_name(f"{path.name}.original"))
+
+    result = qga_sealing_sandbox["run"](qga_sealing_script("course"))
+
+    assert result.returncode != 0, unsafe_path
+    assert qga_sealing_sandbox["actions"]() == []
+
+
+@pytest.mark.parametrize("reappearing", ["machine", "hostid", "dbus", "key"])
+def test_qga_sealing_blocks_poweroff_when_a_postcondition_reappears(
+    qga_sealing_sandbox, reappearing
+):
+    result = qga_sealing_sandbox["run"](
+        qga_sealing_script("course"), TEST_REAPPEAR=reappearing
+    )
+
+    assert result.returncode != 0, reappearing
+    actions = qga_sealing_sandbox["actions"]()
+    assert any(action.startswith(("truncate:", "rm:")) for action in actions)
+    assert "sync" not in actions
+    assert "poweroff" not in actions
 
 
 @pytest.mark.parametrize("source", ["configure-lab-access", "test-two-clones", "guide"])
