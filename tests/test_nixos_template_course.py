@@ -464,6 +464,34 @@ def test_sealing_checks_established_ssh_sessions_and_processes(source):
     assert "permission" in lower and "stop" in lower
 
 
+@pytest.mark.parametrize("source", ["seal-and-convert", "guide"])
+def test_sealing_allows_qga_only_as_a_trusted_out_of_band_console_fallback(source):
+    if source == "guide":
+        text = (Path(__file__).parents[1] / "docs/NixOS-Template-Guide.md").read_text()
+    else:
+        text = lesson_text(source)
+    lower = text.lower()
+    qga_text = text[lower.index("trusted qga") :]
+    qga_lower = qga_text.lower()
+
+    qga_exec = 'qm guest exec "$CANDIDATE_ID" -- /run/current-system/sw/bin/bash -lc'
+    assert qga_exec in qga_text
+    assert "trusted out-of-band" in qga_lower
+    assert "console recovery" in qga_lower
+    assert "candidate ssh" in qga_lower
+    assert "authenticate its own host key" in qga_lower
+    assert "revalidate candidate" in qga_lower and "identity/layout" in qga_lower
+    assert "sshd -g -t" in qga_lower
+    assert "every effective" in qga_lower and "ssh port" in qga_lower
+    assert "sshd-session" in qga_lower
+    assert "truncate -s 0" in qga_lower
+    assert 'rm -- "$hostid"' in qga_text
+    assert "sync" in qga_lower and "systemctl poweroff" in qga_lower
+    assert "no rebuild" in qga_lower
+    assert "do not blindly rerun" in qga_lower
+    assert "positively verify stopped" in qga_lower
+
+
 @pytest.mark.parametrize("source", ["configure-lab-access", "test-two-clones", "guide"])
 def test_fresh_ssh_acceptance_disables_connection_sharing(source):
     if source == "guide":

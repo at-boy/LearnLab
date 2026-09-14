@@ -879,6 +879,133 @@ console does not prove shutdown; inspect the current VM state and any initiated
 task before acting. Stop on uncertainty; do not convert a running candidate.
 Do not force-stop or retry sealing automatically.
 
+### Trusted QGA sealing alternative when console paste is impractical
+
+The preceding console-only manual path remains available and is the default. If
+console paste is impractical, a previously tested Proxmox QEMU guest-agent (QGA)
+channel may execute this phase as a trusted out-of-band alternative. QGA is not
+candidate SSH and cannot authenticate its own host key; it never substitutes for
+the earlier console/QGA host-key trust evidence. Keep console recovery open.
+
+Before the request, use the Proxmox UI/node and the owner-only worksheet to
+revalidate candidate identity/layout: node, name, VMID, disks, ordinary-VM state,
+no snapshots, recovery source and working agent. Enter the revalidated VMID at
+the node; never infer or reuse it. Close every remote SSH session. This one
+deliberately authorized request revalidates guest identity paths, derives the
+exact effective host-key paths and every effective SSH port with `sshd -G -T`,
+checks no active SSH listeners/connections/processes including OpenSSH 10
+`sshd-session`, performs no rebuild, clears only validated exact paths, verifies
+the sealed state, syncs and requests poweroff:
+
+```sh
+# Proxmox node: read-only QGA preflight; inspect its complete output first
+read -r CANDIDATE_ID
+qm guest exec "$CANDIDATE_ID" -- /run/current-system/sw/bin/bash -lc '
+set -euo pipefail
+for path in /etc /etc/machine-id /var/lib/dbus /etc/hostid /etc/ssh; do
+  ls -ld "$path"
+  stat -c "%F %h %U %G %a %s %n" "$path"
+  if test -L "$path"; then readlink "$path"; fi
+  findmnt -T "$path"
+  if findmnt -M "$path"; then exit 1; fi
+done
+if test -e /var/lib/dbus/machine-id || test -L /var/lib/dbus/machine-id; then
+  ls -ld /var/lib/dbus/machine-id
+  stat -c "%F %h %U %G %a %s %n" /var/lib/dbus/machine-id
+  if test -L /var/lib/dbus/machine-id; then readlink /var/lib/dbus/machine-id; fi
+  findmnt -T /var/lib/dbus/machine-id
+  if findmnt -M /var/lib/dbus/machine-id; then exit 1; fi
+else
+  printf "%s\n" "D-Bus fallback absent"
+fi
+nixos-option networking.hostId
+nixos-option services.openssh.hostKeys
+nixos-option services.openssh.generateHostKeys
+nixos-option services.openssh.startWhenNeeded
+sshd -G -T
+systemctl cat sshd.service sshd-keygen.service
+'
+```
+
+Require complete, unambiguous preflight output matching the previously inspected
+candidate identity/layout before the mutation request. The D-Bus fallback may be
+absent only because this preflight positively inspected its accessible parent.
+Once the preflight is reviewed, run exactly one deliberately authorized mutation
+request:
+
+```sh
+# Proxmox node: one deliberately authorized QGA sealing request
+qm status "$CANDIDATE_ID"
+qm config "$CANDIDATE_ID"
+qm listsnapshot "$CANDIDATE_ID"
+qm guest exec "$CANDIDATE_ID" -- /run/current-system/sw/bin/bash -lc '
+set -euo pipefail
+machine_id=/etc/machine-id
+dbus_id=/var/lib/dbus/machine-id
+hostid=/etc/hostid
+effective="$(sshd -G -T)"
+mapfile -t ports < <(printf "%s\n" "$effective" | sed -n "s/^port //p")
+mapfile -t host_keys < <(printf "%s\n" "$effective" | sed -n "s/^hostkey //p")
+test "${#ports[@]}" -gt 0
+test "${#host_keys[@]}" -gt 0
+test "$(printf "%s\n" "${ports[@]}" | sort -u | wc -l)" -eq "${#ports[@]}"
+test "$(printf "%s\n" "${host_keys[@]}" | sort -u | wc -l)" -eq "${#host_keys[@]}"
+for port in "${ports[@]}"; do
+  [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] || exit 1
+  (( port <= 65535 )) || exit 1
+done
+test -d /etc && test ! -L /etc
+test "$(stat -c "%U:%G" /etc)" = root:root
+etc_mode="$(stat -c "%a" /etc)"
+(( (8#$etc_mode & 022) == 0 )) || exit 1
+test -f "$machine_id" && test ! -L "$machine_id"
+test "$(stat -c "%h:%U:%G" "$machine_id")" = 1:root:root
+test -f "$hostid" && test ! -L "$hostid"
+test "$(stat -c "%h:%U:%G:%a:%s" "$hostid")" = 1:root:root:444:4
+dbus_remove=0
+if test -L "$dbus_id"; then
+  test "$(readlink "$dbus_id")" = "$machine_id"
+elif test -e "$dbus_id"; then
+  test -f "$dbus_id" && test ! -L "$dbus_id"
+  test "$(stat -c "%h:%U:%G" "$dbus_id")" = 1:root:root
+  dbus_remove=1
+fi
+for host_key in "${host_keys[@]}"; do
+  test "${host_key:0:1}" = /
+  test -f "$host_key" && test ! -L "$host_key"
+  test "$(stat -c "%h:%U:%G" "$host_key")" = 1:root:root
+  test -f "${host_key}.pub" && test ! -L "${host_key}.pub"
+  test "$(stat -c "%h:%U:%G" "${host_key}.pub")" = 1:root:root
+done
+systemctl stop sshd.service sshd-keygen.service
+! systemctl is-active --quiet sshd.service
+! systemctl is-active --quiet sshd-keygen.service
+for port in "${ports[@]}"; do
+  test -z "$(ss -Hlnpt "sport = :$port")"
+  test -z "$(ss -Htnp state established "sport = :$port")"
+done
+! pgrep -a -x sshd
+! pgrep -a -x sshd-session
+truncate -s 0 "$machine_id"
+if test "$dbus_remove" = 1; then rm -- "$dbus_id"; fi
+rm -- "$hostid"
+for host_key in "${host_keys[@]}"; do rm -- "$host_key" "${host_key}.pub"; done
+test "$(stat -c %s "$machine_id")" = 0
+test ! -e "$hostid" && test ! -L "$hostid"
+for host_key in "${host_keys[@]}"; do test ! -e "$host_key" && test ! -L "$host_key"; test ! -e "${host_key}.pub" && test ! -L "${host_key}.pub"; done
+sync
+systemctl poweroff
+'
+```
+
+Review every result. Failure, partial/uncertain output, an interrupted QGA result
+or a VM not known to be sealed requires reconciliation through the retained
+console and Proxmox status/task/history inspection; do not blindly rerun the
+request. Do not add a rebuild, restart SSH, reboot, template conversion or force
+flag. A QGA poweroff request is not completion: Proxmox node (UI) must positively
+verify Stopped for that same revalidated candidate. Until that state is positive,
+do not convert it or repeat clearing; reconcile its exact identity/layout first.
+
 ### Confirm conversion independently
 
 Proxmox node (UI): re-inspect full ownership, stopped ordinary VM, no active
