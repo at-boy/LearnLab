@@ -724,3 +724,27 @@ def test_scratch_protocol_preserves_lifecycle_request_order():
     )
     positions = [text.index(operation) for operation in operations]
     assert positions == sorted(positions)
+
+
+def test_offline_report_keeps_live_protocol_pending():
+    from learnlab.course_certification import course_digest
+
+    report = (
+        Path(__file__).parents[1]
+        / "docs/course-validation/2026-09-11-proxmox-provider-bootstrap.md"
+    ).read_text(encoding="utf-8")
+    for fragment in (
+        "Status: **draft",
+        "offline gate",
+        "live acceptance not performed",
+        "exact course digest",
+        "installed-version/live-confirmation-required",
+        "propagated `/vms`",
+        "independent administrator",
+        "no certification-registry entry",
+    ):
+        assert fragment.lower() in report.lower()
+    [reported_digest] = re.findall(r"(?m)^`([0-9a-f]{64})`$", report)
+    course_root = ROOT / "proxmox/courses/provider-bootstrap"
+    assert reported_digest == course_digest(course_root)
+    assert re.search(r"(?m)^Tested content revision: `[0-9a-f]{40}`$", report)
