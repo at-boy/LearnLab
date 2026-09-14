@@ -60,6 +60,17 @@ steps:
       findmnt -T /var/lib/dbus
       findmnt -M /etc/machine-id
       findmnt -M /var/lib/dbus/machine-id
+      sudo ls -ld /etc /etc/hostid
+      sudo stat -c '%F %h %U %G %a %s %n' /etc/hostid
+      sudo readlink /etc/hostid
+      findmnt -T /etc/hostid
+      findmnt -M /etc/hostid
+      nixos-option networking.hostId
+      systemctl is-enabled learnlab-hostid.service
+      systemctl cat learnlab-hostid.service
+      systemctl show learnlab-hostid.service -p After -p Before -p Result -p ExecMainStatus -p ConditionResult
+      test "$(hostid)" = "$(head -c 8 /etc/machine-id)"
+      echo $?
       cat /proc/cmdline
       systemctl --version
       nixos-option services.openssh.hostKeys
@@ -83,6 +94,18 @@ steps:
       symlink target, persistence overlay, inaccessible path or unknown layout.
       Do not unmount, remount, follow a link into the Nix store or force truncation.
       Resolve the target-specific configuration before returning to inspection.
+      Require the access lesson's validated 32-hex machine-id and a root-owned,
+      single-link regular four-byte /etc/hostid, group root, mode 0444, on writable
+      ext4 root with no symlink or mountpoint. /etc itself must be a root-owned
+      ordinary directory without group/other write access. Require comparison exit
+      0 and networking.hostId null/unset, never a static value. Inspect imports,
+      environment.etc, activation scripts and custom units for hostid/machine-id
+      overrides or competing writers. Require none. Check learnlab-hostid enabled,
+      successful generation (or the later-boot skip plus a valid persistent file),
+      its absent-file condition and ordering after machine-ID commit/local-fs and
+      before multi-user completion. Failed lookup, missing hostid, unsafe layout,
+      invalid identity, wrong ordering or mismatch means stop before sealing.
+      This is the ext4 recipe, not a reviewed ZFS early-boot hostId design.
       Inspect boot.kernelParams and imported configuration locally for fixed
       systemd.machine_id, --machine-id or container_uuid overrides; compare with
       /proc/cmdline. Do not bake a fixed identity into clones. Proxmox node: inspect
@@ -97,7 +120,9 @@ steps:
       Inspect every hostKeys private path and its .pub counterpart with ls, stat,
       readlink and findmnt as above; require ordinary unmounted single-link files,
       writable parent directories, no shared/store-backed keys and a complete
-      explicit list matching sshd -T. Do not display private key contents.
+      root-owned private/public file set (inspect every owner), with no unexpected
+      links or identity overrides. Require the explicit list to match sshd -T.
+      Do not display private key contents.
       Option lookup failure or disagreement with the active unit means stop and
       reconcile the active generation; do not borrow Debian cleanup assumptions.
     verifications:
@@ -121,7 +146,8 @@ steps:
     instructions: |
       Installed guest (console): recheck candidate ownership and recovery source.
       Make a local explicit decision to stop SSH and clear only the inspected
-      machine-ID state and configured host-key pairs on this disposable candidate.
+      machine-ID state, /etc/hostid and configured host-key pairs on this disposable
+      candidate.
       Read all following instructions first. Do not proceed if an active rebuild,
       automatic deployment or another operator can regenerate these files. This
       phase must end in poweroff. Confirmation is self-attestation, not a guard.
@@ -177,6 +203,12 @@ steps:
       `sudo rm -i -- /var/lib/dbus/machine-id` and explicitly confirm that single
       removal. Any other layout: stop; never use a universal deletion/truncation
       script. Do not run machine-id setup or a rebuild after this checkpoint.
+      Installed guest: re-inspect /etc/hostid against the validated root-owned,
+      single-link four-byte ordinary file and its writable parent. Only then run
+      `sudo rm -i -- /etc/hostid` and explicitly confirm this single removal.
+      Unexpected absence, link, mount, owner, size or any error means stop and
+      reconcile; do not broaden deletion. Do not start/restart learnlab-hostid or
+      any identity generator, rebuild, restart SSH or reboot after clearing IDs.
       Installed guest: for each configured host-key pair on the reviewed local
       list, type `sudo rm -i --` followed by only its exact private and .pub paths;
       inspect the full command and confirm each removal. This is a manual action,
@@ -184,7 +216,8 @@ steps:
       and do not remove authorized_keys, sshd_config or controller keys.
       Verify locally using ls/stat/readlink/findmnt: /etc/machine-id remains an
       empty regular file (size 0), D-Bus fallback is absent or the verified empty
-      link, and every configured host-key pair is absent. Recheck service inactivity.
+      link, /etc/hostid is absent (including no dangling symlink), and every
+      configured host-key pair is absent. Recheck service inactivity.
       Any permission error, reappearing file or partial change means stop, keep
       console access and reconcile; do not label the candidate sealed. After all
       expected checks pass, deliberately power off; do not reboot or restart SSH:

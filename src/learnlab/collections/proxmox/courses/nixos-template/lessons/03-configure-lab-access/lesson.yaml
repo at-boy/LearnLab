@@ -82,6 +82,16 @@ steps:
       sudo -l -U lab
       systemctl is-active sshd.service qemu-guest-agent.service
       sudo journalctl -b -u sshd.service -u qemu-guest-agent.service --no-pager -n 50
+      systemctl is-enabled learnlab-hostid.service
+      systemctl show learnlab-hostid.service -p ActiveState -p SubState -p Result -p ExecMainStatus -p ConditionResult
+      systemctl cat learnlab-hostid.service
+      sudo stat -c '%F %h %U %G %a %s %n' /etc/hostid /etc/machine-id
+      sudo readlink /etc/hostid
+      findmnt -T /etc/hostid
+      findmnt -M /etc/hostid
+      nixos-option networking.hostId
+      test "$(hostid)" = "$(head -c 8 /etc/machine-id)"
+      echo $?
       ```
 
       Substitute your account for lab. Expected: rebuild exit 0, sudoers syntax OK,
@@ -97,6 +107,24 @@ steps:
       information through the guest agent. If not, inspect agent settings, channel
       and logs even if a DHCP address is otherwise visible. Do not claim agent
       operation from an enabled checkbox alone.
+      Require learnlab-hostid.service enabled, Result=success and ExecMainStatus=0.
+      On its generation boot expect active/exited with ConditionResult=yes. On a
+      later boot the existing file makes ConditionResult=no and inactive normal;
+      that skip alone never proves generation succeeded. Require /etc/hostid a
+      root-owned single-link regular four-byte file, group root, mode 0444, on the
+      writable ext4 root, with no symlink, mountpoint or persistence overlay.
+      Readlink/findmnt -M have no output/nonzero for the expected ordinary layout;
+      permission/I/O errors mean stop. Inspect /etc/machine-id as a root-owned,
+      single-link ordinary file containing exactly 32 hex characters (normal
+      newline allowed), and require the comparison exit 0: hostid equals its first
+      eight characters. Compare locally only; never print identity values into
+      LearnLab answers or public reports. networking.hostId must evaluate to null.
+      Inspect the generated unit: absent-hostid condition, machine-ID commit and
+      local-fs ordering, oneshot before multi-user completion. Missing/failed unit,
+      mismatched ID, unexpected layout or option lookup failure means stop; retain
+      console access, inspect the local journal/configuration, correct through the
+      bounded rebuild checkpoint, and repeat these checks before sealing. Preserve
+      this unit and repeat all identity checks after permanent switch and reboot.
     verifications:
       - id: activation-and-agent-tested
         type: manual-confirmation

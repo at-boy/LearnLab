@@ -244,6 +244,49 @@ imports must continue to include ./hardware-configuration.nix.
 boot.loader.systemd-boot.enable = true;
 boot.loader.efi.canTouchEfiVariables = true;
 networking.useDHCP = true;
+networking.hostId = null;
+systemd.services.learnlab-hostid = {
+  description = "Generate the persistent LearnLab clone host ID";
+  wantedBy = [ "multi-user.target" ];
+  after = [ "systemd-machine-id-commit.service" "local-fs.target" ];
+  before = [ "multi-user.target" ];
+  unitConfig.ConditionPathExists = "!/etc/hostid";
+  serviceConfig = {
+    Type = "oneshot";
+    RemainAfterExit = true;
+    User = "root";
+    UMask = "0077";
+  };
+  path = [ pkgs.coreutils pkgs.gnugrep ];
+  script = ''
+    set -euo pipefail
+    export LC_ALL=C
+    test "$(uname -m)" = x86_64
+    test -d /etc && test ! -L /etc
+    test "$(stat -c %u /etc)" = 0
+    etc_mode=$(stat -c %a /etc)
+    (( (8#$etc_mode & 0022) == 0 ))
+    test ! -e /etc/hostid && test ! -L /etc/hostid
+    test -f /etc/machine-id && test ! -L /etc/machine-id
+    test "$(stat -c %u /etc/machine-id)" = 0
+    test "$(stat -c %h /etc/machine-id)" = 1
+    test "$(wc -c < /etc/machine-id)" -le 33
+    grep -aExq '[0-9a-fA-F]{32}' /etc/machine-id
+    machine_id=$(cat /etc/machine-id)
+    [[ "$machine_id" =~ ^[0-9a-fA-F]{32}$ ]]
+    host_id=''${machine_id:0:8}
+    umask 077
+    hostid_tmp=$(mktemp /etc/.learnlab-hostid.XXXXXXXX)
+    trap 'rm -f -- "$hostid_tmp"' EXIT
+    trap 'exit 1' HUP INT TERM
+    printf '%b' "\\x''${host_id:6:2}\\x''${host_id:4:2}\\x''${host_id:2:2}\\x''${host_id:0:2}" > "$hostid_tmp"
+    test "$(stat -c %s "$hostid_tmp")" = 4
+    chown root:root "$hostid_tmp"
+    chmod 0444 "$hostid_tmp"
+    mv -T --no-clobber -- "$hostid_tmp" /etc/hostid
+    test ! -e "$hostid_tmp"
+  '';
+};
 users.users.lab = {
   isNormalUser = true;
   extraGroups = [ "wheel" ];
@@ -256,6 +299,25 @@ environment.systemPackages = with pkgs; [
 ];
 system.stateVersion = "26.05";
 ```
+
+This course uses ext4 on x86_64. The persistent LearnLab oneshot waits for
+local filesystems and machine-ID commit ordering, validates exactly 32 hex
+characters (with at most the normal trailing newline), and derives the
+textual host ID from the first eight machine-id characters. It writes four
+bytes in native little-endian order, matching NixOS 26.05 on this architecture.
+Keep networking.hostId null/unset: a static value makes store-backed identity
+shared by clones. This unit is not a substitute for a separately reviewed
+ZFS early-boot hostId design; do not adapt it to ZFS or another architecture.
+Copy the two single quotes before each shell ${...} exactly: they escape
+interpolation in a Nix indented string. They are removed by Nix, not Bash.
+The root-controlled same-directory temporary file is checked for four bytes,
+root ownership is set, mode is 0444, and rename publishes it atomically.
+Existing targets (including dangling symlinks) are never overwritten; invalid
+input or a write failure exits nonzero and cleans the temporary file without
+leaving a partial target. Do not run concurrent identity writers. The unit
+runs only while /etc/hostid is absent and does not rotate an existing ID.
+A failed/skipped unit is not proof of valid identity: inspect the checks in
+the access lesson. Rebuild and verify this configuration there before sealing.
 
 Classic writable /etc/nixos configuration is intentional. No flakes,
 cloud-init, nginx sites, restrictive firewall exercises or systemd exercise
@@ -291,9 +353,16 @@ and available VM RAM/storage; stop before resizing/retrying. Bootloader error:
 inspect UEFI and /mnt/boot. Interrupted installation: inspect mounts, generated
 configuration and whether an installer is still running before any retry;
 do not format again or claim installation complete.
-Proxmox node (management UI): keep the ISO attached as recovery media but set
-the verified SCSI disk first in boot order. Installer console: `reboot` only
-after installation succeeded. Installed guest: confirm `findmnt /` shows
+Installer console: after installation and both credential operations succeed,
+deliberately run `poweroff`. Proxmox node: re-inspect node, name, VMID,
+disks and task history against the worksheet; inspect `qm status` followed
+by this exact owned VMID, and require `status: stopped`. A closed console,
+timeout or failed lookup is not proof; stop on uncertainty. Only once stopped,
+Proxmox node (management UI): keep the ISO attached as recovery media and set
+the verified SCSI disk first in boot order before ISO/network. Apply the
+setting and re-inspect it on the same owned VM. Start that VM through the UI.
+Changing boot order while running and then rebooting is insufficient here.
+Installed guest: confirm `findmnt /` shows
 installed ext4 root rather than live media, and `nixos-version` shows 26.05.
 Log in through the Proxmox console as the chosen learner; check `sudo -v`
 with the console password. Keep a tested root console recovery route.
@@ -393,6 +462,16 @@ sudo visudo -c
 sudo -l -U lab
 systemctl is-active sshd.service qemu-guest-agent.service
 sudo journalctl -b -u sshd.service -u qemu-guest-agent.service --no-pager -n 50
+systemctl is-enabled learnlab-hostid.service
+systemctl show learnlab-hostid.service -p ActiveState -p SubState -p Result -p ExecMainStatus -p ConditionResult
+systemctl cat learnlab-hostid.service
+sudo stat -c '%F %h %U %G %a %s %n' /etc/hostid /etc/machine-id
+sudo readlink /etc/hostid
+findmnt -T /etc/hostid
+findmnt -M /etc/hostid
+nixos-option networking.hostId
+test "$(hostid)" = "$(head -c 8 /etc/machine-id)"
+echo $?
 ```
 
 Substitute your account for lab. Expected: rebuild exit 0, sudoers syntax OK,
@@ -408,6 +487,25 @@ Proxmox node (management UI): the candidate Summary should obtain network
 information through the guest agent. If not, inspect agent settings, channel
 and logs even if a DHCP address is otherwise visible. Do not claim agent
 operation from an enabled checkbox alone.
+
+Require learnlab-hostid.service enabled, Result=success and ExecMainStatus=0.
+On its generation boot expect active/exited with ConditionResult=yes. On a
+later boot the existing file makes ConditionResult=no and inactive normal;
+that skip alone never proves generation succeeded. Require /etc/hostid a
+root-owned single-link regular four-byte file, group root, mode 0444, on the
+writable ext4 root, with no symlink, mountpoint or persistence overlay.
+Readlink/findmnt -M have no output/nonzero for the expected ordinary layout;
+permission/I/O errors mean stop. Inspect /etc/machine-id as a root-owned,
+single-link ordinary file containing exactly 32 hex characters (normal
+newline allowed), and require the comparison exit 0: hostid equals its first
+eight characters. Compare locally only; never print identity values into
+LearnLab answers or public reports. networking.hostId must evaluate to null.
+Inspect the generated unit: absent-hostid condition, machine-ID commit and
+local-fs ordering, oneshot before multi-user completion. Missing/failed unit,
+mismatched ID, unexpected layout or option lookup failure means stop; retain
+console access, inspect the local journal/configuration, correct through the
+bounded rebuild checkpoint, and repeat these checks before sealing. Preserve
+this unit and repeat all identity checks after permanent switch and reboot.
 
 Local checkpoint: Confirm successful bounded test activation, checked sudo policy and working guest-agent/service state.
 
@@ -583,6 +681,17 @@ findmnt -T /etc/machine-id
 findmnt -T /var/lib/dbus
 findmnt -M /etc/machine-id
 findmnt -M /var/lib/dbus/machine-id
+sudo ls -ld /etc /etc/hostid
+sudo stat -c '%F %h %U %G %a %s %n' /etc/hostid
+sudo readlink /etc/hostid
+findmnt -T /etc/hostid
+findmnt -M /etc/hostid
+nixos-option networking.hostId
+systemctl is-enabled learnlab-hostid.service
+systemctl cat learnlab-hostid.service
+systemctl show learnlab-hostid.service -p After -p Before -p Result -p ExecMainStatus -p ConditionResult
+test "$(hostid)" = "$(head -c 8 /etc/machine-id)"
+echo $?
 cat /proc/cmdline
 systemctl --version
 nixos-option services.openssh.hostKeys
@@ -604,6 +713,19 @@ populated D-Bus file can restore the old identity. Stop for read-only storage,
 mountpoints, shared hard links, unknown symlinks, overlays or inaccessible paths;
 do not unmount/remount, force writes or follow links into the Nix store.
 
+Require the access lesson's validated 32-hex machine-id and a root-owned,
+single-link regular four-byte /etc/hostid, group root, mode 0444, on writable
+ext4 root with no symlink or mountpoint. /etc itself must be a root-owned
+ordinary directory without group/other write access. Require comparison exit
+0 and networking.hostId null/unset, never a static value. Inspect imports,
+environment.etc, activation scripts and custom units for hostid/machine-id
+overrides or competing writers. Require none. Check learnlab-hostid enabled,
+successful generation (or the later-boot skip plus a valid persistent file),
+its absent-file condition and ordering after machine-ID commit/local-fs and
+before multi-user completion. Failed lookup, missing hostid, unsafe layout,
+invalid identity, wrong ordering or mismatch means stop before sealing.
+This is the ext4 recipe, not a reviewed ZFS early-boot hostId design.
+
 Installed guest: inspect boot.kernelParams and imported Nix configuration for
 fixed systemd.machine_id, --machine-id or container_uuid overrides; compare with
 the actual kernel command line. Resolve fixed identity configuration before sealing.
@@ -615,7 +737,9 @@ does not depend on ConditionFirstBoot units. [systemd identity source](https://g
 Installed guest: inspect services.openssh.hostKeys and each private/.pub path using
 ls/stat/readlink/findmnt, including parent storage. Require a complete explicit
 set matching sshd -T, ordinary unmounted single-link files, writable parents and
-no shared/store-backed keys. Do not display private key contents. Verify
+no shared/store-backed keys. Require root-owned private/public files, inspect
+every owner, and stop for unexpected links or identity overrides.
+Do not display private key contents. Verify
 generateHostKeys true and startWhenNeeded false. Socket activation/custom units or
 an option lookup failure require reconciliation before proceeding.
 
@@ -629,7 +753,8 @@ this behavior. [NixOS 26.05 OpenSSH module](https://github.com/NixOS/nixpkgs/blo
 ### Confirm, seal, verify and power off without rebooting
 
 Installed guest (console): explicitly confirm the candidate identity, recovery
-source and exact list of per-machine files to clear. Read this whole phase first.
+source and exact list of per-machine files to clear, including /etc/hostid.
+Read this whole phase first.
 Close all SSH sessions; stop if another operator, rebuild or automatic deployment
 could regenerate state during sealing. Before stopping SSH, determine and record
 every effective SSH port from this target's actual configuration:
@@ -674,6 +799,13 @@ file in place. For D-Bus, leave absence alone; preserve a verified link to
 regular file, run `sudo rm -i -- /var/lib/dbus/machine-id` and confirm that one
 deletion. Any other layout is a stop condition.
 
+Installed guest: re-inspect /etc/hostid against the validated root-owned,
+single-link four-byte ordinary file and its writable parent. Only then run
+`sudo rm -i -- /etc/hostid` and explicitly confirm this single removal.
+Unexpected absence, link, mount, owner, size or any error means stop and
+reconcile; do not broaden deletion. Do not start/restart learnlab-hostid or
+any identity generator, rebuild, restart SSH or reboot after clearing IDs.
+
 Installed guest: for each configured host-key pair on the inspected local list,
 type `sudo rm -i --` followed by only the exact private and .pub paths, review the
 full command and explicitly confirm each removal. This is a manual instruction,
@@ -681,7 +813,8 @@ not a placeholder script. No globs, recursive cleanup, authorized_keys deletion
 or controller-key deletion. Do not rebuild or run machine-id setup afterward.
 
 Inspect with ls/stat/readlink/findmnt again. Require /etc/machine-id size 0 and
-ordinary file, D-Bus fallback absent or the verified empty link, all configured
+ordinary file, D-Bus fallback absent or the verified empty link, /etc/hostid is
+absent (including no dangling symlink), all configured
 host-key pairs absent and both services inactive. Partial changes, errors or
 reappearing files mean stop and reconcile through the console. After verification,
 deliberately power off. Do not reboot or restart SSH: either may regenerate
@@ -748,6 +881,15 @@ curl --head --fail --max-time 30 https://nixos.org
 systemctl is-active sshd.service qemu-guest-agent.service
 sudo -n true
 cat /etc/machine-id
+systemctl is-enabled learnlab-hostid.service
+systemctl show learnlab-hostid.service -p Result -p ExecMainStatus -p ConditionResult
+sudo stat -c '%F %h %U %G %a %s %n' /etc/hostid
+findmnt -T /etc/hostid
+findmnt -M /etc/hostid
+nixos-option networking.hostId
+test "$(hostid)" = "$(head -c 8 /etc/machine-id)"
+echo $?
+hostid
 sudo sshd -T
 ```
 
@@ -755,6 +897,17 @@ Require NixOS 26.05, DHCP/route/DNS/HTTPS, active services and sudo exit 0. Insp
 each result. Proxmox Summary must receive agent network data on both clones;
 connectivity alone does not prove the agent. Failure means console inspection of
 guest service, Proxmox option/virtio channel, network and access configuration.
+
+On each first clone boot require enabled learnlab-hostid.service, successful
+execution with Result=success, ExecMainStatus=0 and ConditionResult=yes.
+/etc/hostid must be a root-owned single-link regular four-byte file, group
+root, mode 0444, on writable ext4 root, without a symlink or mountpoint.
+Require networking.hostId null and comparison exit 0: hostid equals the
+first eight characters of that clone's machine-id. A and B host IDs must differ;
+also compare with the source baseline if retained. Eight-character collisions
+are possible: equal values fail acceptance even with distinct machine IDs.
+Missing/mismatched hostid means stop and inspect the oneshot, its ordering,
+source sealing and fixed identity overrides; do not alter IDs to force a pass.
 
 Require nonempty 32-hex-digit machine IDs distinct between A and B (also from the
 pre-sealing source if that baseline was retained). Fingerprint every sshd -T host
@@ -830,8 +983,11 @@ or address edits.
 
 Installed guest: explicitly confirm one reboot for A and separately for B, then
 run `sudo systemctl reboot` in each console. Keep the template stopped. After each
-disk-only boot, repeat network/agent, trusted SSH, sudo, OS/tool checks. Compare
-machine ID, every host-key type, firmware UUID and NIC MAC with that clone's
+disk-only boot, repeat network/agent, trusted SSH, sudo, OS/tool checks, including
+hostid layout and its equality to the first eight machine-id characters. Existing
+hostid should now skip generation via ConditionResult=no; the valid persistent
+file and baseline comparison are required. Compare
+machine ID, host ID, every host-key type, firmware UUID and NIC MAC with that clone's
 pre-rebuild/reboot baseline. Require each stable and A different from B. Any changed,
 empty or duplicate identity fails acceptance; inspect mounts, D-Bus, generated
 units and declarative key paths. Do not replace baselines or accept changed keys
@@ -1090,7 +1246,20 @@ CAPS
 
 ## Primary sources and verification limits
 
-Reviewed on 2026-09-11. These sources substantiate documentation choices, not
+Host-ID correction sources rechecked on 2026-09-14:
+
+- [NixOS 26.05 networking identity option and file generation](https://github.com/NixOS/nixpkgs/blob/nixos-26.05/nixos/modules/tasks/network-interfaces.nix)
+  defaults networking.hostId to null and recommends taking the first eight
+  machine-id characters. Setting it generates a shared store-backed hostid, which
+  this clone recipe deliberately avoids.
+- [NixOS 26.05 stage-1 hostid encoding](https://github.com/NixOS/nixpkgs/blob/nixos-26.05/nixos/modules/system/boot/stage-1.nix)
+  reverses the four byte pairs on little-endian targets such as x86_64. The
+  course oneshot uses that byte order after machine-ID availability on ext4;
+  it is not an initrd/ZFS design. Documentation was rechecked for this correction;
+  generated-unit behavior, first-boot creation and reboot stability still require
+  separately authorized live acceptance.
+
+The remaining source review dates to 2026-09-11. These sources substantiate documentation choices, not
 execution of this walkthrough. No guest, disk, SSH or Proxmox operation was run
 while authoring these sections; exact ISO installation and target-version UI,
 package availability, effective service behavior and reboot recovery remain

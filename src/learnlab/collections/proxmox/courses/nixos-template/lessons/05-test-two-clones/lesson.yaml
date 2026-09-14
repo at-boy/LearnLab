@@ -49,6 +49,15 @@ steps:
       systemctl is-active sshd.service qemu-guest-agent.service
       sudo -n true
       cat /etc/machine-id
+      systemctl is-enabled learnlab-hostid.service
+      systemctl show learnlab-hostid.service -p Result -p ExecMainStatus -p ConditionResult
+      sudo stat -c '%F %h %U %G %a %s %n' /etc/hostid
+      findmnt -T /etc/hostid
+      findmnt -M /etc/hostid
+      nixos-option networking.hostId
+      test "$(hostid)" = "$(head -c 8 /etc/machine-id)"
+      echo $?
+      hostid
       sudo sshd -T
       ```
 
@@ -61,6 +70,16 @@ steps:
       Compare the nonempty 32-hex-digit machine IDs locally: A must differ from B
       (and from the pre-sealing source if retained locally). Empty or duplicate IDs
       mean stop and inspect D-Bus fallback, fixed boot identity and firmware UUIDs.
+      On each first clone boot require enabled learnlab-hostid.service, successful
+      execution with Result=success, ExecMainStatus=0 and ConditionResult=yes.
+      /etc/hostid must be a root-owned single-link regular four-byte file, group
+      root, mode 0444, on writable ext4 root, without a symlink or mountpoint.
+      Require networking.hostId null and comparison exit 0: hostid equals the
+      first eight characters of that clone's machine-id. A and B host IDs must differ;
+      also compare with the source baseline if retained. Eight-character collisions
+      are possible: equal values fail acceptance even with distinct machine IDs.
+      Missing/mismatched hostid means stop and inspect the oneshot, its ordering,
+      source sealing and fixed identity overrides; do not alter IDs to force a pass.
       From sshd -T identify every configured host key; use `sudo ssh-keygen -lf`
       plus each exact observed .pub path at the Installed guest console. Require
       every expected key to exist and compare matching key types between clones:
@@ -155,7 +174,10 @@ steps:
       clone A and separately for clone B, then run `sudo systemctl reboot` in each
       Installed guest console. Keep the template stopped; never reboot/seal it here.
       Wait for disk-only console login and repeat the preceding boot/network/agent,
-      fresh strict SSH, sudo and command checks. Compare each clone's machine ID and
+      fresh strict SSH, sudo and command checks, including hostid layout and its
+      equality to the first eight machine-id characters. Existing hostid should
+      now skip generation via ConditionResult=no; the valid persistent file and
+      baseline comparison are required. Compare each clone's machine ID, host ID and
       every host-key type with its own stored pre-rebuild/reboot baseline: each must
       remain stable, while A and B remain distinct. Also recheck firmware UUID/MAC
       against each clone's baseline. This tests persistence, not only generation.
