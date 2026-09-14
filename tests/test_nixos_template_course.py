@@ -393,6 +393,33 @@ def test_access_trust_state_loss_requires_console_reenrollment():
     assert "fresh console-verified reenrollment" in guide.lower()
 
 
+@pytest.mark.parametrize(
+    "source", ["configure-lab-access", "test-two-clones", "guide"]
+)
+def test_host_key_discovery_reads_nixos_generated_hostkey_directives(source):
+    if source == "guide":
+        text = (Path(__file__).parents[1] / "docs/NixOS-Template-Guide.md").read_text()
+    else:
+        text = lesson_text(source)
+
+    assert "/etc/ssh/sshd_config" in text
+    assert 'tolower($1) == "hostkey"' in text
+    assert "sshd -T` and fingerprint the configured public host keys" not in text
+    assert "From sshd -T identify every configured host key" not in text
+
+
+@pytest.mark.parametrize("source", ["configure-lab-access", "guide"])
+def test_access_documents_trusted_guest_agent_console_fallback(source):
+    if source == "guide":
+        text = (Path(__file__).parents[1] / "docs/NixOS-Template-Guide.md").read_text()
+    else:
+        text = lesson_text(source)
+
+    assert 'qm guest exec "$VMID" -- /run/current-system/sw/bin/bash -lc' in text
+    assert "authenticate its own host key" in text
+    assert "circular" in text
+
+
 @pytest.mark.parametrize("source", ["seal-and-convert", "guide"])
 def test_guest_poweroff_requires_stopped_state_without_assuming_management_task(source):
     if source == "guide":
@@ -427,10 +454,13 @@ def test_fresh_ssh_acceptance_disables_connection_sharing(source):
     else:
         text = lesson_text(source)
     commands = [
-        line.strip() for line in text.splitlines() if line.strip().startswith("ssh -i ")
+        line.strip()
+        for line in text.splitlines()
+        if line.strip().startswith("ssh ") and " -i " in line
     ]
     assert commands, f"Missing fresh SSH acceptance example in {source}"
     for command in commands:
+        assert command.startswith("ssh -F none -i ")
         assert "-o ControlPath=none" in command
 
 

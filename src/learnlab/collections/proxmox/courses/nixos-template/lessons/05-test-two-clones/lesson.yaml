@@ -58,7 +58,13 @@ steps:
       test "$(hostid)" = "$(head -c 8 /etc/machine-id)"
       echo $?
       hostid
-      sudo sshd -T
+      nixos-option services.openssh.hostKeys
+      sudo awk 'tolower($1) == "hostkey" { print $2 }' /etc/ssh/sshd_config
+      while IFS= read -r host_key; do
+        sudo test -s "$host_key"
+        sudo test -s "${host_key}.pub"
+        sudo ssh-keygen -lf "${host_key}.pub"
+      done < <(sudo awk 'tolower($1) == "hostkey" { print $2 }' /etc/ssh/sshd_config)
       ```
 
       Expected: NixOS 26.05, DHCP and route, DNS/HTTPS success, both services active,
@@ -80,9 +86,9 @@ steps:
       are possible: equal values fail acceptance even with distinct machine IDs.
       Missing/mismatched hostid means stop and inspect the oneshot, its ordering,
       source sealing and fixed identity overrides; do not alter IDs to force a pass.
-      From sshd -T identify every configured host key; use `sudo ssh-keygen -lf`
-      plus each exact observed .pub path at the Installed guest console. Require
-      every expected key to exist and compare matching key types between clones:
+      Require the evaluated hostKeys option and generated HostKey directives to
+      agree. Fingerprint each exact observed .pub path at the Installed guest
+      console. Require every expected key to exist and compare matching key types:
       all must differ. Equal/missing keys mean stop and inspect the generated
       sshd/keygen units and source sealing. Do not regenerate keys merely to make
       this test pass; investigate and prepare a new candidate after recovery review.
@@ -124,7 +130,7 @@ steps:
 
       ```sh
       # Controller
-      ssh -i "$KEY_PATH" -o ControlPath=none -o IdentitiesOnly=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$CLONE_SSH_DIR/known_hosts" -o GlobalKnownHostsFile=/dev/null "$LAB_USER@$CLONE_ADDRESS"
+      ssh -F none -i "$KEY_PATH" -o ControlPath=none -o IdentitiesOnly=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$CLONE_SSH_DIR/known_hosts" -o GlobalKnownHostsFile=/dev/null "$LAB_USER@$CLONE_ADDRESS"
       ```
 
       ControlPath=none disables connection sharing; retain it on every repeated

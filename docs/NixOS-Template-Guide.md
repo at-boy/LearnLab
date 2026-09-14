@@ -512,10 +512,52 @@ Local checkpoint: Confirm successful bounded test activation, checked sudo polic
 ### Verify the SSH server identity before login
 
 Installed guest (trusted Proxmox console): determine its current DHCP address
-locally using `ip -br address`. Inspect the effective host-key configuration
-with `sudo sshd -T` and fingerprint the configured public host keys using
-`sudo ssh-keygen -lf` followed by each observed .pub path. Keep identities
-in the owner-only worksheet, never in LearnLab answers or tracked files.
+locally using `ip -br address`. `sshd -T` does not reliably print the multi-value
+HostKey directives on every supported OpenSSH build. Inspect the evaluated
+`services.openssh.hostKeys` option, then read the generated HostKey directives
+and fingerprint exactly their public-key partners:
+
+```sh
+# Installed guest: trusted console or trusted Proxmox guest-agent channel
+nixos-option services.openssh.hostKeys
+sudo awk 'tolower($1) == "hostkey" { print $2 }' /etc/ssh/sshd_config
+while IFS= read -r host_key; do
+  sudo test -s "$host_key"
+  sudo test -s "${host_key}.pub"
+  sudo ssh-keygen -lf "${host_key}.pub"
+done < <(sudo awk 'tolower($1) == "hostkey" { print $2 }' /etc/ssh/sshd_config)
+```
+
+Empty option/directive output, disagreement between them, or a missing key file
+means stop. The Proxmox guest-agent channel is an acceptable out-of-band
+substitute when the trusted console cannot copy text; an SSH session to the
+candidate is not, because using it to authenticate its own host key is circular.
+Keep identities in the owner-only worksheet, never in LearnLab answers or tracked
+files.
+
+If console copy/paste is unavailable, positively identify the candidate VM on its
+Proxmox node, enter that VMID locally, and use the already-verified guest-agent
+channel to run the same read-only inspection as guest root:
+
+```sh
+# Proxmox node: do not infer or reuse a VMID
+read -r VMID
+qm config "$VMID"
+qm guest exec "$VMID" -- /run/current-system/sw/bin/bash -lc '
+set -euo pipefail
+while read -r keyword host_key remainder; do
+  test "${keyword,,}" = hostkey || continue
+  printf "configured-host-key: %s\n" "$host_key"
+  test -s "$host_key"
+  test -s "${host_key}.pub"
+  ssh-keygen -lf "${host_key}.pub"
+done < /etc/ssh/sshd_config
+'
+```
+
+Require successful guest-agent execution and the same complete option, directive
+and file agreement. This fallback does not authorize other guest commands or make
+an SSH session an out-of-band trust source.
 Controller: enter this candidate's inspected address and your key path at
 the read prompts. Create a fresh isolated known_hosts file for this candidate:
 
@@ -548,11 +590,13 @@ Then make a fresh key-only connection, with your private key still local:
 
 ```sh
 # Controller
-ssh -i "$KEY_PATH" -o ControlPath=none -o IdentitiesOnly=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$LAB_SSH_DIR/known_hosts" -o GlobalKnownHostsFile=/dev/null "$LAB_USER@$GUEST_ADDRESS"
+ssh -F none -i "$KEY_PATH" -o ControlPath=none -o IdentitiesOnly=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$LAB_SSH_DIR/known_hosts" -o GlobalKnownHostsFile=/dev/null "$LAB_USER@$GUEST_ADDRESS"
 ```
 
-ControlPath=none disables connection sharing so this checks a new transport and
-authentication instead of reusing an existing SSH connection.
+`-F none` excludes ambient controller SSH configuration; every trust and
+authentication input used here is explicit. ControlPath=none disables connection
+sharing so this checks a new transport and authentication instead of reusing an
+existing SSH connection.
 A local private-key passphrase prompt is different from a server account
 password prompt. Expected: learner shell without server password fallback
 or an unverified host prompt. If unavailable, use the console to inspect the
@@ -890,7 +934,13 @@ nixos-option networking.hostId
 test "$(hostid)" = "$(head -c 8 /etc/machine-id)"
 echo $?
 hostid
-sudo sshd -T
+nixos-option services.openssh.hostKeys
+sudo awk 'tolower($1) == "hostkey" { print $2 }' /etc/ssh/sshd_config
+while IFS= read -r host_key; do
+  sudo test -s "$host_key"
+  sudo test -s "${host_key}.pub"
+  sudo ssh-keygen -lf "${host_key}.pub"
+done < <(sudo awk 'tolower($1) == "hostkey" { print $2 }' /etc/ssh/sshd_config)
 ```
 
 Require NixOS 26.05, DHCP/route/DNS/HTTPS, active services and sudo exit 0. Inspect
@@ -910,13 +960,14 @@ Missing/mismatched hostid means stop and inspect the oneshot, its ordering,
 source sealing and fixed identity overrides; do not alter IDs to force a pass.
 
 Require nonempty 32-hex-digit machine IDs distinct between A and B (also from the
-pre-sealing source if that baseline was retained). Fingerprint every sshd -T host
-key using `sudo ssh-keygen -lf` plus each exact .pub path in the Installed guest
-console. Require every configured key present and different between A and B for
-each key type. Duplicate/empty identity means inspect D-Bus, fixed boot overrides,
-firmware and generated keygen units/source sealing. Do not regenerate keys merely
-to pass the check. Keep the complete pre-rebuild/reboot baselines only in the
-owner-only controller worksheet outside Git, never on the template or in LearnLab.
+pre-sealing source if that baseline was retained). Require the evaluated hostKeys
+option and generated HostKey directives to agree, then fingerprint each exact .pub
+path in the Installed guest console. Require every configured key present and
+different between A and B for each key type. Duplicate/empty identity means inspect
+D-Bus, fixed boot overrides, firmware and generated keygen units/source sealing.
+Do not regenerate keys merely to pass the check. Keep the complete pre-rebuild/
+reboot baselines only in the owner-only controller worksheet outside Git, never on
+the template or in LearnLab.
 
 ### Enroll console-authenticated keys in separate isolated files
 
@@ -942,7 +993,7 @@ restore its CLONE_SSH_DIR when switching between clones. Make fresh connections:
 
 ```sh
 # Controller
-ssh -i "$KEY_PATH" -o ControlPath=none -o IdentitiesOnly=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$CLONE_SSH_DIR/known_hosts" -o GlobalKnownHostsFile=/dev/null "$LAB_USER@$CLONE_ADDRESS"
+ssh -F none -i "$KEY_PATH" -o ControlPath=none -o IdentitiesOnly=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$CLONE_SSH_DIR/known_hosts" -o GlobalKnownHostsFile=/dev/null "$LAB_USER@$CLONE_ADDRESS"
 ```
 
 ControlPath=none disables connection sharing; retain it on every repeated
