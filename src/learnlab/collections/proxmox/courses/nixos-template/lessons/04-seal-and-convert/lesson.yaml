@@ -76,7 +76,7 @@ steps:
       nixos-option services.openssh.hostKeys
       nixos-option services.openssh.generateHostKeys
       nixos-option services.openssh.startWhenNeeded
-      sudo sshd -T
+      sudo sshd -G -T
       systemctl cat sshd.service sshd-keygen.service
       systemctl show sshd.service -p Wants -p After -p ExecStartPre -p ExecStart
       ```
@@ -121,7 +121,7 @@ steps:
       readlink and findmnt as above; require ordinary unmounted single-link files,
       writable parent directories, no shared/store-backed keys and a complete
       root-owned private/public file set (inspect every owner), with no unexpected
-      links or identity overrides. Require the explicit list to match sshd -T.
+      links or identity overrides. Require the explicit list to match sshd -G -T.
       Do not display private key contents.
       Option lookup failure or disagreement with the active unit means stop and
       reconcile the active generation; do not borrow Debian cleanup assumptions.
@@ -163,7 +163,7 @@ steps:
 
       ```sh
       # Installed guest: read-only effective configuration inspection
-      sudo sshd -T
+      sudo sshd -G -T
       ```
 
       Record every `port <number>` line locally. Require a nonempty list of

@@ -420,6 +420,22 @@ def test_access_documents_trusted_guest_agent_console_fallback(source):
     assert "circular" in text
 
 
+@pytest.mark.parametrize(
+    "source", ["configure-lab-access", "seal-and-convert", "guide"]
+)
+def test_effective_sshd_inspection_uses_openssh_10_generate_mode(source):
+    if source == "guide":
+        text = (Path(__file__).parents[1] / "docs/NixOS-Template-Guide.md").read_text()
+    else:
+        text = lesson_text(source)
+
+    assert "sudo sshd -G -T" in text
+    assert "matching sshd -T" not in text
+    assert "match sshd -T" not in text
+    assert "set matching sshd -T" not in text
+    assert re.search(r"(?m)^\s*sudo sshd -T\s*$", text) is None
+
+
 @pytest.mark.parametrize("source", ["seal-and-convert", "guide"])
 def test_guest_poweroff_requires_stopped_state_without_assuming_management_task(source):
     if source == "guide":
@@ -439,7 +455,7 @@ def test_sealing_checks_established_ssh_sessions_and_processes(source):
     lower = text.lower()
 
     assert "every effective ssh port" in lower
-    assert "before stopping" in lower and "sshd -t" in lower
+    assert "before stopping" in lower and "sshd -g -t" in lower
     assert "listening sockets alone" in lower
     assert "state established" in lower
     assert "pgrep -a -x sshd" in lower

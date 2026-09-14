@@ -512,10 +512,11 @@ Local checkpoint: Confirm successful bounded test activation, checked sudo polic
 ### Verify the SSH server identity before login
 
 Installed guest (trusted Proxmox console): determine its current DHCP address
-locally using `ip -br address`. `sshd -T` does not reliably print the multi-value
-HostKey directives on every supported OpenSSH build. Inspect the evaluated
-`services.openssh.hostKeys` option, then read the generated HostKey directives
-and fingerprint exactly their public-key partners:
+locally using `ip -br address`. On OpenSSH 10, `sshd -T` validates without
+displaying the effective configuration; `-G -T` is required to display it. For an
+auditable key-path inventory, inspect the evaluated `services.openssh.hostKeys`
+option, then read the generated HostKey directives and fingerprint exactly their
+public-key partners:
 
 ```sh
 # Installed guest: trusted console or trusted Proxmox guest-agent channel
@@ -616,8 +617,9 @@ edit the existing services.openssh.settings block to set
 PasswordAuthentication = false; and KbdInteractiveAuthentication = false;
 while retaining PermitRootLogin = "no". This does not remove console password
 recovery. Run the same bounded `nixos-rebuild test` and check exit 0; verify
-effective settings with `sudo sshd -T` (passwordauthentication no,
-kbdinteractiveauthentication no, permitrootlogin no). Open another fresh
+effective settings with `sudo sshd -G -T` (PasswordAuthentication no,
+KbdInteractiveAuthentication no, PermitRootLogin no; names are case-insensitive).
+Open another fresh
 strict key-only controller session using the preceding command; verify
 `sudo -n true` again. If any check fails, stop and correct via the open
 console; do not close the recovery path or continue to permanent activation.
@@ -741,7 +743,7 @@ systemctl --version
 nixos-option services.openssh.hostKeys
 nixos-option services.openssh.generateHostKeys
 nixos-option services.openssh.startWhenNeeded
-sudo sshd -T
+sudo sshd -G -T
 systemctl cat sshd.service sshd-keygen.service
 systemctl show sshd.service -p Wants -p After -p ExecStartPre -p ExecStart
 ```
@@ -780,7 +782,7 @@ does not depend on ConditionFirstBoot units. [systemd identity source](https://g
 
 Installed guest: inspect services.openssh.hostKeys and each private/.pub path using
 ls/stat/readlink/findmnt, including parent storage. Require a complete explicit
-set matching sshd -T, ordinary unmounted single-link files, writable parents and
+set matching sshd -G -T, ordinary unmounted single-link files, writable parents and
 no shared/store-backed keys. Require root-owned private/public files, inspect
 every owner, and stop for unexpected links or identity overrides.
 Do not display private key contents. Verify
@@ -805,7 +807,7 @@ every effective SSH port from this target's actual configuration:
 
 ```sh
 # Installed guest: read-only effective configuration inspection
-sudo sshd -T
+sudo sshd -G -T
 ```
 
 Record every `port <number>` line locally. Require a nonempty list of valid ports
