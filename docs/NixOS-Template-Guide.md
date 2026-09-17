@@ -897,11 +897,18 @@ checks no active SSH listeners/connections/processes including OpenSSH 10
 `sshd-session`, performs no rebuild, clears only validated exact paths, verifies
 the sealed state, syncs and requests poweroff:
 
+Guest-agent commands do not inherit the normal interactive Nix environment.
+The read-only preflight therefore exports the target installation's exact channel
+and configuration paths before calling `nixos-option`. A missing target
+channel/path is a stop and reconcile condition; do not guess another generation
+or substitute a different path.
+
 ```sh
 # Proxmox node: read-only QGA preflight; inspect its complete output first
 read -r CANDIDATE_ID
 qm guest exec "$CANDIDATE_ID" -- /run/current-system/sw/bin/bash -lc '
 set -euo pipefail
+export NIX_PATH=nixpkgs=/nix/var/nix/profiles/per-user/root/channels/nixos:nixos-config=/etc/nixos/configuration.nix
 for path in /etc /etc/machine-id /var/lib/dbus /etc/hostid /etc/ssh; do
   ls -ld "$path"
   stat -c "%F %h %U %G %a %s %n" "$path"
@@ -944,8 +951,8 @@ machine_id=/etc/machine-id
 dbus_id=/var/lib/dbus/machine-id
 hostid=/etc/hostid
 effective="$(sshd -G -T)"
-mapfile -t ports < <(printf "%s\n" "$effective" | sed -n "s/^port //p")
-mapfile -t host_keys < <(printf "%s\n" "$effective" | sed -n "s/^hostkey //p")
+mapfile -t ports < <(printf "%s\n" "$effective" | sed -n "s/^port[[:space:]]\+//Ip")
+mapfile -t host_keys < <(printf "%s\n" "$effective" | sed -n "s/^hostkey[[:space:]]\+//Ip")
 fail() { printf "QGA sealing guard: %s\n" "$1" >&2; exit 1; }
 require_regular() {
   if test -f "$1"; then

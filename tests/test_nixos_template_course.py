@@ -464,7 +464,7 @@ def test_sealing_checks_established_ssh_sessions_and_processes(source):
     assert "permission" in lower and "stop" in lower
 
 
-def qga_sealing_script(source):
+def qga_guest_exec_scripts(source):
     if source == "guide":
         text = (Path(__file__).parents[1] / "docs/NixOS-Template-Guide.md").read_text()
     else:
@@ -474,13 +474,27 @@ def qga_sealing_script(source):
         r'qm guest exec "\$CANDIDATE_ID" -- /run/current-system/sw/bin/bash -lc \'\n'
         r"(.*?)\n\s*'"
     )
-    scripts = re.findall(
-        qga_exec_pattern,
-        text,
-        re.DOTALL,
+    return [
+        textwrap.dedent(item)
+        for item in re.findall(qga_exec_pattern, text, re.DOTALL)
+    ]
+
+
+def qga_preflight_script(source):
+    return next(
+        script
+        for script in qga_guest_exec_scripts(source)
+        if "nixos-option networking.hostId" in script
+        and "machine_id=/etc/machine-id" not in script
     )
-    mutation = next(item for item in scripts if "machine_id=/etc/machine-id" in item)
-    return textwrap.dedent(mutation)
+
+
+def qga_sealing_script(source):
+    return next(
+        script
+        for script in qga_guest_exec_scripts(source)
+        if "machine_id=/etc/machine-id" in script
+    )
 
 
 @pytest.fixture
@@ -496,16 +510,16 @@ def qga_sealing_sandbox(tmp_path):
     machine_id = etc / "machine-id"
     hostid = etc / "hostid"
     dbus_id = dbus_dir / "machine-id"
-    host_key = ssh / "host_ed25519"
+    host_key = ssh / "Host_Ed25519"
     machine_id.write_text("1" * 32 + "\n")
     hostid.write_bytes(b"\x01\x02\x03\x04")
     dbus_id.write_text("1" * 32 + "\n")
     host_key.write_text("private\n")
-    (ssh / "host_ed25519.pub").write_text("public\n")
+    (ssh / "Host_Ed25519.pub").write_text("public\n")
 
     stubs = {
         "sshd": """#!/bin/bash
-printf 'port 22\\nhostkey %s/ssh/host_ed25519\\n' "$TEST_ETC"
+printf 'Port 22\\nHostKey %s/ssh/Host_Ed25519\\n' "$TEST_ETC"
 """,
         "systemctl": """#!/bin/bash
 if [[ "$1" == is-active ]]; then
@@ -554,7 +568,7 @@ for arg in "$@"; do
   [[ "$arg" == -- ]] && continue
   if [[ "${TEST_REAPPEAR:-}" == hostid && "${arg##*/}" == hostid ]] || \
      [[ "${TEST_REAPPEAR:-}" == dbus && "$arg" == "$TEST_DBUS_ID" ]] || \
-     [[ "${TEST_REAPPEAR:-}" == key && "${arg##*/}" == host_ed25519 ]]; then
+     [[ "${TEST_REAPPEAR:-}" == key && "${arg##*/}" == Host_Ed25519 ]]; then
     printf 'reappeared\\n' > "$arg"
   fi
 done
@@ -627,6 +641,49 @@ def test_sealing_allows_qga_only_as_a_trusted_out_of_band_console_fallback():
 
 def test_qga_sealing_script_is_identical_in_course_and_guide():
     assert qga_sealing_script("course") == qga_sealing_script("guide")
+
+
+@pytest.mark.parametrize("source", ["course", "guide"])
+def test_qga_preflight_exports_target_nix_path_before_option_checks(source):
+    script = qga_preflight_script(source)
+    export = (
+        "export NIX_PATH="
+        "nixpkgs=/nix/var/nix/profiles/per-user/root/channels/nixos:"
+        "nixos-config=/etc/nixos/configuration.nix"
+    )
+
+    assert script.count(export) == 1
+    assert script.index(export) < script.index("nixos-option networking.hostId")
+
+    if source == "guide":
+        text = (Path(__file__).parents[1] / "docs/NixOS-Template-Guide.md").read_text()
+    else:
+        text = lesson_text("seal-and-convert")
+    qga_text = text[text.lower().index("trusted qga") :]
+    normalized_qga_text = " ".join(qga_text.split())
+    assert (
+        "do not inherit the normal interactive Nix environment"
+        in normalized_qga_text
+    )
+    assert "missing target channel/path" in normalized_qga_text
+    assert "stop and reconcile" in normalized_qga_text
+    assert "guess another generation" in normalized_qga_text
+
+
+def test_qga_sealing_accepts_mixed_case_keywords_without_lowercasing_values(
+    qga_sealing_sandbox,
+):
+    host_key = qga_sealing_sandbox["host_key"]
+
+    result = qga_sealing_sandbox["run"](qga_sealing_script("course"))
+
+    assert result.returncode == 0, result.stderr
+    assert not host_key.exists()
+    assert not host_key.with_name(f"{host_key.name}.pub").exists()
+    actions = qga_sealing_sandbox["actions"]()
+    assert f"rm:{host_key}" in actions
+    assert f"rm:{host_key}.pub" in actions
+    assert actions[-2:] == ["sync", "poweroff"]
 
 
 @pytest.mark.parametrize(

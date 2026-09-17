@@ -34,3 +34,14 @@ its output, and verifies empty/absent sealed postconditions including dangling
 links before `sync` or poweroff. GREEN: focused QGA execution suite 16 passed;
 course suite 84 passed; validator, Ruff and `git diff --check` passed. Live QGA/
 guest/Proxmox behavior remains pending explicit authorization.
+
+Task 4: complete — incorporated two Stage 7 live-discovered command-environment
+facts with TDD. The QGA preflight now exports the exact target-generation
+`NIX_PATH` before `nixos-option` and treats a missing target path as a stop and
+reconciliation condition. The identical course/guide sealing mutation matches
+only `port`/`hostkey` keywords case-insensitively and preserves original values,
+including mixed-case paths. RED: the focused regressions failed 3/3 because both
+preflights lacked `NIX_PATH` and mixed-case SSHD output produced no ports. GREEN:
+focused regressions passed 3; the course suite passed 87; validator, focused Ruff
+and `git diff --check` passed. Alternate channel layouts still require documented
+local reconciliation; no live operations or certification updates were made.
