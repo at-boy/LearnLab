@@ -49,3 +49,40 @@ Independent task review for `93984d1..4506174`: spec compliance approved and
 task quality approved with no Critical, Important or Minor findings. Reviewer
 confirmed the exact preflight path export, value-preserving case-insensitive
 parsing, executable mixed-case regression and unchanged report/registry scope.
+
+Task 5: in progress — teach the Python 3.13 strict-verification failure mode and
+the bounded, out-of-band-authenticated leaf-pin fallback consistently in the
+provider-bootstrap and NixOS provider-handoff surfaces. No provider code/schema,
+live operation, certification, user configuration, merge or push is in scope.
+
+Preflight interaction table:
+
+| Surfaces | Producer and consumer relationship | Finding |
+| --- | --- | --- |
+| Provider lessons 04 and 05 | Profile lesson establishes trust/process inputs; health lesson consumes them | Must distinguish the token-secret environment name from `SSL_CERT_FILE` and carry cleanup/rotation rules into the health shell. |
+| NixOS lesson 06 and guide | Course handoff and standalone guide teach the same operator flow | Must remain semantically identical while the guide may contain the fuller command example. |
+| README and both courses | README is generic schema guidance consumed before either course flow | Existing private-lab `tls_verify = false` support must not be presented as this course's remediation; retain schema truth while making the secure course path explicit. |
+| Tests and learner surfaces | Focused content contracts guard the security-relevant instructional behavior | Existing repository tests intentionally treat safety wording as curriculum contract; tests must fail before the new guidance is added. |
+| Task 5 internally | Requirements, files, tests and commit scope | Consistent; no production API or live state is required. |
+
+Ruling: retain the repository's existing curriculum-content test style for this
+security-sensitive human procedure, despite the general preference not to test
+ordinary prose. Here the packaged curriculum text is the shipped behavior and
+the plan already establishes content-contract regressions. Cost if wrong: the
+tests may need updating for a future equivalent rewrite, but they prevent silent
+loss of the fail-closed trust boundary now.
+
+Task 5: complete — added focused cross-surface regressions and consistent
+strict-TLS recovery guidance to provider-bootstrap lessons 04/05, NixOS lesson
+06 and its standalone guide, and README provider configuration. The preferred
+repair remains a correctly issued controller-trusted certificate; the bounded
+leaf-pin fallback requires separate-path authentication, issuer/chain, exact
+SAN, validity-window and SHA-256 fingerprint checks, owner-only storage,
+process-scoped `SSL_CERT_FILE`, explicit cleanup and fail-closed rotation.
+`token_secret_env` remains only the token-secret environment-variable name;
+there is no new profile field or provider-code change. RED: 3 focused tests
+failed because the guidance was absent. GREEN: 3 focused tests and 126 affected
+course tests passed; both target validators, focused Ruff and `git diff --check`
+passed. Course-digest reports were refreshed without changing draft status or
+the certification registry. No live/network operation, user-config access,
+certification, merge or push occurred.

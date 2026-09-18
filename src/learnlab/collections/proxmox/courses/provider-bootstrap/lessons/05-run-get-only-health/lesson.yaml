@@ -10,6 +10,7 @@ steps:
       Controller: # Controller
       Controller: read -r PROFILE
       Controller: Confirm privately that PROFILE names exactly the unused table added in the previous lesson. Do not rely on default_provider, print the profile table, inspect the secret variable, or pass secret material as an argument.
+      Controller: If the authenticated leaf-pin fallback is required, set SSL_CERT_FILE to the owner-only verified public leaf path in this same dedicated short-lived controller process. SSL_CERT_FILE is not a ProxmoxProfile field and not the token secret; token_secret_env remains only the name of the separately named token-secret variable. Keep tls_verify = true.
       Controller: Expected outcome: the next commands explicitly select the intended profile while all deployment values and the token secret stay outside LearnLab progress and evidence.
       Controller: Stop condition: an empty, ambiguous, or mismatched selection stops the check. A missing profile is not permission to choose another provider or edit an existing default.
       Controller: Troubleshooting: compare the name privately with the owner-only configuration and worksheet; do not enumerate configuration or environment contents into output.
@@ -21,6 +22,9 @@ steps:
     title: Observe the four-request health surface
     instructions: |
       Controller: Run only the learner-operated health command shape below; this NONE-scope course does not execute it, load settings, resolve secrets, construct a provider, or make HTTP requests:
+      Controller: # Only when the separately authenticated leaf-pin fallback is required
+      Controller: SSL_CERT_FILE="OWNER_ONLY_VERIFIED_SERVER_LEAF_PATH"
+      Controller: export SSL_CERT_FILE
       Controller: learnlab provider test "$PROFILE"
       Controller: The complete successful health path makes four GET requests in this order: GET /version; GET /nodes; GET /cluster/resources?type=vm; and GET /nodes/{node}/qemu/{template_vmid}/config.
       Controller: If GET /version fails, health returns early without attempting the later three requests, so a failed health run can issue fewer than four requests. Later request failures are also reported according to the current health-check control flow; do not infer unattempted observations.
@@ -60,7 +64,8 @@ steps:
       Controller: A missing or denied node, template, config, storage match, or network match may be filtered by permissions rather than absent. A 403 or mismatch returns to exact user/token/path permission reconciliation with authorized inventory.
       Controller: Do not broaden roles, use Administrator or PVEAdmin, add Datastore.Allocate, disable token privilege separation, disable TLS verification, or retry against another resource merely to obtain PASS.
       Controller: Health or validation completion does not certify the provider-bootstrap course, selected course, source template, profile, token, permission mapping, or deployment. It does not authorize clone, start, agent, address, SSH, stop, delete, cleanup, or rollback.
-      Controller: Keep shell tracing off through the check, then unset the selected secret environment variable after use through the approved local mechanism. Do not display its name or value while clearing it.
+      Controller: Keep shell tracing off through the check, then run unset SSL_CERT_FILE when that fallback was used and clear the separately named token-secret variable after use through the approved local mechanism. Do not display the token variable's name or value while clearing it.
+      Controller: A leaf pin is deliberately rotation-sensitive. Certificate renewal, replacement, expiry, SAN change, or SHA-256 fingerprint mismatch requires stopping, re-authenticating the new certificate through a separate trusted management path, and deliberately replacing the owner-only pin. Never silently refresh it or weaken tls_verify = true.
       Controller: Expected outcome: either a bounded GET-only observation ready for a separately requested authorization, or a fail-closed return to private reconciliation.
       Controller: Stop condition: uncertain visibility, unexplained output, mismatch, secret exposure, or any pressure to reinterpret health as runtime proof stops the course here.
       Controller: Troubleshooting: preserve the owner-only backup and private worksheet, involve the authorized administrator, and reconcile current state without mutation or access broadening.

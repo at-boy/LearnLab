@@ -54,6 +54,31 @@ steps:
       template_capabilities = ["os.nixos", "tool.coreutils", "tool.curl", "tool.ip", "tool.journalctl", "tool.nft", "tool.nixos-rebuild", "tool.python3", "tool.sudo", "tool.systemctl", "tool.systemd", "tool.systemd-run", "tool.timeout"]
       ```
 
+      Python 3.13's strict certificate validation can reject a legacy/default
+      Proxmox cluster CA that lacks CA/key-usage X.509 extensions even when curl
+      accepts it. Curl success therefore does not prove that LearnLab's Python
+      client will accept the same trust file. Keep tls_verify = true. The
+      preferred repair is a correctly issued controller-trusted CA/server
+      certificate with an exact SAN match for the configured API hostname or IP.
+
+      A bounded fallback may pin the current public server leaf certificate as
+      an explicit trust anchor only after authenticating it through a separate
+      trusted management path and verifying its expected issuer/chain, exact SAN
+      match for the configured endpoint, validity window, and SHA-256 fingerprint.
+      Capturing an unchecked certificate with openssl s_client over the same
+      untrusted connection is not authentication and is never sufficient.
+
+      Store the verified public leaf in an owner-only controller file outside
+      the repository, config TOML, progress/evidence, and secret stores.
+      SSL_CERT_FILE is a process environment setting for the dedicated
+      short-lived controller process that runs the checks; it is not a
+      ProxmoxProfile field and not the token secret. token_secret_env remains
+      only the name of the separately named token-secret variable. A leaf pin is
+      deliberately rotation-sensitive: certificate renewal, replacement,
+      expiry, SAN change, or fingerprint mismatch requires stopping,
+      re-authenticating the new certificate out of band, and deliberately
+      replacing the pin. Never silently refresh it or weaken verification.
+
       This union comes from the effective nginx-nixos/nginx-basics,
       nftables-nixos/nftables-basics and systemd-nixos/service-authoring
       requirements. It is backed by the command/rebuild checks on both clones
@@ -95,6 +120,15 @@ steps:
       printf '\n'
       ```
 
+      If the separately authenticated leaf-pin fallback is required, set its
+      synthetic path only in this same dedicated short-lived controller process:
+
+      ```bash
+      # Controller: replace the metavariable with the verified owner-only file
+      SSL_CERT_FILE="OWNER_ONLY_VERIFIED_SERVER_LEAF_PATH"
+      export SSL_CERT_FILE
+      ```
+
       Enter the secret at the hidden prompt, never as a command argument,
       history entry, LearnLab answer, TOML value or Nix expression. Replace the
       example variable name consistently if you selected another. Do not print
@@ -122,9 +156,14 @@ steps:
       privileges silently. Wrong template/node/storage/network means compare full
       observed identity with the worksheet. Missing capability means return to
       actual guest configuration and two-clone tests, not just adding TOML strings.
-      Stop on failures and retain resources for diagnosis. Remove the exported
-      secret from this shell when finished with `unset LEARNLAB_TEMPLATE_TOKEN_SECRET`
-      (using your selected name). Keep only non-secret pass/fail notes.
+      Stop on failures and retain resources for diagnosis. When finished, run
+      `unset SSL_CERT_FILE` if the fallback was used and separately clear the
+      separately named token-secret variable with
+      `unset LEARNLAB_TEMPLATE_TOKEN_SECRET` (using your selected name). Keep
+      only non-secret pass/fail notes. A renewed, replaced, expired, SAN-changed,
+      or fingerprint-mismatched leaf requires stopping and out-of-band
+      re-authentication before deliberately replacing the pin; never silently
+      refresh it or disable verification.
     verifications:
       - id: read-only-handoff-checked
         type: manual-confirmation

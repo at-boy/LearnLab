@@ -292,6 +292,38 @@ def test_provider_bootstrap_cross_link_is_optional_and_keeps_none_scope():
     assert policy.provider_capability is None
 
 
+@pytest.mark.parametrize("source", ["course", "guide"])
+def test_provider_handoff_teaches_authenticated_rotation_sensitive_tls_recovery(source):
+    if source == "course":
+        text = lesson_text("configure-provider")
+    else:
+        text = (Path(__file__).parents[1] / "docs/NixOS-Template-Guide.md").read_text()
+
+    normalized = " ".join(text.split())
+    for fragment in (
+        "tls_verify = true",
+        "Python 3.13",
+        "curl",
+        "CA/key-usage X.509 extensions",
+        "correctly issued controller-trusted CA/server certificate",
+        "SSL_CERT_FILE",
+        "not a ProxmoxProfile field",
+        "not the token secret",
+        "separate trusted management path",
+        "expected issuer/chain",
+        "exact SAN match",
+        "validity window",
+        "SHA-256 fingerprint",
+        "openssl s_client",
+        "not authentication",
+        "rotation-sensitive",
+        "unset SSL_CERT_FILE",
+        "separately named token-secret variable",
+    ):
+        assert fragment in normalized
+    assert "ca_file" not in text
+
+
 def test_installer_teaches_target_specific_steps():
     text = lesson_text("install-nixos")
     for concept in [

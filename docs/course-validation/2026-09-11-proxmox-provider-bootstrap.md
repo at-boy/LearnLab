@@ -5,6 +5,11 @@ Recorded 2026-09-14. The filename follows the approved design date,
 2026-09-11.
 Tested content revision: `cea6086845980512aaf030725f191e3f65678021`
 
+Documentation-only TLS guidance refresh: 2026-09-19. The current digest below
+was recomputed after the focused course suite and offline validator passed; see
+`.superpowers/sdd/2026-09-14-nixos-live-corrections/task-5-report.md`. No live
+acceptance or certification-registry update was performed.
+
 Course: `proxmox/provider-bootstrap`. This record covers repository inspection,
 offline curriculum validation, and automated non-live tests only. No provider,
 network, Proxmox, lifecycle, operator-shell, SSH, guest, resource, permission,
@@ -13,12 +18,12 @@ identifier or credential is recorded here.
 
 ## Exact course digest
 
-`2b7c9fc6b6d72c2a9fdbd364c21e6a9a2708e1895fe4c1db4f25e8bf76dafbb4`
+`92efd4934b2584f75e0acbc6260b8d66873f74a0da11f318e832632f2d72fda2`
 
 This exact course digest was computed from
-`src/learnlab/collections/proxmox/courses/provider-bootstrap` only after the
-whole-feature spec and quality reviews were approved and the complete
-post-review offline gate passed. It was computed with:
+`src/learnlab/collections/proxmox/courses/provider-bootstrap` after the current
+documentation-only refresh. The original whole-feature spec, quality-review,
+and complete post-review evidence remains recorded below. It was computed with:
 
 ```sh
 PYTHONPATH=src .venv/bin/python - <<'PY'

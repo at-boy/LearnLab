@@ -281,6 +281,43 @@ def test_named_profile_is_additive_secret_free_and_tls_verified():
         assert fragment in text
 
 
+def test_strict_tls_recovery_keeps_trust_separate_from_profile_secret_semantics():
+    profile = lesson_text("add-named-profile")
+    health = lesson_text("run-get-only-health")
+    readme = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
+
+    for surface in (profile, readme):
+        normalized = " ".join(surface.split())
+        for fragment in (
+            "Python 3.13",
+            "curl",
+            "CA/key-usage X.509 extensions",
+            "correctly issued controller-trusted CA/server certificate",
+            "exact SAN match",
+            "separate trusted management path",
+            "expected issuer/chain",
+            "validity window",
+            "SHA-256 fingerprint",
+            "openssl s_client",
+            "not authentication",
+            "rotation-sensitive",
+        ):
+            assert fragment in normalized
+
+    for surface in (profile, health, readme):
+        normalized = " ".join(surface.split())
+        assert "tls_verify = true" in normalized
+        assert "SSL_CERT_FILE" in normalized
+        assert "token_secret_env" in normalized
+        assert "not a ProxmoxProfile field" in normalized
+        assert "not the token secret" in normalized
+        assert "ca_file" not in surface
+
+    normalized_health = " ".join(health.split())
+    assert "unset SSL_CERT_FILE" in normalized_health
+    assert "separately named token-secret variable" in normalized_health
+
+
 def test_profile_edit_branches_create_new_default_and_preserve_existing_defaults():
     steps = {step.id: step.instructions for step in lesson_steps("add-named-profile")}
     backup_branch = steps["back-up-config"]

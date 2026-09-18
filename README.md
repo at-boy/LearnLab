@@ -105,6 +105,34 @@ normal use. Setting `tls_verify = false` is an explicit private-lab exception
 and LearnLab warns when it is disabled. Use a certificate trusted by the
 controller rather than disabling verification.
 
+Python 3.13's strict certificate validation can reject a legacy/default
+Proxmox cluster CA that lacks CA/key-usage X.509 extensions even when curl
+accepts it. Curl success therefore does not prove that LearnLab's Python client
+will accept the same trust file. The preferred repair is a correctly issued
+controller-trusted CA/server certificate with an exact SAN match for the
+configured API hostname or IP.
+
+A bounded fallback may pin the current public server leaf certificate as an
+explicit trust anchor only after authenticating it through a separate trusted
+management path and verifying its expected issuer/chain, exact SAN match for
+the configured endpoint, validity window, and SHA-256 fingerprint. Capturing
+an unchecked certificate with `openssl s_client` over the same untrusted
+connection is not authentication and is never sufficient.
+
+Store the verified public leaf in an owner-only controller file outside the
+repository, config TOML, progress/evidence, and secret stores. Export
+`SSL_CERT_FILE` in the same dedicated short-lived controller process that runs
+`learnlab provider test` or provider-aware validation. It is a process
+environment setting, not a ProxmoxProfile field and not the token secret;
+`token_secret_env` remains only the name of the separately named token-secret
+variable. After the checks, run `unset SSL_CERT_FILE` and separately clear that
+token-secret variable. Do not add a profile field for the trust file.
+
+A leaf pin is deliberately rotation-sensitive. Certificate renewal,
+replacement, expiry, SAN change, or fingerprint mismatch requires stopping,
+re-authenticating the new certificate out of band, and deliberately replacing
+the pin. Never silently refresh it or weaken `tls_verify = true`.
+
 The Checkpoint 05 profile also required the token's `SDN.Use` permission scoped
 to `/sdn/zones/localnetwork/vmbr0`. That path was an environment-specific
 discovery, not a general default: grant only the permissions and resource scope

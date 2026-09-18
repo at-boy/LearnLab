@@ -8,6 +8,11 @@ session-sealing gap; commit `9f0df3b` fixed it, `97e75ea` refreshed this report,
 and the scoped re-review found no remaining findings. Offline checks were rerun
 successfully; only live acceptance remains pending. No merge or push is implied.
 
+Documentation-only TLS guidance refresh: 2026-09-19. The current digest below
+was recomputed after the focused course suite and offline validator passed; see
+`.superpowers/sdd/2026-09-14-nixos-live-corrections/task-5-report.md`. No live
+acceptance or certification-registry update was performed.
+
 Course: `proxmox/nixos-template`, seven ordered lessons, effective
 `environment.scope: none`, no provider or guest capabilities, and only exact
 text evidence/manual confirmations. Knowledge answers and saved progress are
@@ -17,10 +22,11 @@ guest, disk, sealing, clone or cleanup operation was executed for this acceptanc
 ## Exact course digest
 
 ```text
-215c57675abd952e4d84382b7ba63645dd38ea6972e2bc7bedae26db04a7f91c
+c1a124cf56f0ce19b8203926bde0d6e8305e71a175f823f90200318c3279dc82
 ```
 
-Computed on the tested revision with this read-only command (exit 0):
+Recomputed after the current documentation-only refresh with this read-only
+command (exit 0):
 
 ```sh
 PYTHONPATH=src .venv/bin/python - <<'DIGEST'
@@ -30,9 +36,9 @@ print(course_digest(Path("src/learnlab/collections/proxmox/courses/nixos-templat
 DIGEST
 ```
 
-The final review fix changed the sealing lesson, so the previous digest is stale.
-This digest was recomputed after the fix at `9f0df3b`; recompute it after any
-future course change.
+The final review fix changed the sealing lesson, and this TLS guidance refresh
+changed the provider-handoff lesson. This digest was recomputed after both;
+recompute it after any future course change.
 
 ## Offline verification
 
