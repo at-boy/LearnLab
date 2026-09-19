@@ -86,3 +86,19 @@ course tests passed; both target validators, focused Ruff and `git diff --check`
 passed. Course-digest reports were refreshed without changing draft status or
 the certification registry. No live/network operation, user-config access,
 certification, merge or push occurred.
+
+Task 5: fix round 1/5 (2 addressed, 0 open; commits `c952e75..e70dd78`) —
+corrected the two digest-bound validation reports so historical offline
+revisions are labeled as historical, current course digests and Task 5 offline
+evidence bind to reviewed course-content revision `c952e759`, and prior-digest
+live observations are separated from current-digest pending acceptance. The
+NixOS report keeps current-digest traversal/save-resume and acceptance-clone
+cleanup pending; the provider-bootstrap report keeps its separately authorized
+scratch lifecycle incomplete. RED: 3 report-provenance regressions failed.
+GREEN: 3 focused, 128 affected-course and 657 non-live tests passed with 1
+deselected; both validators, focused Ruff and `git diff --check` passed; both
+course digests were unchanged.
+
+Independent scoped re-review of `c952e75..e70dd78`: both Important findings
+ADDRESSED, no new Critical or Important breakage. Task 5 complete (commits
+`ec61adf..e70dd78`, review clean).
