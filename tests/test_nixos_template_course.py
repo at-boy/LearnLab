@@ -292,6 +292,40 @@ def test_provider_bootstrap_cross_link_is_optional_and_keeps_none_scope():
     assert policy.provider_capability is None
 
 
+def test_offline_report_binds_current_digest_and_scopes_prior_live_evidence():
+    from learnlab.course_certification import course_digest
+
+    report = (
+        Path(__file__).parents[1]
+        / "docs/course-validation/2026-09-10-nixos-template.md"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(report.split()).lower()
+
+    [reported_digest] = re.findall(r"(?m)^([0-9a-f]{64})$", report)
+    course_root = ROOT / "proxmox/courses/nixos-template"
+    assert reported_digest == course_digest(course_root)
+    assert (
+        "Current-digest reviewed content revision: "
+        "`c952e759b34fd5592f5c0607eef8d5474567433a`"
+    ) in report
+    assert "historical offline evidence revision" in report.lower()
+    assert "`9f0df3bd15b45e1575e5071668e594f07a373c74`" in report
+
+    for fragment in (
+        "authorized installation, sealing, template conversion",
+        "two-full-clone rebuild/reboot validation",
+        "read-only provider health/compatibility",
+        "before the tls documentation commit and current digest",
+        "does not certify the current course bytes",
+        (
+            "current-digest course traversal, save/resume, and acceptance-clone "
+            "cleanup remain pending"
+        ),
+        "task 5 was offline-only",
+    ):
+        assert fragment in normalized
+
+
 @pytest.mark.parametrize("source", ["course", "guide"])
 def test_provider_handoff_teaches_authenticated_rotation_sensitive_tls_recovery(source):
     if source == "course":

@@ -1,20 +1,26 @@
 # Proxmox provider bootstrap — offline acceptance and live blockers
 
-Status: **draft; offline gate passed; live acceptance not performed**.
+Status: **draft; offline gate passed; current-digest live acceptance not performed**.
 Recorded 2026-09-14. The filename follows the approved design date,
 2026-09-11.
-Tested content revision: `cea6086845980512aaf030725f191e3f65678021`
+Historical offline evidence revision: `cea6086845980512aaf030725f191e3f65678021`.
+The original whole-feature checks below remain historical evidence only.
 
-Documentation-only TLS guidance refresh: 2026-09-19. The current digest below
-was recomputed after the focused course suite and offline validator passed; see
+Current-digest reviewed content revision: `c952e759b34fd5592f5c0607eef8d5474567433a`.
+Task 5 was offline-only. At that
+revision, 3 focused TLS regressions, 126 affected course tests, and the complete
+655-test non-live suite passed; one live test was deselected. Both target course
+validators, focused Ruff and `git diff --check` also passed. These results and
+the digest below bind to the course bytes at `c952e759`; see
 `.superpowers/sdd/2026-09-14-nixos-live-corrections/task-5-report.md`. No live
 acceptance or certification-registry update was performed.
 
-Course: `proxmox/provider-bootstrap`. This record covers repository inspection,
-offline curriculum validation, and automated non-live tests only. No provider,
-network, Proxmox, lifecycle, operator-shell, SSH, guest, resource, permission,
-profile, or secret operation was performed for this report. No deployment
-identifier or credential is recorded here.
+Course: `proxmox/provider-bootstrap`. Task 5 covers repository inspection,
+offline curriculum validation, and automated non-live tests only. It performed
+no provider, network, Proxmox, lifecycle, operator-shell, SSH, guest, resource,
+permission, profile, or secret operation. The separately authorized historical
+observation scoped below predates this digest. No deployment identifier or
+credential is recorded here.
 
 ## Exact course digest
 
@@ -40,8 +46,9 @@ and requires the complete offline gate and digest computation to be repeated.
 
 ## Offline verification
 
-The following pre-report commands ran in the isolated
-`template-bootstrap-course` worktree and exited 0:
+The following historical pre-report commands ran for revision `cea6086` in the
+isolated `template-bootstrap-course` worktree and exited 0. They do not describe
+the current digest:
 
 ```text
 .venv/bin/python -m pytest tests/test_provider_bootstrap_course.py tests/test_nixos_template_course.py tests/test_course_authoring_docs.py tests/test_cli.py tests/test_packaging.py -q -k 'not offline_report_keeps_live_protocol_pending'
@@ -265,11 +272,21 @@ mapping, mutation rights, guest readiness, cleanup, or operator behavior. Manual
 confirmations prove only self-attestation. No certification-registry entry may
 be added until the entire live protocol below passes for this exact digest.
 
-## Required live protocol — unexecuted
+## Prior handoff observation and current-digest boundary
 
-Every item below is **NOT RUN / PENDING**. This report neither requests nor
-grants authorization to execute it. A later authorization must identify its
-scope privately; resulting shared evidence must remain redacted.
+A read-only provider health/compatibility observation occurred under separate
+authorization in support of the NixOS handoff before the current
+provider-bootstrap digest. It does not constitute full provider-bootstrap
+acceptance and does not roll forward as current-digest proof. The separately
+authorized scratch lifecycle remains incomplete. Task 5 was offline-only and
+neither repeated that observation nor executed any lifecycle action.
+
+## Required current-digest live protocol — unexecuted
+
+Every item below is **NOT RUN / PENDING for the current digest**. This report
+neither requests nor grants authorization to execute it. A later authorization
+must identify its scope privately; resulting shared evidence must remain
+redacted. The prior NixOS-handoff health observation does not satisfy item 4.
 
 1. **NOT RUN / PENDING:** Record the installed PVE version and final course
    digest without deployment identifiers.

@@ -784,4 +784,27 @@ def test_offline_report_keeps_live_protocol_pending():
     [reported_digest] = re.findall(r"(?m)^`([0-9a-f]{64})`$", report)
     course_root = ROOT / "proxmox/courses/provider-bootstrap"
     assert reported_digest == course_digest(course_root)
-    assert re.search(r"(?m)^Tested content revision: `[0-9a-f]{40}`$", report)
+    assert (
+        "Current-digest reviewed content revision: "
+        "`c952e759b34fd5592f5c0607eef8d5474567433a`"
+    ) in report
+    assert "historical offline evidence revision" in report.lower()
+    assert "`cea6086845980512aaf030725f191e3f65678021`" in report
+
+
+def test_offline_report_scopes_prior_health_to_incomplete_current_acceptance():
+    report = (
+        Path(__file__).parents[1]
+        / "docs/course-validation/2026-09-11-proxmox-provider-bootstrap.md"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(report.split())
+
+    for fragment in (
+        "read-only provider health/compatibility observation",
+        "in support of the NixOS handoff",
+        "before the current provider-bootstrap digest",
+        "does not constitute full provider-bootstrap acceptance",
+        "separately authorized scratch lifecycle remains incomplete",
+        "Task 5 was offline-only",
+    ):
+        assert fragment in normalized

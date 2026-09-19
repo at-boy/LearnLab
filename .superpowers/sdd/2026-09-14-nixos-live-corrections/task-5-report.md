@@ -125,3 +125,104 @@ authorized live acceptance; offline tests do not establish live TLS behavior.
 
 No live or network operations, user-configuration access, certification update,
 merge, or push occurred.
+
+## Fix round 1 — live-evidence provenance
+
+### Findings addressed
+
+1. Both course-validation reports now label their older revisions and checks as
+   historical evidence. Their unchanged current digests and Task 5 offline
+   results are explicitly bound to reviewed course-content revision
+   `c952e759b34fd5592f5c0607eef8d5474567433a`.
+2. The NixOS report now records, without identifiers, the separately authorized
+   installation, sealing, template conversion, two-full-clone rebuild/reboot,
+   and read-only provider health/compatibility observations that occurred before
+   the TLS documentation commit/current digest. It states that this prior-digest
+   evidence does not certify current course bytes and that current-digest course
+   traversal/save-resume and acceptance-clone cleanup remain pending. The
+   provider-bootstrap report scopes its prior read-only health/compatibility
+   observation to the NixOS handoff, rejects it as full provider-bootstrap
+   acceptance, and keeps the separately authorized scratch lifecycle incomplete.
+
+Both reports retain draft status and describe Task 5 as offline-only.
+
+### RED evidence
+
+Command:
+
+```text
+.venv/bin/python -m pytest tests/test_nixos_template_course.py::test_offline_report_binds_current_digest_and_scopes_prior_live_evidence tests/test_provider_bootstrap_course.py::test_offline_report_keeps_live_protocol_pending tests/test_provider_bootstrap_course.py::test_offline_report_scopes_prior_health_to_incomplete_current_acceptance -q
+```
+
+Result before report edits:
+
+```text
+3 failed in 0.14s
+```
+
+The failures were the intended report-contract failures: neither report named
+`c952e759...` as the current-digest reviewed content revision, and the required
+prior-observation/current-digest boundary was absent. The digest assertions
+already passed, proving that the defect was provenance text rather than stale
+course bytes.
+
+### GREEN evidence
+
+```text
+.venv/bin/python -m pytest tests/test_nixos_template_course.py::test_offline_report_binds_current_digest_and_scopes_prior_live_evidence tests/test_provider_bootstrap_course.py::test_offline_report_keeps_live_protocol_pending tests/test_provider_bootstrap_course.py::test_offline_report_scopes_prior_health_to_incomplete_current_acceptance -q
+3 passed in 0.07s
+
+.venv/bin/python -m pytest tests/test_provider_bootstrap_course.py tests/test_nixos_template_course.py
+128 passed in 5.86s
+
+.venv/bin/python -m pytest -m 'not live'
+657 passed, 1 deselected in 40.28s
+
+.venv/bin/learnlab validate proxmox/nixos-template
+Validation passed with no findings.
+
+.venv/bin/learnlab validate proxmox/provider-bootstrap
+Validation passed with no findings.
+
+.venv/bin/ruff check tests/test_nixos_template_course.py tests/test_provider_bootstrap_course.py
+All checks passed!
+
+git diff --check
+exit 0; no output
+```
+
+One initial post-edit Ruff run found only an overlong new test literal; wrapping
+the literal without changing its value resolved the formatting failure.
+
+### Unchanged digest evidence
+
+Read-only recomputation produced:
+
+```text
+proxmox/nixos-template c1a124cf56f0ce19b8203926bde0d6e8305e71a175f823f90200318c3279dc82
+proxmox/provider-bootstrap 92efd4934b2584f75e0acbc6260b8d66873f74a0da11f318e832632f2d72fda2
+```
+
+These values exactly match Task 5 and confirm that fix round 1 changed no course
+manifest or lesson byte. The reports/tests/report artifacts therefore continue
+to associate those course digests with reviewed content revision `c952e759...`.
+
+### Commit SHA handling
+
+This appended report is included in the fix commit and therefore cannot contain
+that commit's own SHA. The authoritative SHA is returned to the controller after
+commit creation. Exact subject: `docs: correct live evidence provenance`.
+
+### Self-review and concerns
+
+- Diff scope is limited to the two course-validation reports, their two test
+  modules, and this append-only Task 5 report.
+- No lesson, manifest, README, standalone guide, provider code/schema,
+  certification registry, user configuration, or live state changed.
+- The reports contain no live identifiers, secrets, fingerprints, certificate
+  dates/content, token identities, VMIDs, or local absolute paths.
+- Historical observations are not promoted to current-digest acceptance or
+  certification; current-digest pending work remains explicit.
+
+No implementation concern. No live or network operation, certification update,
+merge, or push occurred during fix round 1.

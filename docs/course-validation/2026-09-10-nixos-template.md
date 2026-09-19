@@ -1,23 +1,30 @@
 # NixOS template course — offline acceptance and live blockers
 
-Status: **draft; offline gate passed; live acceptance not performed**.
+Status: **draft; offline gate passed; current-digest live acceptance not performed**.
 Recorded 2026-09-11. The filename follows the design/plan date, 2026-09-10.
-Tested content revision: `9f0df3bd15b45e1575e5071668e594f07a373c74`
+Historical offline evidence revision: `9f0df3bd15b45e1575e5071668e594f07a373c74`
 on `feature/nixos-template-course`. The final whole-branch review found an SSH
 session-sealing gap; commit `9f0df3b` fixed it, `97e75ea` refreshed this report,
-and the scoped re-review found no remaining findings. Offline checks were rerun
-successfully; only live acceptance remains pending. No merge or push is implied.
+and the scoped re-review found no remaining findings. Those revision-specific
+checks remain historical evidence only.
 
-Documentation-only TLS guidance refresh: 2026-09-19. The current digest below
-was recomputed after the focused course suite and offline validator passed; see
+Current-digest reviewed content revision: `c952e759b34fd5592f5c0607eef8d5474567433a`.
+Task 5 was offline-only. At that
+revision, 3 focused TLS regressions, 126 affected course tests, and the complete
+655-test non-live suite passed; one live test was deselected. Both target course
+validators, focused Ruff and `git diff --check` also passed. These results and
+the digest below bind to the course bytes at `c952e759`; see
 `.superpowers/sdd/2026-09-14-nixos-live-corrections/task-5-report.md`. No live
-acceptance or certification-registry update was performed.
+acceptance or certification-registry update was performed. No merge or push is
+implied.
 
 Course: `proxmox/nixos-template`, seven ordered lessons, effective
 `environment.scope: none`, no provider or guest capabilities, and only exact
 text evidence/manual confirmations. Knowledge answers and saved progress are
-self-attestation, not infrastructure certification. No provider, SSH, Proxmox,
-guest, disk, sealing, clone or cleanup operation was executed for this acceptance.
+self-attestation, not infrastructure certification. Task 5 executed no provider,
+SSH, Proxmox, guest, disk, sealing, clone or cleanup operation. Separately
+authorized prior-digest observations are scoped below and do not convert this
+offline refresh into live acceptance.
 
 ## Exact course digest
 
@@ -42,9 +49,10 @@ recompute it after any future course change.
 
 ## Offline verification
 
-Commands ran in the isolated `template-bootstrap-course` worktree on 2026-09-11
-(fresh final-fix gate; pytest completed before 21:09:02 +02:00). Each command
-below exited 0:
+The historical commands below ran for revision `9f0df3b` in the isolated
+`template-bootstrap-course` worktree on 2026-09-11 (fresh final-fix gate; pytest
+completed before 21:09:02 +02:00). Each command exited 0, but these results do
+not describe the current digest:
 
 ```text
 .venv/bin/python -m pytest -m 'not live' -q
@@ -164,7 +172,16 @@ refreshes, not a new Task 5 fetch, reported:
   were accessible. Moving development sources do not establish installed-version
   UI/command, conversion, snapshot or storage behavior.
 
-## Required live authorization and protocol — not performed
+## Prior live observations and current-digest pending acceptance
+
+A separately authorized run before the TLS documentation commit and current
+digest observed authorized installation, sealing, template conversion,
+two-full-clone rebuild/reboot validation, and read-only provider
+health/compatibility. This identifier-free prior-digest evidence does not
+certify the current course bytes. Task 5 was offline-only and neither repeated
+nor extended those operations. Current-digest course traversal, save/resume,
+and acceptance-clone cleanup remain pending, as does exact-digest live
+acceptance as a whole.
 
 Before any live resource action, exact scratch candidate/template, preservation
 source and two clone identities, expected storage/network effects and explicit
@@ -178,8 +195,9 @@ or invented worksheet values, credentials, raw machine IDs or fingerprints are
 included. Inspect ownership again after resume or interruption; VMID alone is
 never sufficient.
 
-All checkpoints below remain **pending** until directly observed under that
-separate authorization:
+All checkpoints below remain **pending for the current digest** until directly
+observed under that separate authorization. Historical observations do not roll
+forward as current-digest proof:
 
 1. Resolve a fresh official 26.05 minimal x86_64 ISO and matching checksum;
    record exact non-secret ISO revision, course digest and tested LearnLab
@@ -230,15 +248,16 @@ than inventing registry fields. Any uncertain observation keeps the course draft
 
 ## Registry and remaining review
 
-Both commands exited 0 with no output on the tested revision:
+Both historical commands exited 0 with no output on revision `9f0df3b`:
 
 ```text
 git diff --exit-code 102c591 -- src/learnlab/collections/certifications.yaml
 git diff --exit-code 9f0df3b -- src/learnlab/collections/certifications.yaml
 ```
 
-The registry is byte-for-byte unchanged from pre-fix `102c591` and tested content
-revision `9f0df3b`.
+Those historical checks showed that the registry was byte-for-byte unchanged
+from pre-fix `102c591` through historical evidence revision `9f0df3b`. Task 5
+and this report-only provenance correction also make no registry change.
 Read-only catalog loading reports `Course maturity: draft`. The implementation
 plan checks the completed offline review through Task 5 Step 5. Live Step 4
 remains unchecked; its completion is not claimed here.
