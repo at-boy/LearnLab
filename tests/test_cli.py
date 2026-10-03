@@ -800,6 +800,52 @@ def test_start_include_drafts_allows_explicit_draft_session(
     assert store.completed_lessons("proxmox", "proxmox-admin") == {"basics"}
 
 
+def test_debian13_template_start_and_resume_need_no_provider_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+) -> None:
+    from learnlab import cli
+    from learnlab.curriculum import CurriculumCatalog
+
+    collections = Path(__file__).parents[1] / "src/learnlab/collections"
+    store = StateStore(tmp_xdg / "debian13-template-state" / "learnlab.db")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("none-scoped course accessed provider configuration")
+
+    monkeypatch.setattr(cli, "catalog_factory", lambda: CurriculumCatalog(collections))
+    monkeypatch.setattr(cli, "state_store_factory", lambda: store)
+    monkeypatch.setattr(cli, "state_root", lambda: tmp_xdg / "debian13-template-state")
+    monkeypatch.setattr(cli, "load_settings", forbidden)
+    monkeypatch.setattr(cli, "resolve_token_secret", forbidden)
+    monkeypatch.setattr(cli, "provider_factory", forbidden)
+
+    started = CliRunner().invoke(
+        cli.app,
+        ["start", "proxmox/debian13-template", "--include-drafts"],
+        input="\n\nlearner\nq\n",
+    )
+
+    assert started.exit_code == 0, started.output
+    assert "Environment policy: none" in started.stdout
+    assert "PASS: Text evidence matched" in started.stdout
+    assert "Progress saved." in started.stdout
+    assert store.lesson_statuses("proxmox", "debian13-template") == {
+        "prerequisites-and-safety": ProgressStatus.IN_PROGRESS
+    }
+
+    resumed = CliRunner().invoke(
+        cli.app,
+        ["resume", "proxmox/debian13-template"],
+        input="\nq\n",
+    )
+
+    assert resumed.exit_code == 0, resumed.output
+    assert "[in progress]" in resumed.stdout
+    assert "Environment policy: none" in resumed.stdout
+    assert "Progress saved." in resumed.stdout
+
+
 def test_nixos_template_start_and_resume_need_no_provider_configuration(
     monkeypatch: pytest.MonkeyPatch,
     tmp_xdg: Path,
