@@ -6,16 +6,21 @@ Recorded 2026-09-14. The filename follows the approved design date,
 Historical offline evidence revision: `cea6086845980512aaf030725f191e3f65678021`.
 The original whole-feature checks below remain historical evidence only.
 
-Current-digest reviewed content revision: `c952e759b34fd5592f5c0607eef8d5474567433a`.
+Historical reviewed content revision: `c952e759b34fd5592f5c0607eef8d5474567433a`.
 Task 5 was offline-only. At that
 revision, 3 focused TLS regressions, 126 affected course tests, and the complete
 655-test non-live suite passed; one live test was deselected. Both target course
-validators, focused Ruff and `git diff --check` also passed. These results and
-the digest below bind to the course bytes at `c952e759`; see
+validators, focused Ruff and `git diff --check` also passed. Those historical results bind only to the course bytes at `c952e759`,
+not to the current digest below; see
 `.superpowers/sdd/2026-09-14-nixos-live-corrections/task-5-report.md`. No live
 acceptance or certification-registry update was performed.
 
-Course: `proxmox/provider-bootstrap`. Task 5 covers repository inspection,
+Current digest: October 4, 2026 TLS lifecycle correction in the
+`codex/learnlab-roadmap` working tree; see the dated section below and roadmap
+execution log for its verification and subsequent commit. All current-content
+live acceptance remains pending.
+
+Course: `proxmox/provider-bootstrap`. Historical Task 5 covers repository inspection,
 offline curriculum validation, and automated non-live tests only. It performed
 no provider, network, Proxmox, lifecycle, operator-shell, SSH, guest, resource,
 permission, profile, or secret operation. The separately authorized historical
@@ -24,7 +29,7 @@ credential is recorded here.
 
 ## Exact course digest
 
-`92efd4934b2584f75e0acbc6260b8d66873f74a0da11f318e832632f2d72fda2`
+`d0a6c938d6c5542dcd87813b2f300283fe979df754df9f273e89a0146cbf24f1`
 
 This exact course digest was computed from
 `src/learnlab/collections/proxmox/courses/provider-bootstrap` after the current
@@ -315,3 +320,7 @@ redacted. The prior NixOS-handoff health observation does not satisfy item 4.
 
 Any ambiguous mapping, filtered inventory, unresolved task, uncertain mutation,
 or uncertain cleanup is a live blocker. The course remains draft.
+
+## 2026-10-04 offline integration correction
+
+The scratch lifecycle now restores separately authenticated SSL_CERT_FILE trust in its fresh shell when the reviewed leaf-pin fallback is required, retains it through recovery/destroy/reconciliation, and clears it only after independent cleanup confirmation. Normal controller CA trust remains the default and TLS verification stays enabled. No live operations were performed. All live checkpoints above remain pending for the newly reported exact digest; earlier offline/live observations do not certify these bytes.

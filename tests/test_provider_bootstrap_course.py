@@ -785,7 +785,7 @@ def test_offline_report_keeps_live_protocol_pending():
     course_root = ROOT / "proxmox/courses/provider-bootstrap"
     assert reported_digest == course_digest(course_root)
     assert (
-        "Current-digest reviewed content revision: "
+        "Historical reviewed content revision: "
         "`c952e759b34fd5592f5c0607eef8d5474567433a`"
     ) in report
     assert "historical offline evidence revision" in report.lower()
