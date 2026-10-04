@@ -1,0 +1,92 @@
+id: install-debian13
+title: Install Debian 13 from netinst
+steps:
+  - id: review-target-and-accounts
+    title: Choose Debian installer settings
+    instructions: |
+      Installer console: prerequisite is the inspected disposable VM booted from
+      the verified amd64 netinst ISO. On resume, inspect whether installation
+      already changed its disk; never restart partitioning by assumption.
+      Continue text-mode Install with the selected language, location, keyboard,
+      DHCP hostname, time zone and an online trixie package mirror. Choose a
+      unique local learner account. The installer asks whether to enable root:
+      a root password creates direct root console access and the first user may
+      not receive sudo; leaving root password empty disables direct root login
+      and makes the first user an administrator. Keep passwords private and use
+      the option that leaves a known console recovery route. Do not paste any
+      password into LearnLab. Expected: installer reaches partitioning with the
+      correct release and network mirror. If mirror/package setup fails, inspect
+      DHCP, DNS, time and selected mirror; stop before disk writes if unresolved.
+    verifications:
+      - id: installer-settings-reviewed
+        type: manual-confirmation
+        prompt: Confirm the Debian 13 installer, accounts and online mirror locally.
+  - id: identify-target-disk
+    title: Identify the actual disk before manual partitioning
+    instructions: |
+      Installer console: choose Manual partitioning. Inspect every listed disk's
+      size, model and current partition signature. Compare the proposed OS disk
+      with Proxmox Hardware and the private worksheet; distinguish the EFI
+      variables disk. Do not rely on a remembered /dev name or VMID. If any disk
+      identity, capacity or existing data is unexpected, stop without writing.
+      For the confirmed disposable OS disk, plan GPT with a 1 GiB EFI System
+      Partition mounted at /boot/efi and the remainder as ext4 mounted at /.
+      Deliberately omit swap for these disposable guests only after confirming
+      adequate RAM; suspend and memory pressure are outside this baseline.
+      Select the EFI partition as ESP, not a second root filesystem. Before
+      Finish partitioning and write changes to disk, review the installer's
+      complete pending write summary and confirm it affects only that disk.
+      The final confirmation is destructive. If anything differs, choose No
+      and stop; no unconditional disk-format command belongs in this course.
+      Expected: one ESP and one root partition on the selected disk. If Debian
+      reports no EFI boot partition, revisit the ESP flag/mount and firmware
+      mode before committing.
+    verifications:
+      - id: disk-write-confirmed
+        type: manual-confirmation
+        prompt: Confirm you checked disk identity, layout and the destructive write summary before approving it.
+  - id: install-base-system
+    title: Install base packages and GRUB EFI
+    instructions: |
+      Installer console: allow the base system and selected trixie mirror to
+      install. In software selection choose SSH server and standard system
+      utilities, and deselect desktop environments. Confirm GRUB EFI is installed
+      for the selected disk's EFI System Partition. A package download error
+      calls for checking mirror/DNS/clock; a GRUB error calls for checking UEFI
+      mode, ESP flag and mount. Stop rather than declaring success after either
+      error. Expected: installer reports completion without unresolved errors.
+      Proxmox node (management UI): after installer completion, detach the ISO
+      and set boot order to OS disk first. Do not boot the installer again.
+      Expected: Debian boots from disk to a login prompt. If it returns to the
+      installer or UEFI shell, inspect ISO attachment, boot order, EFI disk and
+      GRUB before repeating any installation step.
+    verifications:
+      - id: disk-boot-confirmed
+        type: manual-confirmation
+        prompt: Confirm Debian reached login from the OS disk with the ISO detached.
+  - id: verify-installed-os
+    title: Check the installed target
+    instructions: |
+      Installed guest (console): sign in with the chosen administrator route.
+      Run `cat /etc/os-release`, `findmnt /`, `findmnt /boot/efi` and
+      `test -d /sys/firmware/efi && echo UEFI`. Expected: ID=debian, major
+      VERSION_ID=13, ext4 root, mounted ESP and UEFI boot. Compare disk layout
+      with `lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS` without changing it.
+      If release, mount or firmware differs, stop and diagnose the actual booted
+      disk and installer choices. This console check is self-attested, not a
+      LearnLab remote verification.
+    verifications:
+      - id: installed-target-confirmed
+        type: manual-confirmation
+        prompt: Confirm the installed guest reports Debian 13, expected mounts and UEFI disk boot.
+  - id: release-concept
+    title: Identify the expected major release
+    instructions: |
+      Controller: answer only the expected Debian major VERSION_ID. This
+      knowledge answer does not prove the guest's actual release.
+    verifications:
+      - id: target-release
+        type: text-evidence
+        prompt: 'What major VERSION_ID should /etc/os-release report? Enter 13.'
+        equals: '13'
+        failure_message: The installed target is Debian 13 (trixie).

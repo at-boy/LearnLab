@@ -4,3 +4,6 @@ environment:
   scope: none
 lessons:
   - prerequisites-and-safety
+  - create-installer-vm
+  - install-debian13
+  - configure-lab-access
