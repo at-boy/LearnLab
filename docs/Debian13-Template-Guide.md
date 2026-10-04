@@ -145,11 +145,15 @@ match, test a fresh key-only login with strict checking:
 # Controller; use locally chosen variables, never paste their values into LearnLab.
 ssh -o UserKnownHostsFile="$KNOWN_HOSTS" \
     -o GlobalKnownHostsFile=/dev/null \
-    -o StrictHostKeyChecking=yes -o BatchMode=yes \
+    -o StrictHostKeyChecking=yes \
+    -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no \
+    -o PreferredAuthentications=publickey \
     -i "$KEY_FILE" "$LAB_USER@$GUEST_ADDR" id -un
 ```
 
-Expect the chosen account name, no password prompt and no host-key warning.
+Expect the chosen account name and no host-key warning. A hidden **local**
+prompt to unlock the protected private key is allowed; a guest-account
+password prompt is not.
 Keep the Proxmox console available. On failure inspect account, permissions,
 ssh.service, network and logs; do not disable password authentication yet.
 

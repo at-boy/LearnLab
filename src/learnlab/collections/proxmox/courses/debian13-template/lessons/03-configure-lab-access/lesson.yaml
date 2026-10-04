@@ -76,9 +76,10 @@ steps:
       `ssh-keygen -lf "$KNOWN_HOSTS"` and compare the fingerprint exactly with
       the console value. A mismatch or missing key means stop; ssh-keyscan alone
       is not trust. Only after the match, test a fresh controller login:
-      `ssh -o UserKnownHostsFile="$KNOWN_HOSTS" -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o BatchMode=yes -i "$KEY_FILE" "$LAB_USER@$GUEST_ADDR" id -un`.
-      Expected: the chosen account name, no
-      password prompt and strict host checking. Keep the guest console open.
+      `ssh -o UserKnownHostsFile="$KNOWN_HOSTS" -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o PreferredAuthentications=publickey -i "$KEY_FILE" "$LAB_USER@$GUEST_ADDR" id -un`.
+      A hidden LOCAL prompt to unlock the protected private key is allowed;
+      a guest-account password prompt is not. Expected: the chosen account name
+      and strict host checking. Keep the guest console open.
       If login fails, inspect account home/ownership, key permissions, service
       logs and network; do not disable password SSH yet.
     verifications:

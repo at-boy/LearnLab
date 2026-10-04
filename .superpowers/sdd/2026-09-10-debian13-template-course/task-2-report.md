@@ -52,3 +52,18 @@ After the correction: focused course tests → 4 passed; packaged course CLI
 validation → no findings; `git diff --check` → clean. The prior full non-live
 suite remains the Task 2 baseline; this prose-only correction did not alter
 runtime code, metadata or test behavior.
+
+## Independent review round 2 correction
+
+Removed `BatchMode=yes` from the SSH login example in the lesson and guide.
+The command now disables guest password and keyboard-interactive methods and
+prefers public-key authentication while allowing a hidden local prompt to
+unlock a protected private key. Strict host-key checking and the isolated
+known_hosts file remain in place. No private-key material is transferred.
+
+After the correction: focused course tests → 4 passed; packaged course CLI
+validation → no findings. A network-free `ssh -G` check with an empty client
+config confirmed `passwordauthentication no`, `kbdinteractiveauthentication no`,
+`preferredauthentications publickey`, strict host checking and the isolated
+host-key paths. The host's system SSH config had a permissions error, so the
+read-only option check used `-F /dev/null`; no SSH connection was attempted.
