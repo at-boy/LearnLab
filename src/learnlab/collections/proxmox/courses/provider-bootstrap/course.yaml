@@ -1,0 +1,13 @@
+id: provider-bootstrap
+title: Bootstrap a Proxmox Provider for LearnLab
+environment:
+  scope: none
+lessons:
+  - safety-and-private-worksheet
+  - read-only-inventory
+  - map-provider-authority
+  - create-identity-roles-and-acls
+  - add-named-profile
+  - run-get-only-health
+  - authorize-scratch-lifecycle
+  - reconcile-and-rollback

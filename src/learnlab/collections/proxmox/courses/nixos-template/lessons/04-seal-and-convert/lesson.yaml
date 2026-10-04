@@ -60,12 +60,23 @@ steps:
       findmnt -T /var/lib/dbus
       findmnt -M /etc/machine-id
       findmnt -M /var/lib/dbus/machine-id
+      sudo ls -ld /etc /etc/hostid
+      sudo stat -c '%F %h %U %G %a %s %n' /etc/hostid
+      sudo readlink /etc/hostid
+      findmnt -T /etc/hostid
+      findmnt -M /etc/hostid
+      nixos-option networking.hostId
+      systemctl is-enabled learnlab-hostid.service
+      systemctl cat learnlab-hostid.service
+      systemctl show learnlab-hostid.service -p After -p Before -p Result -p ExecMainStatus -p ConditionResult
+      test "$(hostid)" = "$(head -c 8 /etc/machine-id)"
+      echo $?
       cat /proc/cmdline
       systemctl --version
       nixos-option services.openssh.hostKeys
       nixos-option services.openssh.generateHostKeys
       nixos-option services.openssh.startWhenNeeded
-      sudo sshd -T
+      sudo sshd -G -T
       systemctl cat sshd.service sshd-keygen.service
       systemctl show sshd.service -p Wants -p After -p ExecStartPre -p ExecStart
       ```
@@ -83,6 +94,18 @@ steps:
       symlink target, persistence overlay, inaccessible path or unknown layout.
       Do not unmount, remount, follow a link into the Nix store or force truncation.
       Resolve the target-specific configuration before returning to inspection.
+      Require the access lesson's validated 32-hex machine-id and a root-owned,
+      single-link regular four-byte /etc/hostid, group root, mode 0444, on writable
+      ext4 root with no symlink or mountpoint. /etc itself must be a root-owned
+      ordinary directory without group/other write access. Require comparison exit
+      0 and networking.hostId null/unset, never a static value. Inspect imports,
+      environment.etc, activation scripts and custom units for hostid/machine-id
+      overrides or competing writers. Require none. Check learnlab-hostid enabled,
+      successful generation (or the later-boot skip plus a valid persistent file),
+      its absent-file condition and ordering after machine-ID commit/local-fs and
+      before multi-user completion. Failed lookup, missing hostid, unsafe layout,
+      invalid identity, wrong ordering or mismatch means stop before sealing.
+      This is the ext4 recipe, not a reviewed ZFS early-boot hostId design.
       Inspect boot.kernelParams and imported configuration locally for fixed
       systemd.machine_id, --machine-id or container_uuid overrides; compare with
       /proc/cmdline. Do not bake a fixed identity into clones. Proxmox node: inspect
@@ -97,7 +120,9 @@ steps:
       Inspect every hostKeys private path and its .pub counterpart with ls, stat,
       readlink and findmnt as above; require ordinary unmounted single-link files,
       writable parent directories, no shared/store-backed keys and a complete
-      explicit list matching sshd -T. Do not display private key contents.
+      root-owned private/public file set (inspect every owner), with no unexpected
+      links or identity overrides. Require the explicit list to match sshd -G -T.
+      Do not display private key contents.
       Option lookup failure or disagreement with the active unit means stop and
       reconcile the active generation; do not borrow Debian cleanup assumptions.
     verifications:
@@ -117,11 +142,16 @@ steps:
         equals: power off
         failure_message: Power off the sealed candidate; a reboot can regenerate identity before cloning.
   - id: confirm-sealing-write
-    title: Deliberately authorize the console-only sealing phase
+    title: Deliberately authorize the sealing phase
     instructions: |
       Installed guest (console): recheck candidate ownership and recovery source.
+      The console manual path remains the default. When console paste is impractical,
+      a previously tested Proxmox QEMU guest-agent (QGA) channel is a trusted
+      out-of-band alternative; it is not candidate SSH and cannot authenticate its
+      own host key. Keep console recovery available throughout either path.
       Make a local explicit decision to stop SSH and clear only the inspected
-      machine-ID state and configured host-key pairs on this disposable candidate.
+      machine-ID state, /etc/hostid and configured host-key pairs on this disposable
+      candidate.
       Read all following instructions first. Do not proceed if an active rebuild,
       automatic deployment or another operator can regenerate these files. This
       phase must end in poweroff. Confirmation is self-attestation, not a guard.
@@ -132,12 +162,12 @@ steps:
   - id: seal-verified-state
     title: Stop SSH, clear only inspected state and power off
     instructions: |
-      Installed guest (Proxmox console): before stopping SSH, determine and
+      Installed guest (Proxmox console): this is the manual console path. Before stopping SSH, determine and
       record every effective SSH port from this target's actual configuration:
 
       ```sh
       # Installed guest: read-only effective configuration inspection
-      sudo sshd -T
+      sudo sshd -G -T
       ```
 
       Record every `port <number>` line locally. Require a nonempty list of
@@ -154,16 +184,17 @@ steps:
       # Repeat separately for every recorded port, replacing PORT with its number.
       sudo ss -Htnp state established 'sport = :PORT'
       sudo pgrep -a -x sshd
+      sudo pgrep -a -x sshd-session
       ```
 
       `ss -Hlnpt` displays listening sockets; listening sockets alone do not prove
       sessions ended. NixOS 26.05 configures `sshd.service` with `KillMode=process`,
       so stopping it can leave sshd session children alive. Require both services
       inactive and no listener on the recorded ports, then inspect established
-      connections on every effective SSH port and remaining sshd processes
-      independently. The required state is no output from
-      every established-connection query and no output from `pgrep`; inactive and
-      no-match statuses are nonzero as expected. Any matching connection/process,
+      connections on every effective SSH port and both `sshd` and OpenSSH 10
+      `sshd-session` processes independently. The required state is no output from
+      every established-connection query and no output from either `pgrep`;
+      inactive and no-match statuses are nonzero as expected. Any matching connection/process,
       unexpected output, permission failure, incomplete port coverage or uncertainty
       about whether a command failed is a stop condition: keep console access and do
       not delete keys or machine identity.
@@ -177,6 +208,12 @@ steps:
       `sudo rm -i -- /var/lib/dbus/machine-id` and explicitly confirm that single
       removal. Any other layout: stop; never use a universal deletion/truncation
       script. Do not run machine-id setup or a rebuild after this checkpoint.
+      Installed guest: re-inspect /etc/hostid against the validated root-owned,
+      single-link four-byte ordinary file and its writable parent. Only then run
+      `sudo rm -i -- /etc/hostid` and explicitly confirm this single removal.
+      Unexpected absence, link, mount, owner, size or any error means stop and
+      reconcile; do not broaden deletion. Do not start/restart learnlab-hostid or
+      any identity generator, rebuild, restart SSH or reboot after clearing IDs.
       Installed guest: for each configured host-key pair on the reviewed local
       list, type `sudo rm -i --` followed by only its exact private and .pub paths;
       inspect the full command and confirm each removal. This is a manual action,
@@ -184,7 +221,8 @@ steps:
       and do not remove authorized_keys, sshd_config or controller keys.
       Verify locally using ls/stat/readlink/findmnt: /etc/machine-id remains an
       empty regular file (size 0), D-Bus fallback is absent or the verified empty
-      link, and every configured host-key pair is absent. Recheck service inactivity.
+      link, /etc/hostid is absent (including no dangling symlink), and every
+      configured host-key pair is absent. Recheck service inactivity.
       Any permission error, reappearing file or partial change means stop, keep
       console access and reconcile; do not label the candidate sealed. After all
       expected checks pass, deliberately power off; do not reboot or restart SSH:
@@ -200,6 +238,211 @@ steps:
       A timeout or closed console does not prove shutdown; inspect current VM
       state and any initiated task before acting. Stop on uncertainty; do not
       convert a running candidate, force-stop or automatically retry sealing.
+
+      Trusted QGA alternative when console paste is impractical: first use the
+      Proxmox console/UI and owner-only worksheet to revalidate candidate
+      identity/layout (node, name, VMID, disks, ordinary-VM state, no snapshots,
+      recovery source and working agent). Enter the locally revalidated ID; never
+      infer or reuse it. QGA is trusted out-of-band execution, not candidate SSH:
+      it cannot authenticate its own host key, so it never replaces the earlier
+      console/QGA host-key trust evidence. Keep console recovery open. Close every
+      remote SSH session before the next deliberate invocation. The command repeats
+      the layout checks, derives exact effective host-key paths and every effective
+      SSH port with `sshd -G -T`, checks all listeners/connections including
+      OpenSSH 10 `sshd-session`, makes no rebuild, and clears only those validated
+      exact paths. Review all output; any failure, partial/uncertain output or
+      interrupted QGA result requires reconciliation through console and Proxmox
+      state inspection. Do not blindly rerun.
+
+      Guest-agent commands do not inherit the normal interactive Nix environment.
+      The read-only preflight therefore exports the target installation's exact
+      channel and configuration paths before calling `nixos-option`. A missing
+      target channel/path is a stop and reconcile condition; do not guess another
+      generation or substitute a different path.
+
+      ```sh
+      # Proxmox node: read-only QGA preflight; inspect its complete output first
+      read -r CANDIDATE_ID
+      qm guest exec "$CANDIDATE_ID" -- /run/current-system/sw/bin/bash -lc '
+      set -euo pipefail
+      export NIX_PATH=nixpkgs=/nix/var/nix/profiles/per-user/root/channels/nixos:nixos-config=/etc/nixos/configuration.nix
+      for path in /etc /etc/machine-id /var/lib/dbus /etc/hostid /etc/ssh; do
+        ls -ld "$path"
+        stat -c "%F %h %U %G %a %s %n" "$path"
+        if test -L "$path"; then readlink "$path"; fi
+        findmnt -T "$path"
+        if findmnt -M "$path"; then exit 1; fi
+      done
+      if test -e /var/lib/dbus/machine-id || test -L /var/lib/dbus/machine-id; then
+        ls -ld /var/lib/dbus/machine-id
+        stat -c "%F %h %U %G %a %s %n" /var/lib/dbus/machine-id
+        if test -L /var/lib/dbus/machine-id; then readlink /var/lib/dbus/machine-id; fi
+        findmnt -T /var/lib/dbus/machine-id
+        if findmnt -M /var/lib/dbus/machine-id; then exit 1; fi
+      else
+        printf "%s\n" "D-Bus fallback absent"
+      fi
+      nixos-option networking.hostId
+      nixos-option services.openssh.hostKeys
+      nixos-option services.openssh.generateHostKeys
+      nixos-option services.openssh.startWhenNeeded
+      sshd -G -T
+      systemctl cat sshd.service sshd-keygen.service
+      '
+      ```
+
+      Require complete, unambiguous preflight output matching the previously
+      inspected candidate identity/layout before the mutation request. The D-Bus
+      fallback may be absent only because this preflight positively inspected its
+      accessible parent. Once the preflight is reviewed, run exactly one
+      deliberately authorized mutation request:
+
+      ```sh
+      # Proxmox node: one deliberately authorized QGA sealing request
+      qm status "$CANDIDATE_ID"
+      qm config "$CANDIDATE_ID"
+      qm listsnapshot "$CANDIDATE_ID"
+      qm guest exec "$CANDIDATE_ID" -- /run/current-system/sw/bin/bash -lc '
+      set -euo pipefail
+      machine_id=/etc/machine-id
+      dbus_id=/var/lib/dbus/machine-id
+      hostid=/etc/hostid
+      effective="$(sshd -G -T)"
+      mapfile -t ports < <(printf "%s\n" "$effective" | sed -n "s/^port[[:space:]]\+//Ip")
+      mapfile -t host_keys < <(printf "%s\n" "$effective" | sed -n "s/^hostkey[[:space:]]\+//Ip")
+      fail() { printf "QGA sealing guard: %s\n" "$1" >&2; exit 1; }
+      require_regular() {
+        if test -f "$1"; then
+          if test -L "$1"; then fail "$2 is a symlink"; fi
+        else
+          fail "$2 is not a regular file"
+        fi
+      }
+      require_stat() {
+        if actual="$(stat -c "$2" "$1")"; then
+          if [[ "$actual" != "$3" ]]; then fail "$4 has unexpected metadata"; fi
+        else
+          fail "$4 metadata inspection failed"
+        fi
+      }
+      check_ss_empty() {
+        if output="$("${@:2}")"; then
+          if [[ -n "$output" ]]; then fail "$1 has output: $output"; fi
+        else
+          status=$?
+          fail "$1 failed with exit $status"
+        fi
+      }
+      if (( ${#ports[@]} == 0 )); then fail "no effective SSH ports"; fi
+      if (( ${#host_keys[@]} == 0 )); then fail "no effective host keys"; fi
+      if [[ "$(printf "%s\n" "${ports[@]}" | sort -u | wc -l)" != "${#ports[@]}" ]]; then fail "duplicate effective SSH ports"; fi
+      if [[ "$(printf "%s\n" "${host_keys[@]}" | sort -u | wc -l)" != "${#host_keys[@]}" ]]; then fail "duplicate effective host keys"; fi
+      for port in "${ports[@]}"; do
+        if [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]]; then :; else fail "invalid SSH port $port"; fi
+        if (( port <= 65535 )); then :; else fail "out-of-range SSH port $port"; fi
+      done
+      if test -d /etc; then
+        if test -L /etc; then fail "/etc is a symlink"; fi
+      else
+        fail "/etc is not a directory"
+      fi
+      require_stat /etc "%U:%G" root:root /etc
+      if etc_mode="$(stat -c "%a" /etc)"; then
+        if (( (8#$etc_mode & 022) != 0 )); then fail "/etc is group/other writable"; fi
+      else
+        fail "/etc mode inspection failed"
+      fi
+      require_regular "$machine_id" machine-id
+      require_stat "$machine_id" "%h:%U:%G" 1:root:root machine-id
+      require_regular "$hostid" hostid
+      require_stat "$hostid" "%h:%U:%G:%a:%s" 1:root:root:444:4 hostid
+      dbus_remove=0
+      if test -L "$dbus_id"; then
+        if dbus_target="$(readlink "$dbus_id")"; then
+          if [[ "$dbus_target" != "$machine_id" ]]; then fail "D-Bus link target differs"; fi
+        else
+          fail "D-Bus link inspection failed"
+        fi
+      elif test -e "$dbus_id"; then
+        require_regular "$dbus_id" D-Bus-machine-id
+        require_stat "$dbus_id" "%h:%U:%G" 1:root:root D-Bus-machine-id
+        dbus_remove=1
+      fi
+      for host_key in "${host_keys[@]}"; do
+        if [[ "${host_key:0:1}" != / ]]; then fail "host key path is not absolute"; fi
+        require_regular "$host_key" host-key
+        require_stat "$host_key" "%h:%U:%G" 1:root:root host-key
+        require_regular "${host_key}.pub" host-key-public
+        require_stat "${host_key}.pub" "%h:%U:%G" 1:root:root host-key-public
+      done
+      if systemctl stop sshd.service sshd-keygen.service; then :; else fail "unable to stop SSH services"; fi
+      for service in sshd.service sshd-keygen.service; do
+        if systemctl is-active --quiet "$service"; then
+          fail "$service remains active"
+        else
+          status=$?
+          if (( status != 3 )); then fail "$service state lookup failed with exit $status"; fi
+        fi
+      done
+      for port in "${ports[@]}"; do
+        check_ss_empty "SSH listener on port $port" ss -Hlnpt "sport = :$port"
+        check_ss_empty "established SSH connection on port $port" ss -Htnp state established "sport = :$port"
+      done
+      for process in sshd sshd-session; do
+        if output="$(pgrep -a -x "$process")"; then
+          fail "$process process remains: $output"
+        else
+          status=$?
+          if (( status != 1 )); then fail "$process lookup failed with exit $status"; fi
+        fi
+      done
+      if truncate -s 0 "$machine_id"; then :; else fail "machine-id truncation failed"; fi
+      if [[ "$dbus_remove" == 1 ]]; then
+        if rm -- "$dbus_id"; then :; else fail "D-Bus-machine-id removal failed"; fi
+      fi
+      if rm -- "$hostid"; then :; else fail "hostid removal failed"; fi
+      for host_key in "${host_keys[@]}"; do
+        if rm -- "$host_key" "${host_key}.pub"; then :; else fail "host-key-pair removal failed"; fi
+      done
+      require_regular "$machine_id" machine-id-postcondition
+      if machine_size="$(stat -c %s "$machine_id")"; then
+        if [[ "$machine_size" != 0 ]]; then fail "machine-id is not empty"; fi
+      else
+        fail "machine-id postcondition inspection failed"
+      fi
+      if test -e "$hostid" || test -L "$hostid"; then fail "hostid reappeared"; fi
+      if [[ "$dbus_remove" == 1 ]]; then
+        if test -e "$dbus_id" || test -L "$dbus_id"; then fail "D-Bus-machine-id reappeared"; fi
+      elif test -L "$dbus_id"; then
+        if dbus_target="$(readlink "$dbus_id")"; then
+          if [[ "$dbus_target" != "$machine_id" ]]; then fail "D-Bus link target changed"; fi
+        else
+          fail "D-Bus postcondition link inspection failed"
+        fi
+        if dbus_size="$(stat -Lc %s "$dbus_id")"; then
+          if [[ "$dbus_size" != 0 ]]; then fail "D-Bus linked machine-id is not empty"; fi
+        else
+          fail "D-Bus linked machine-id inspection failed"
+        fi
+      elif test -e "$dbus_id"; then
+        fail "unexpected D-Bus-machine-id layout"
+      fi
+      for host_key in "${host_keys[@]}"; do
+        for key_file in "$host_key" "${host_key}.pub"; do
+          if test -e "$key_file" || test -L "$key_file"; then fail "host key reappeared: $key_file"; fi
+        done
+      done
+      if sync; then :; else fail "sync failed"; fi
+      if systemctl poweroff; then :; else fail "poweroff request failed"; fi
+      '
+      ```
+
+      Do not add a rebuild, restart SSH, reboot, template conversion or force flag
+      to this QGA path. A QGA request for poweroff is not proof of completion:
+      Proxmox node (UI): positively verify Stopped for the same revalidated
+      candidate. If it is not positively stopped, reconcile status, task history
+      and the exact sealed layout before taking any further action; never rerun the
+      clearing request blindly. The console-only manual path above remains available.
     verifications:
       - id: sealed-and-powered-off
         type: manual-confirmation

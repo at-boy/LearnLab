@@ -1,0 +1,6 @@
+id: debian13-template
+title: Build a Debian 13 (trixie) Template for LearnLab
+environment:
+  scope: none
+lessons:
+  - prerequisites-and-safety

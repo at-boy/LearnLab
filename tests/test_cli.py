@@ -800,6 +800,52 @@ def test_start_include_drafts_allows_explicit_draft_session(
     assert store.completed_lessons("proxmox", "proxmox-admin") == {"basics"}
 
 
+def test_debian13_template_start_and_resume_need_no_provider_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+) -> None:
+    from learnlab import cli
+    from learnlab.curriculum import CurriculumCatalog
+
+    collections = Path(__file__).parents[1] / "src/learnlab/collections"
+    store = StateStore(tmp_xdg / "debian13-template-state" / "learnlab.db")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("none-scoped course accessed provider configuration")
+
+    monkeypatch.setattr(cli, "catalog_factory", lambda: CurriculumCatalog(collections))
+    monkeypatch.setattr(cli, "state_store_factory", lambda: store)
+    monkeypatch.setattr(cli, "state_root", lambda: tmp_xdg / "debian13-template-state")
+    monkeypatch.setattr(cli, "load_settings", forbidden)
+    monkeypatch.setattr(cli, "resolve_token_secret", forbidden)
+    monkeypatch.setattr(cli, "provider_factory", forbidden)
+
+    started = CliRunner().invoke(
+        cli.app,
+        ["start", "proxmox/debian13-template", "--include-drafts"],
+        input="\n\nlearner\nq\n",
+    )
+
+    assert started.exit_code == 0, started.output
+    assert "Environment policy: none" in started.stdout
+    assert "PASS: Text evidence matched" in started.stdout
+    assert "Progress saved." in started.stdout
+    assert store.lesson_statuses("proxmox", "debian13-template") == {
+        "prerequisites-and-safety": ProgressStatus.IN_PROGRESS
+    }
+
+    resumed = CliRunner().invoke(
+        cli.app,
+        ["resume", "proxmox/debian13-template"],
+        input="\nq\n",
+    )
+
+    assert resumed.exit_code == 0, resumed.output
+    assert "[in progress]" in resumed.stdout
+    assert "Environment policy: none" in resumed.stdout
+    assert "Progress saved." in resumed.stdout
+
+
 def test_nixos_template_start_and_resume_need_no_provider_configuration(
     monkeypatch: pytest.MonkeyPatch,
     tmp_xdg: Path,
@@ -904,6 +950,73 @@ def test_nixos_template_final_handoff_resume_is_self_attested_not_certification(
     gated = CliRunner().invoke(cli.app, ["start", "proxmox/nixos-template"])
     assert gated.exit_code == 2
     assert "not live-validated" in gated.output
+
+
+def test_provider_bootstrap_start_save_resume_never_touches_external_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+) -> None:
+    from learnlab import cli
+    from learnlab.curriculum import CurriculumCatalog
+
+    collections = Path(__file__).parents[1] / "src/learnlab/collections"
+    catalog = CurriculumCatalog(collections)
+    registry_before = (collections / "certifications.yaml").read_bytes()
+    store = StateStore(tmp_xdg / "provider-bootstrap-state" / "learnlab.db")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("provider bootstrap touched an external dependency")
+
+    monkeypatch.setattr(cli, "catalog_factory", lambda: catalog)
+    monkeypatch.setattr(cli, "state_store_factory", lambda: store)
+    monkeypatch.setattr(cli, "state_root", lambda: tmp_xdg / "provider-bootstrap-state")
+    for name in (
+        "load_settings",
+        "load_requested_profiles",
+        "resolve_token_secret",
+        "provider_factory",
+        "SshExecutor",
+    ):
+        monkeypatch.setattr(cli, name, forbidden)
+    monkeypatch.setattr("learnlab.providers.proxmox.httpx.Client", forbidden)
+
+    gated = CliRunner().invoke(cli.app, ["start", "proxmox/provider-bootstrap"])
+    assert gated.exit_code == 2
+    assert "--include-drafts" in gated.output
+
+    started = CliRunner().invoke(
+        cli.app,
+        ["start", "proxmox/provider-bootstrap", "--include-drafts"],
+        input="1\n\nlearner-operated\n\ny\nq\n",
+    )
+    assert started.exit_code == 0, started.output
+    assert "Environment policy: none" in started.output
+    assert "Progress saved." in started.output
+    assert "Prepare an owner-only private worksheet" in started.output
+    step_path = (
+        "proxmox",
+        "provider-bootstrap",
+        "safety-and-private-worksheet",
+        "prepare-private-worksheet",
+    )
+    [saved] = store.verification_records(step_path)
+    assert saved.self_attested is True
+    assert saved.evidence is None
+
+    resumed = CliRunner().invoke(
+        cli.app,
+        ["resume", "proxmox/provider-bootstrap"],
+        input="1\n\ny\nq\n",
+    )
+    assert resumed.exit_code == 0, resumed.output
+    assert "[in progress]" in resumed.output
+    assert "Prepare an owner-only private worksheet" not in resumed.output
+    assert store.verification_records(step_path) == [saved]
+    assert (
+        catalog.load_course("proxmox/provider-bootstrap").maturity
+        is CourseMaturity.DRAFT
+    )
+    assert (collections / "certifications.yaml").read_bytes() == registry_before
 
 
 def test_none_to_provider_transition_resolves_configuration_only_when_entered(

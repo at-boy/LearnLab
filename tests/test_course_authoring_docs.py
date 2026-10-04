@@ -56,6 +56,27 @@ def test_guide_distinguishes_all_three_validation_levels() -> None:
         assert re.search(rf"^{number}\. ", live_section, flags=re.MULTILINE)
 
 
+def test_none_scope_bootstrap_exception_remains_narrow() -> None:
+    guide = GUIDE.read_text(encoding="utf-8")
+    section = guide[guide.index("## 6. Environments") : guide.index("## 7.")]
+    for fragment in (
+        "learner-operated bootstrap",
+        "no LearnLab dependency or verification",
+        "execution location",
+        "explicit checkpoint",
+        "identity preflight",
+        "expected result",
+        "rollback",
+        "fail closed",
+        "non-secret self-attestation",
+        "never command output or deployment data",
+        "not provider or infrastructure validation",
+        "remote-command",
+        "provider-check",
+    ):
+        assert fragment.lower() in section.lower()
+
+
 def test_nested_virtualization_walkthrough_is_explicitly_uncertified() -> None:
     guide = GUIDE.read_text(encoding="utf-8")
     walkthrough = guide[guide.index("## 4. Walkthrough") : guide.index("## 5.")]

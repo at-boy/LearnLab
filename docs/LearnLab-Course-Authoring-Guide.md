@@ -372,7 +372,7 @@ environment:
 |---|---|---|
 | `course` | One disposable environment reused across the course | Lessons build on each other (our NixOS example) |
 | `lesson` | Each lesson gets its own environment; switching lessons shows the recorded VM and **requires confirmation** before replacement | Lessons are destructive or need clean state |
-| `none` | No provider, no secret resolution | Purely conceptual courses |
+| `none` | No provider, no secret resolution | Purely conceptual courses or tightly controlled learner-operated bootstrap guidance |
 
 Authoring constraints:
 
@@ -388,6 +388,21 @@ Authoring constraints:
   is mapped to `environment.guest_capabilities`, emits one warning per course,
   cannot be combined with that new field, and is planned for removal. New and
   edited courses must use `guest_capabilities`.
+
+A `none` course may provide tightly controlled learner-operated bootstrap
+guidance only when all of these conditions hold:
+
+1. No LearnLab dependency or verification performs the operation.
+2. Every operator command names its execution location and has an explicit checkpoint.
+3. Mutations include an identity preflight, expected result, rollback, and
+   fail closed handling.
+4. LearnLab records only non-secret self-attestation or conceptual answers,
+   never command output or deployment data.
+5. Offline completion is not provider or infrastructure validation.
+
+These conditions do not relax the `none` bans: `remote-command`,
+`provider-check`, provider or guest capabilities, automatic side effects, and
+mid-course LearnLab permission mutation remain forbidden.
 
 Operational behavior authors should understand (so they can write good instructions and failure messages):
 

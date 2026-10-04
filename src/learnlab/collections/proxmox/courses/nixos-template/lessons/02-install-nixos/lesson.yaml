@@ -97,6 +97,49 @@ steps:
       boot.loader.systemd-boot.enable = true;
       boot.loader.efi.canTouchEfiVariables = true;
       networking.useDHCP = true;
+      networking.hostId = null;
+      systemd.services.learnlab-hostid = {
+        description = "Generate the persistent LearnLab clone host ID";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "systemd-machine-id-commit.service" "local-fs.target" ];
+        before = [ "multi-user.target" ];
+        unitConfig.ConditionPathExists = "!/etc/hostid";
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          User = "root";
+          UMask = "0077";
+        };
+        path = [ pkgs.coreutils pkgs.gnugrep ];
+        script = ''
+          set -euo pipefail
+          export LC_ALL=C
+          test "$(uname -m)" = x86_64
+          test -d /etc && test ! -L /etc
+          test "$(stat -c %u /etc)" = 0
+          etc_mode=$(stat -c %a /etc)
+          (( (8#$etc_mode & 0022) == 0 ))
+          test ! -e /etc/hostid && test ! -L /etc/hostid
+          test -f /etc/machine-id && test ! -L /etc/machine-id
+          test "$(stat -c %u /etc/machine-id)" = 0
+          test "$(stat -c %h /etc/machine-id)" = 1
+          test "$(wc -c < /etc/machine-id)" -le 33
+          grep -aExq '[0-9a-fA-F]{32}' /etc/machine-id
+          machine_id=$(cat /etc/machine-id)
+          [[ "$machine_id" =~ ^[0-9a-fA-F]{32}$ ]]
+          host_id=''${machine_id:0:8}
+          umask 077
+          hostid_tmp=$(mktemp /etc/.learnlab-hostid.XXXXXXXX)
+          trap 'rm -f -- "$hostid_tmp"' EXIT
+          trap 'exit 1' HUP INT TERM
+          printf '%b' "\\x''${host_id:6:2}\\x''${host_id:4:2}\\x''${host_id:2:2}\\x''${host_id:0:2}" > "$hostid_tmp"
+          test "$(stat -c %s "$hostid_tmp")" = 4
+          chown root:root "$hostid_tmp"
+          chmod 0444 "$hostid_tmp"
+          mv -T --no-clobber -- "$hostid_tmp" /etc/hostid
+          test ! -e "$hostid_tmp"
+        '';
+      };
       users.users.lab = {
         isNormalUser = true;
         extraGroups = [ "wheel" ];
@@ -109,6 +152,25 @@ steps:
       ];
       system.stateVersion = "26.05";
       ```
+
+      This course uses ext4 on x86_64. The persistent LearnLab oneshot waits for
+      local filesystems and machine-ID commit ordering, validates exactly 32 hex
+      characters (with at most the normal trailing newline), and derives the
+      textual host ID from the first eight machine-id characters. It writes four
+      bytes in native little-endian order, matching NixOS 26.05 on this architecture.
+      Keep networking.hostId null/unset: a static value makes store-backed identity
+      shared by clones. This unit is not a substitute for a separately reviewed
+      ZFS early-boot hostId design; do not adapt it to ZFS or another architecture.
+      Copy the two single quotes before each shell ${...} exactly: they escape
+      interpolation in a Nix indented string. They are removed by Nix, not Bash.
+      The root-controlled same-directory temporary file is checked for four bytes,
+      root ownership is set, mode is 0444, and rename publishes it atomically.
+      Existing targets (including dangling symlinks) are never overwritten; invalid
+      input or a write failure exits nonzero and cleans the temporary file without
+      leaving a partial target. Do not run concurrent identity writers. The unit
+      runs only while /etc/hostid is absent and does not rotate an existing ID.
+      A failed/skipped unit is not proof of valid identity: inspect the checks in
+      the access lesson. Rebuild and verify this configuration there before sealing.
 
       Classic writable /etc/nixos configuration is intentional. No flakes,
       cloud-init, nginx sites, restrictive firewall exercises or systemd exercise
@@ -152,9 +214,16 @@ steps:
       inspect UEFI and /mnt/boot. Interrupted installation: inspect mounts, generated
       configuration and whether an installer is still running before any retry;
       do not format again or claim installation complete.
-      Proxmox node (management UI): keep the ISO attached as recovery media but set
-      the verified SCSI disk first in boot order. Installer console: `reboot` only
-      after installation succeeded. Installed guest: confirm `findmnt /` shows
+      Installer console: after installation and both credential operations succeed,
+      deliberately run `poweroff`. Proxmox node: re-inspect node, name, VMID,
+      disks and task history against the worksheet; inspect `qm status` followed
+      by this exact owned VMID, and require `status: stopped`. A closed console,
+      timeout or failed lookup is not proof; stop on uncertainty. Only once stopped,
+      Proxmox node (management UI): keep the ISO attached as recovery media and set
+      the verified SCSI disk first in boot order before ISO/network. Apply the
+      setting and re-inspect it on the same owned VM. Start that VM through the UI.
+      Changing boot order while running and then rebooting is insufficient here.
+      Installed guest: confirm `findmnt /` shows
       installed ext4 root rather than live media, and `nixos-version` shows 26.05.
       Log in through the Proxmox console as the chosen learner; check `sudo -v`
       with the console password. Keep a tested root console recovery route.

@@ -1,3 +1,7 @@
+import os
+import re
+import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -19,6 +23,203 @@ def lesson_text(lesson_id):
     assert lesson_id in lessons, f"Missing required lesson: {lesson_id}"
     lesson = lessons[lesson_id]
     return "\n".join(step.instructions for step in lesson.steps)
+
+
+def hostid_script(source):
+    text = (
+        lesson_text("install-nixos")
+        if source == "course"
+        else (Path(__file__).parents[1] / "docs/NixOS-Template-Guide.md").read_text()
+    )
+    match = re.search(r"script = ''\n(.*?)\n\s*'';", text, re.DOTALL)
+    assert match, "The installed configuration needs its persistent hostid oneshot"
+    script = textwrap.dedent(match[1])
+    assert "${" not in script.replace("''${", ""), "Unescaped Nix interpolation"
+    return script.replace("''${", "${")
+
+
+@pytest.fixture(params=["course", "guide"])
+def hostid_sandbox(tmp_path, request):
+    # Only ownership operations are stubbed: binary writes, validation, cleanup,
+    # permissions and rename execute for real under this private directory.
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    etc.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name, body in {
+        "stat": """#!/bin/bash
+if [[ "$1" == -c && "$2" == %u ]]; then
+  printf '%s\\n' "${TEST_OWNER:-0}"
+else
+  exec /usr/bin/stat "$@"
+fi
+""",
+        "chown": """#!/bin/bash
+[[ "$1" == root:root && "$2" == "$TEST_ETC"/.learnlab-hostid.* ]] || exit 90
+[[ "${TEST_FAIL:-}" != chown ]]
+""",
+        "mv": """#!/bin/bash
+[[ "${TEST_FAIL:-}" != mv ]] || exit 91
+exec /usr/bin/mv "$@"
+""",
+    }.items():
+        path = bin_dir / name
+        path.write_text(body)
+        path.chmod(0o700)
+    env = {**os.environ, "PATH": f"{bin_dir}:/usr/bin:/bin", "TEST_ETC": str(etc)}
+
+    def run(**overrides):
+        script = hostid_script(request.param).replace("/etc", str(etc))
+        return subprocess.run(  # noqa: S603
+            ["/bin/bash", "-c", script],
+            env={**env, **overrides},
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+    return etc, run
+
+
+def test_hostid_derives_little_endian_first_eight_and_preserves_existing(
+    hostid_sandbox,
+):
+    etc, run = hostid_sandbox
+    # Synthetic fixture; bytes and expected integer are independently hand-derived.
+    (etc / "machine-id").write_text("1234abcd" + "0" * 24 + "\n")
+    result = run()
+    assert result.returncode == 0, result.stderr
+    target = etc / "hostid"
+    assert target.read_bytes() == b"\xcd\xab\x34\x12"
+    assert target.stat().st_mode & 0o777 == 0o444
+    assert target.stat().st_nlink == 1
+    (etc / "machine-id").write_text("abcdef12" + "0" * 24)
+    assert run().returncode != 0  # Systemd normally skips this existing target.
+    assert target.read_bytes() == b"\xcd\xab\x34\x12"
+    assert list(etc.glob(".learnlab-hostid.*")) == []
+
+
+@pytest.mark.parametrize(
+    "identity",
+    ["", "0" * 31, "g" * 32, "1" * 33, "1" * 32 + "\n\n", "1" * 32 + "\x00"],
+)
+def test_hostid_rejects_invalid_machine_id_without_partial_target(
+    hostid_sandbox, identity
+):
+    etc, run = hostid_sandbox
+    (etc / "machine-id").write_text(identity)
+    assert run().returncode != 0
+    assert not (etc / "hostid").exists()
+    assert list(etc.glob(".learnlab-hostid.*")) == []
+
+
+@pytest.mark.parametrize(
+    "failure", ["chown", "mv", "owner", "symlink", "hardlink", "writable-parent"]
+)
+def test_hostid_fails_closed_on_unsafe_layout_or_write_failure(hostid_sandbox, failure):
+    etc, run = hostid_sandbox
+    machine_id = etc / "machine-id"
+    machine_id.write_text("1234abcd" + "0" * 24 + "\n")
+    if failure == "symlink":
+        machine_id.rename(etc / "original")
+        machine_id.symlink_to(etc / "original")
+    elif failure == "hardlink":
+        (etc / "other-link").hardlink_to(machine_id)
+    elif failure == "writable-parent":
+        etc.chmod(0o777)
+    result = run(TEST_FAIL=failure, TEST_OWNER="1001" if failure == "owner" else "0")
+    assert result.returncode != 0
+    assert not (etc / "hostid").exists()
+    assert list(etc.glob(".learnlab-hostid.*")) == []
+
+
+@pytest.mark.parametrize("layout", ["dangling-symlink", "directory"])
+def test_hostid_never_replaces_an_unexpected_target(hostid_sandbox, layout):
+    etc, run = hostid_sandbox
+    (etc / "machine-id").write_text("1234abcd" + "0" * 24 + "\n")
+    target = etc / "hostid"
+    if layout == "dangling-symlink":
+        target.symlink_to(etc / "missing")
+    else:
+        target.mkdir()
+    assert run().returncode != 0
+    assert target.is_symlink() if layout == "dangling-symlink" else target.is_dir()
+    assert list(etc.glob(".learnlab-hostid.*")) == []
+
+
+def assert_ordered(text, *actions):
+    offset = 0
+    for action in actions:
+        found = text.find(action, offset)
+        assert found >= 0, f"Missing/out-of-order operator action: {action}"
+        offset = found + len(action)
+
+
+def test_post_install_requires_stopped_vm_before_boot_order_change():
+    text = lesson_text("install-nixos")
+    assert_ordered(
+        text,
+        "nixos-install` interactively",
+        "passwd lab",
+        "poweroff`",
+        "status: stopped",
+        "SCSI disk first",
+        "Start",
+        "findmnt /`",
+    )
+    assert "before ISO/network" in text
+    assert "keep the ISO attached as recovery media" in text
+
+
+def test_hostid_boot_ordering_and_seal_phase_preserve_both_identity_boundaries():
+    install = lesson_text("install-nixos")
+    for contract in (
+        "networking.hostId = null;",
+        'ConditionPathExists = "!/etc/hostid"',
+        'after = [ "systemd-machine-id-commit.service" "local-fs.target" ]',
+        'before = [ "multi-user.target" ]',
+        'wantedBy = [ "multi-user.target" ]',
+        'Type = "oneshot"',
+        "ext4",
+        "ZFS",
+        "early-boot",
+    ):
+        assert contract in install
+    access = lesson_text("configure-lab-access")
+    assert_ordered(
+        access,
+        "nixos-rebuild test",
+        "systemctl is-enabled learnlab-hostid.service",
+        "ExecMainStatus",
+        "hostid)",
+        "head -c 8 /etc/machine-id",
+    )
+    seal = lesson_text("seal-and-convert")
+    assert_ordered(
+        seal,
+        "nixos-option networking.hostId",
+        "sudo pgrep -a -x sshd",
+        "sudo truncate -s 0 /etc/machine-id",
+        "sudo rm -i -- /etc/hostid",
+        "for each configured host-key pair",
+        "/etc/hostid is absent",
+        "sudo systemctl poweroff",
+    )
+
+
+def test_two_clones_compare_hostid_before_and_after_reboot():
+    text = lesson_text("test-two-clones")
+    assert_ordered(
+        text,
+        "hostid)",
+        "head -c 8 /etc/machine-id",
+        "host IDs must differ",
+        "sudo systemctl reboot",
+        "machine ID, host ID",
+        "stored pre-rebuild/reboot baseline",
+    )
+    assert "four-byte" in text
 
 
 def test_bootstrap_has_no_managed_environment():
@@ -76,6 +277,85 @@ def test_complete_lesson_order_and_handoff():
         "clone permissions",
     ):
         assert concept in handoff
+
+
+def test_provider_bootstrap_cross_link_is_optional_and_keeps_none_scope():
+    text = lesson_text("configure-provider")
+    assert "proxmox/provider-bootstrap" in text
+    assert "optional" in text.lower()
+    assert "direct advanced setup" in text.lower()
+    assert "not a prerequisite" in text.lower()
+    policy = load_course().effective_environment(
+        next(item for item in load_course().lessons if item.id == "configure-provider")
+    )
+    assert policy.scope is EnvironmentScope.NONE
+    assert policy.provider_capability is None
+
+
+def test_offline_report_binds_current_digest_and_scopes_prior_live_evidence():
+    from learnlab.course_certification import course_digest
+
+    report = (
+        Path(__file__).parents[1]
+        / "docs/course-validation/2026-09-10-nixos-template.md"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(report.split()).lower()
+
+    [reported_digest] = re.findall(r"(?m)^([0-9a-f]{64})$", report)
+    course_root = ROOT / "proxmox/courses/nixos-template"
+    assert reported_digest == course_digest(course_root)
+    assert (
+        "Current-digest reviewed content revision: "
+        "`c952e759b34fd5592f5c0607eef8d5474567433a`"
+    ) in report
+    assert "historical offline evidence revision" in report.lower()
+    assert "`9f0df3bd15b45e1575e5071668e594f07a373c74`" in report
+
+    for fragment in (
+        "authorized installation, sealing, template conversion",
+        "two-full-clone rebuild/reboot validation",
+        "read-only provider health/compatibility",
+        "before the tls documentation commit and current digest",
+        "does not certify the current course bytes",
+        (
+            "current-digest course traversal, save/resume, and acceptance-clone "
+            "cleanup remain pending"
+        ),
+        "task 5 was offline-only",
+    ):
+        assert fragment in normalized
+
+
+@pytest.mark.parametrize("source", ["course", "guide"])
+def test_provider_handoff_teaches_authenticated_rotation_sensitive_tls_recovery(source):
+    if source == "course":
+        text = lesson_text("configure-provider")
+    else:
+        text = (Path(__file__).parents[1] / "docs/NixOS-Template-Guide.md").read_text()
+
+    normalized = " ".join(text.split())
+    for fragment in (
+        "tls_verify = true",
+        "Python 3.13",
+        "curl",
+        "CA/key-usage X.509 extensions",
+        "correctly issued controller-trusted CA/server certificate",
+        "SSL_CERT_FILE",
+        "not a ProxmoxProfile field",
+        "not the token secret",
+        "separate trusted management path",
+        "expected issuer/chain",
+        "exact SAN match",
+        "validity window",
+        "SHA-256 fingerprint",
+        "openssl s_client",
+        "not authentication",
+        "rotation-sensitive",
+        "unset SSL_CERT_FILE",
+        "separately named token-secret variable",
+    ):
+        assert fragment in normalized
+    assert "ca_file" not in text
 
 
 def test_installer_teaches_target_specific_steps():
@@ -179,6 +459,49 @@ def test_access_trust_state_loss_requires_console_reenrollment():
     assert "fresh console-verified reenrollment" in guide.lower()
 
 
+@pytest.mark.parametrize(
+    "source", ["configure-lab-access", "test-two-clones", "guide"]
+)
+def test_host_key_discovery_reads_nixos_generated_hostkey_directives(source):
+    if source == "guide":
+        text = (Path(__file__).parents[1] / "docs/NixOS-Template-Guide.md").read_text()
+    else:
+        text = lesson_text(source)
+
+    assert "/etc/ssh/sshd_config" in text
+    assert 'tolower($1) == "hostkey"' in text
+    assert "sshd -T` and fingerprint the configured public host keys" not in text
+    assert "From sshd -T identify every configured host key" not in text
+
+
+@pytest.mark.parametrize("source", ["configure-lab-access", "guide"])
+def test_access_documents_trusted_guest_agent_console_fallback(source):
+    if source == "guide":
+        text = (Path(__file__).parents[1] / "docs/NixOS-Template-Guide.md").read_text()
+    else:
+        text = lesson_text(source)
+
+    assert 'qm guest exec "$VMID" -- /run/current-system/sw/bin/bash -lc' in text
+    assert "authenticate its own host key" in text
+    assert "circular" in text
+
+
+@pytest.mark.parametrize(
+    "source", ["configure-lab-access", "seal-and-convert", "guide"]
+)
+def test_effective_sshd_inspection_uses_openssh_10_generate_mode(source):
+    if source == "guide":
+        text = (Path(__file__).parents[1] / "docs/NixOS-Template-Guide.md").read_text()
+    else:
+        text = lesson_text(source)
+
+    assert "sudo sshd -G -T" in text
+    assert "matching sshd -T" not in text
+    assert "match sshd -T" not in text
+    assert "set matching sshd -T" not in text
+    assert re.search(r"(?m)^\s*sudo sshd -T\s*$", text) is None
+
+
 @pytest.mark.parametrize("source", ["seal-and-convert", "guide"])
 def test_guest_poweroff_requires_stopped_state_without_assuming_management_task(source):
     if source == "guide":
@@ -198,12 +521,284 @@ def test_sealing_checks_established_ssh_sessions_and_processes(source):
     lower = text.lower()
 
     assert "every effective ssh port" in lower
-    assert "before stopping" in lower and "sshd -t" in lower
+    assert "before stopping" in lower and "sshd -g -t" in lower
     assert "listening sockets alone" in lower
     assert "state established" in lower
     assert "pgrep -a -x sshd" in lower
+    assert "pgrep -a -x sshd-session" in lower
     assert "no output" in lower
     assert "permission" in lower and "stop" in lower
+
+
+def qga_guest_exec_scripts(source):
+    if source == "guide":
+        text = (Path(__file__).parents[1] / "docs/NixOS-Template-Guide.md").read_text()
+    else:
+        assert source == "course"
+        text = lesson_text("seal-and-convert")
+    qga_exec_pattern = (
+        r'qm guest exec "\$CANDIDATE_ID" -- /run/current-system/sw/bin/bash -lc \'\n'
+        r"(.*?)\n\s*'"
+    )
+    return [
+        textwrap.dedent(item)
+        for item in re.findall(qga_exec_pattern, text, re.DOTALL)
+    ]
+
+
+def qga_preflight_script(source):
+    return next(
+        script
+        for script in qga_guest_exec_scripts(source)
+        if "nixos-option networking.hostId" in script
+        and "machine_id=/etc/machine-id" not in script
+    )
+
+
+def qga_sealing_script(source):
+    return next(
+        script
+        for script in qga_guest_exec_scripts(source)
+        if "machine_id=/etc/machine-id" in script
+    )
+
+
+@pytest.fixture
+def qga_sealing_sandbox(tmp_path):
+    etc = tmp_path / "etc"
+    ssh = etc / "ssh"
+    dbus_dir = tmp_path / "var/lib/dbus"
+    bin_dir = tmp_path / "bin"
+    log = tmp_path / "actions.log"
+    ssh.mkdir(parents=True)
+    dbus_dir.mkdir(parents=True)
+    bin_dir.mkdir()
+    machine_id = etc / "machine-id"
+    hostid = etc / "hostid"
+    dbus_id = dbus_dir / "machine-id"
+    host_key = ssh / "Host_Ed25519"
+    machine_id.write_text("1" * 32 + "\n")
+    hostid.write_bytes(b"\x01\x02\x03\x04")
+    dbus_id.write_text("1" * 32 + "\n")
+    host_key.write_text("private\n")
+    (ssh / "Host_Ed25519.pub").write_text("public\n")
+
+    stubs = {
+        "sshd": """#!/bin/bash
+printf 'Port 22\\nHostKey %s/ssh/Host_Ed25519\\n' "$TEST_ETC"
+""",
+        "systemctl": """#!/bin/bash
+if [[ "$1" == is-active ]]; then
+  [[ "${@: -1}" == "${TEST_ACTIVE_SERVICE:-}" ]] && exit 0
+  exit 3
+fi
+if [[ "$1" == poweroff ]]; then printf 'poweroff\\n' >> "$TEST_LOG"; fi
+exit 0
+""",
+        "pgrep": """#!/bin/bash
+name="${@: -1}"
+if [[ "$name" == "${TEST_PROCESS:-}" ]]; then printf '101 %s\\n' "$name"; exit 0; fi
+exit 1
+""",
+        "ss": """#!/bin/bash
+case "${TEST_SS:-}" in
+  error) exit 77 ;;
+  listener) [[ "$*" == *-Hlnpt* ]] && printf 'listener\\n' ;;
+  established) [[ "$*" == *established* ]] && printf 'established\\n' ;;
+esac
+exit 0
+""",
+        "stat": """#!/bin/bash
+if [[ "$1" == -c ]]; then
+  case "$2" in
+    '%U:%G') printf 'root:root\\n'; exit 0 ;;
+    '%a') printf '755\\n'; exit 0 ;;
+    '%h:%U:%G') printf '1:root:root\\n'; exit 0 ;;
+    '%h:%U:%G:%a:%s') printf '1:root:root:444:4\\n'; exit 0 ;;
+  esac
+fi
+exec /usr/bin/stat "$@"
+""",
+        "truncate": """#!/bin/bash
+printf 'truncate:%s\\n' "$3" >> "$TEST_LOG"
+/usr/bin/truncate "$@"
+if [[ "${TEST_REAPPEAR:-}" == machine ]]; then printf 'reappeared\\n' > "$3"; fi
+""",
+        "rm": """#!/bin/bash
+for arg in "$@"; do
+  [[ "$arg" == -- ]] && continue
+  printf 'rm:%s\\n' "$arg" >> "$TEST_LOG"
+done
+/usr/bin/rm "$@"
+for arg in "$@"; do
+  [[ "$arg" == -- ]] && continue
+  if [[ "${TEST_REAPPEAR:-}" == hostid && "${arg##*/}" == hostid ]] || \
+     [[ "${TEST_REAPPEAR:-}" == dbus && "$arg" == "$TEST_DBUS_ID" ]] || \
+     [[ "${TEST_REAPPEAR:-}" == key && "${arg##*/}" == Host_Ed25519 ]]; then
+    printf 'reappeared\\n' > "$arg"
+  fi
+done
+""",
+        "sync": """#!/bin/bash
+printf 'sync\\n' >> "$TEST_LOG"
+""",
+    }
+    for name, body in stubs.items():
+        path = bin_dir / name
+        path.write_text(body)
+        path.chmod(0o700)
+
+    def run(script, **overrides):
+        translated = script.replace("/var/lib/dbus", str(dbus_dir)).replace(
+            "/etc", str(etc)
+        )
+        return subprocess.run(  # noqa: S603
+            ["/bin/bash", "-c", translated],
+            env={
+                **os.environ,
+                "PATH": f"{bin_dir}:/usr/bin:/bin",
+                "TEST_ETC": str(etc),
+                "TEST_DBUS_ID": str(dbus_id),
+                "TEST_LOG": str(log),
+                **overrides,
+            },
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+    def actions():
+        return log.read_text().splitlines() if log.exists() else []
+
+    return {
+        "dbus_id": dbus_id,
+        "etc": etc,
+        "host_key": host_key,
+        "hostid": hostid,
+        "machine_id": machine_id,
+        "run": run,
+        "actions": actions,
+    }
+
+
+def test_sealing_allows_qga_only_as_a_trusted_out_of_band_console_fallback():
+    text = lesson_text("seal-and-convert")
+    lower = text.lower()
+    qga_text = text[lower.index("trusted qga") :]
+    qga_lower = qga_text.lower()
+
+    qga_exec = 'qm guest exec "$CANDIDATE_ID" -- /run/current-system/sw/bin/bash -lc'
+    assert qga_exec in qga_text
+    assert "trusted out-of-band" in qga_lower
+    assert "console recovery" in qga_lower
+    assert "candidate ssh" in qga_lower
+    assert "authenticate its own host key" in qga_lower
+    assert "revalidate candidate" in qga_lower and "identity/layout" in qga_lower
+    assert "sshd -g -t" in qga_lower
+    assert "every effective" in qga_lower and "ssh port" in qga_lower
+    assert "sshd-session" in qga_lower
+    assert "truncate -s 0" in qga_lower
+    assert 'rm -- "$hostid"' in qga_text
+    assert "sync" in qga_lower and "systemctl poweroff" in qga_lower
+    assert "no rebuild" in qga_lower
+    assert "do not blindly rerun" in qga_lower
+    assert "positively verify stopped" in qga_lower
+
+
+def test_qga_sealing_script_is_identical_in_course_and_guide():
+    assert qga_sealing_script("course") == qga_sealing_script("guide")
+
+
+@pytest.mark.parametrize("source", ["course", "guide"])
+def test_qga_preflight_exports_target_nix_path_before_option_checks(source):
+    script = qga_preflight_script(source)
+    export = (
+        "export NIX_PATH="
+        "nixpkgs=/nix/var/nix/profiles/per-user/root/channels/nixos:"
+        "nixos-config=/etc/nixos/configuration.nix"
+    )
+
+    assert script.count(export) == 1
+    assert script.index(export) < script.index("nixos-option networking.hostId")
+
+    if source == "guide":
+        text = (Path(__file__).parents[1] / "docs/NixOS-Template-Guide.md").read_text()
+    else:
+        text = lesson_text("seal-and-convert")
+    qga_text = text[text.lower().index("trusted qga") :]
+    normalized_qga_text = " ".join(qga_text.split())
+    assert (
+        "do not inherit the normal interactive Nix environment"
+        in normalized_qga_text
+    )
+    assert "missing target channel/path" in normalized_qga_text
+    assert "stop and reconcile" in normalized_qga_text
+    assert "guess another generation" in normalized_qga_text
+
+
+def test_qga_sealing_accepts_mixed_case_keywords_without_lowercasing_values(
+    qga_sealing_sandbox,
+):
+    host_key = qga_sealing_sandbox["host_key"]
+
+    result = qga_sealing_sandbox["run"](qga_sealing_script("course"))
+
+    assert result.returncode == 0, result.stderr
+    assert not host_key.exists()
+    assert not host_key.with_name(f"{host_key.name}.pub").exists()
+    actions = qga_sealing_sandbox["actions"]()
+    assert f"rm:{host_key}" in actions
+    assert f"rm:{host_key}.pub" in actions
+    assert actions[-2:] == ["sync", "poweroff"]
+
+
+@pytest.mark.parametrize(
+    ("fault", "overrides"),
+    [
+        ("active sshd service", {"TEST_ACTIVE_SERVICE": "sshd.service"}),
+        ("live sshd process", {"TEST_PROCESS": "sshd"}),
+        ("live sshd-session process", {"TEST_PROCESS": "sshd-session"}),
+        ("ss failure", {"TEST_SS": "error"}),
+        ("ssh listener", {"TEST_SS": "listener"}),
+        ("established ssh connection", {"TEST_SS": "established"}),
+    ],
+)
+def test_qga_sealing_blocks_runtime_ssh_hazards_before_mutation(
+    qga_sealing_sandbox, fault, overrides
+):
+    result = qga_sealing_sandbox["run"](qga_sealing_script("course"), **overrides)
+
+    assert result.returncode != 0, fault
+    assert qga_sealing_sandbox["actions"]() == []
+
+
+@pytest.mark.parametrize("unsafe_path", ["machine_id", "hostid", "dbus_id", "host_key"])
+def test_qga_sealing_blocks_unsupported_identity_layout_before_mutation(
+    qga_sealing_sandbox, unsafe_path
+):
+    path = qga_sealing_sandbox[unsafe_path]
+    path.rename(path.with_name(f"{path.name}.original"))
+    path.symlink_to(path.with_name(f"{path.name}.original"))
+
+    result = qga_sealing_sandbox["run"](qga_sealing_script("course"))
+
+    assert result.returncode != 0, unsafe_path
+    assert qga_sealing_sandbox["actions"]() == []
+
+
+@pytest.mark.parametrize("reappearing", ["machine", "hostid", "dbus", "key"])
+def test_qga_sealing_blocks_poweroff_when_a_postcondition_reappears(
+    qga_sealing_sandbox, reappearing
+):
+    result = qga_sealing_sandbox["run"](
+        qga_sealing_script("course"), TEST_REAPPEAR=reappearing
+    )
+
+    assert result.returncode != 0, reappearing
+    actions = qga_sealing_sandbox["actions"]()
+    assert any(action.startswith(("truncate:", "rm:")) for action in actions)
+    assert "sync" not in actions
+    assert "poweroff" not in actions
 
 
 @pytest.mark.parametrize("source", ["configure-lab-access", "test-two-clones", "guide"])
@@ -213,10 +808,13 @@ def test_fresh_ssh_acceptance_disables_connection_sharing(source):
     else:
         text = lesson_text(source)
     commands = [
-        line.strip() for line in text.splitlines() if line.strip().startswith("ssh -i ")
+        line.strip()
+        for line in text.splitlines()
+        if line.strip().startswith("ssh ") and " -i " in line
     ]
     assert commands, f"Missing fresh SSH acceptance example in {source}"
     for command in commands:
+        assert command.startswith("ssh -F none -i ")
         assert "-o ControlPath=none" in command
 
 
