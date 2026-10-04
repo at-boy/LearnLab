@@ -116,24 +116,67 @@ guest package, virtio serial channel and `journalctl -u qemu-guest-agent`.
 **Controller and installed guest — SSH trust.** Locate or generate a protected
 controller key pair. Only its public key goes into the intended guest account's
 `authorized_keys`; keep the private key on the controller. Before creating an
-account, distinguish a truly absent local account from an NSS failure or
-timeout. Check home ownership, `~/.ssh` mode 700 and `authorized_keys` mode
-600. Verify the guest host fingerprint through the Proxmox console/trusted
-management route, then use a separate controller known_hosts file for SSH.
-`ssh-keyscan` alone does not establish trust. Test a fresh key login while the
-console is available. On failure inspect account, permissions, ssh.service,
-network and logs; do not disable password authentication yet.
+account, set `LAB_USER` locally with `read -r LAB_USER` and run
+`getent passwd "$LAB_USER"` for that exact name. Inspect the local file with
+`awk -F: -v name="$LAB_USER" '$1 == name {print $0}' /etc/passwd`, and check
+`getent passwd root` as a basic lookup control. A missing result alone is not
+proof of absence. If a local entry exists but lookup fails, or NSS times out or
+reports errors, inspect `/etc/nsswitch.conf` and relevant service logs; stop
+until lookup health is understood. Use `/usr/sbin/useradd` only for a truly
+absent account that the local account plan calls for. Check home ownership,
+`~/.ssh` mode 700 and `authorized_keys` mode 600.
+
+At the **installed guest's Proxmox console**, run
+`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` and retain the SHA256
+fingerprint privately. On the **controller**, select local values for
+`GUEST_ADDR` (observed guest address), `KEY_FILE` (protected private-key path),
+`LAB_USER` and a *new* owner-only `KNOWN_HOSTS` file distinct from your global
+SSH store. Use `read -r GUEST_ADDR`, `read -r KEY_FILE`, `read -r LAB_USER`
+and `read -r KNOWN_HOSTS` locally to populate them. `test ! -e "$KNOWN_HOSTS"`
+must pass; otherwise choose a new path and do not overwrite the old file.
+Set `umask 077`, run
+`ssh-keyscan -T 5 -t ed25519 "$GUEST_ADDR" > "$KNOWN_HOSTS"`, then
+`ssh-keygen -lf "$KNOWN_HOSTS"`. Compare the fingerprint exactly with the
+console result **before** trusting the captured key. A mismatch or missing key
+is a stop condition; `ssh-keyscan` alone does not establish trust. After the
+match, test a fresh key-only login with strict checking:
+
+```sh
+# Controller; use locally chosen variables, never paste their values into LearnLab.
+ssh -o UserKnownHostsFile="$KNOWN_HOSTS" \
+    -o GlobalKnownHostsFile=/dev/null \
+    -o StrictHostKeyChecking=yes -o BatchMode=yes \
+    -i "$KEY_FILE" "$LAB_USER@$GUEST_ADDR" id -un
+```
+
+Expect the chosen account name, no password prompt and no host-key warning.
+Keep the Proxmox console available. On failure inspect account, permissions,
+ssh.service, network and logs; do not disable password authentication yet.
 
 **Installed guest — lab sudo and recovery.** In a root console, interactively
-write a dedicated root-owned 0440 `/etc/sudoers.d/` fragment for only the
-disposable lab account. Validate with `/usr/sbin/visudo -cf
-/etc/sudoers.d/<lab-fragment>` and `/usr/sbin/visudo -c` before closing that
-console. From a new controller key login run `sudo -n true`; expect exit zero
-without a prompt. A failure requires console repair, ownership and `sudo -l`
-inspection. Retain a separate administrator console route. Only after key and
-sudo checks may you optionally change password SSH settings; inspect effective
-`sshd -T`, reconnect in a second session, then end the first. This lab policy
-is unsuitable as a default for production hosts.
+write `/etc/sudoers.d/learnlab-lab` for this disposable guest. Replace
+`LAB_USER` in the following example with the exact chosen account name; do not
+leave the placeholder in the real file:
+
+```sudoers
+LAB_USER ALL=(root) NOPASSWD: ALL
+```
+
+This deliberately broad **lab-only** root rule supports the downstream apt,
+nftables, account and systemd exercises. Set owner/group `root:root` and mode
+`0440` with `chown root:root /etc/sudoers.d/learnlab-lab` and
+`chmod 0440 /etc/sudoers.d/learnlab-lab`; inspect with
+`stat -c '%U:%G %a' /etc/sudoers.d/learnlab-lab`. Validate
+with `/usr/sbin/visudo -cf /etc/sudoers.d/learnlab-lab` and
+`/usr/sbin/visudo -c` before closing the root console. From a fresh controller
+key session, inspect `sudo -n -l` for the root ALL rule. Run `sudo -n true`,
+`sudo -n id -u`, `sudo -n apt --version`, `sudo -n nft --version` and
+`sudo -n systemctl --version`; expect no password prompt, uid 0 and successful
+read-only version checks. A failure requires console repair, ownership and
+`sudo -l` inspection. Retain a separate administrator console route. Only
+after key and sudo checks may you optionally change password SSH settings;
+inspect effective `sshd -T`, reconnect in a second session, then end the first.
+This broad rule is unsuitable as a default for production hosts.
 
 The downstream courses currently requiring `os.debian.13` request these
 capabilities. Verify the commands in the guest; declaring a capability in a

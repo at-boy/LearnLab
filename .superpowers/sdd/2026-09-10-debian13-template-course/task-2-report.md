@@ -35,3 +35,20 @@ Instructional prose and Proxmox UI behavior still need live operator
 acceptance against the target platform. No current guest, disk, agent, key,
 service or template behavior is certified. The guide will gain sealing,
 two-clone and provider sections in later tasks.
+
+## Independent review round 1 correction
+
+The reviewer requested concrete lab sudo and SSH/account procedures. The
+access lesson and guide now specify the exact disposable guest sudoers rule,
+root ownership and 0440 mode, `visudo` validation, an effective-rule listing,
+and non-mutating checks for root identity, apt, nft and systemctl. They also
+specify named-account `getent` lookup with local-file/NSS diagnosis, a guest
+console host-key fingerprint, comparison with a separately captured controller
+key, and strict SSH login through a new isolated known_hosts file. This is
+instructional content only; no guest or network command was executed. Debian
+trixie `sudoers(5)`, `ssh(1)` and `ssh-keygen(1)` manpages were consulted.
+
+After the correction: focused course tests → 4 passed; packaged course CLI
+validation → no findings; `git diff --check` → clean. The prior full non-live
+suite remains the Task 2 baseline; this prose-only correction did not alter
+runtime code, metadata or test behavior.

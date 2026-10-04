@@ -51,17 +51,34 @@ steps:
       private key store, or generate a new protected pair locally; never copy
       the private key to the guest or LearnLab. Verify the public key fingerprint
       from the trusted controller file. Installed guest (console): identify the
-      intended account. `getent passwd` returning no entry may mean the account
-      is absent or NSS failed; inspect NSS/timeout and the local account database
-      before using `/usr/sbin/useradd` for a truly absent account. With the
+      intended account in a local LAB_USER variable (`read -r LAB_USER`); do not
+      enter it in LearnLab.
+      Run `getent passwd "$LAB_USER"` for that exact name, then inspect
+      `/etc/passwd` with `awk -F: -v name="$LAB_USER" '$1 == name {print $0}'
+      /etc/passwd` and run `getent passwd root` as a basic
+      lookup check. An empty result for the chosen name is not by itself proof
+      of absence: timeout, NSS errors, or a local entry hidden by lookup failure
+      require inspecting `/etc/nsswitch.conf` and service logs. Stop if lookup
+      health is uncertain. Use `/usr/sbin/useradd` only if the intended local
+      account is truly absent and your account plan calls for creating it. With the
       account owner and permissions checked, add only that public key to its
       `~/.ssh/authorized_keys` (directory 700, file 600). Use an interactive
       editor or trusted local transfer; no secret values belong in lesson input.
-      Verify ssh.service is active. Authenticate the guest's host fingerprint
-      against the Proxmox console/trusted management path before recording it
-      in a separate controller known_hosts file; ssh-keyscan alone is not trust.
-      Test a new controller-to-guest key login while the guest console remains
-      available. Expected: correct account, no password prompt, trusted host.
+      Verify ssh.service is active. Installed guest (Proxmox console): run
+      `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` and note the SHA256
+      fingerprint privately. Controller: choose local GUEST_ADDR and KEY_FILE
+      variables (`read -r GUEST_ADDR`, `read -r KEY_FILE`, `read -r LAB_USER`,
+      `read -r KNOWN_HOSTS`) and a NEW owner-only KNOWN_HOSTS path outside the
+      global SSH store. `test ! -e "$KNOWN_HOSTS"` must pass; if the path
+      exists, choose another without overwriting it. With `umask 077`, capture
+      its ed25519 host key using
+      `ssh-keyscan -T 5 -t ed25519 "$GUEST_ADDR" > "$KNOWN_HOSTS"`; run
+      `ssh-keygen -lf "$KNOWN_HOSTS"` and compare the fingerprint exactly with
+      the console value. A mismatch or missing key means stop; ssh-keyscan alone
+      is not trust. Only after the match, test a fresh controller login:
+      `ssh -o UserKnownHostsFile="$KNOWN_HOSTS" -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o BatchMode=yes -i "$KEY_FILE" "$LAB_USER@$GUEST_ADDR" id -un`.
+      Expected: the chosen account name, no
+      password prompt and strict host checking. Keep the guest console open.
       If login fails, inspect account home/ownership, key permissions, service
       logs and network; do not disable password SSH yet.
     verifications:
@@ -83,15 +100,22 @@ steps:
     title: Validate a disposable-lab sudo policy
     instructions: |
       Installed guest (console): use an interactive root console/editor to create
-      a dedicated, root-owned mode-0440 fragment in `/etc/sudoers.d/` for the
-      intended lab account only. Grant the minimal policy needed for disposable
-      downstream labs; passwordless sudo is a deliberate lab convenience, not
-      a production recommendation. Validate the complete file with
-      `/usr/sbin/visudo -cf /etc/sudoers.d/<lab-fragment>` and
-      `/usr/sbin/visudo -c` before closing the root console. A syntax error
+      a dedicated `/etc/sudoers.d/learnlab-lab` fragment for this disposable
+      guest only. Replace LAB_USER with the exact chosen account name; the rule
+      is `LAB_USER ALL=(root) NOPASSWD: ALL`. This deliberately broad lab-only
+      root policy permits the downstream apt, nftables, account and systemd
+      exercises; it is not a production recommendation. Set owner/group root:root
+      and mode 0440 using `chown root:root /etc/sudoers.d/learnlab-lab` and
+      `chmod 0440 /etc/sudoers.d/learnlab-lab`, then inspect them with
+      `stat -c '%U:%G %a' /etc/sudoers.d/learnlab-lab`.
+      Validate the fragment with `/usr/sbin/visudo -cf /etc/sudoers.d/learnlab-lab`
+      and `/usr/sbin/visudo -c` before closing the root console. A syntax error
       means restore/fix the fragment from the console and stop. From a fresh
-      controller key session, run `sudo -n true`; expected exit zero without a
-      password prompt. If it fails, inspect `sudo -l`, account membership and
+      controller key session, inspect `sudo -n -l` and confirm the root ALL rule;
+      run `sudo -n true`, `sudo -n id -u`, `sudo -n apt --version`,
+      `sudo -n nft --version` and `sudo -n systemctl --version`. Expected: no
+      password prompt, uid 0, and successful read-only version checks. If any
+      fails, inspect `sudo -l`, account membership and
       fragment ownership via the console. Keep a separate administrator console
       recovery route before optionally tightening SSH password authentication;
       check effective `sshd -T` settings and reconnect with a second key-only
