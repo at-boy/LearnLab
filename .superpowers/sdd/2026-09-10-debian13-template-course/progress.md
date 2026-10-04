@@ -33,3 +33,10 @@ Task 2: review spec PASS / quality NEEDS FIXES. task-2-review.md: P1 concrete di
 
 Task 2: complete — initial 3e5da80; fixes 0140b92 and f90c648. Final independent spec PASS / quality PASS in task-2-review.md. Initial full offline 663 passed/1 deselected; after instructional fixes focused4 passed and catalog no findings; final SSH options checked locally with ssh -G -F /dev/null, no network. No open findings.
 Task 3: pending — brief task-3-brief.md already extracted; start from current branch after reading ledger. Tasks 4–5 also pending. Pause for usage headroom after gate; no new implementation dispatched.
+
+2026-10-04 third resume: user authorized continuing with usage watch; initial5-hour0%, weekly44%. Task3 in progress, base a9e8afa, implementer debian_task3, report task-3-report.md. Stop new dispatch near70%, checkpoint before exhaustion.
+
+Task3: implemented a9e8afa..5eab41f. RED3 missing-lesson failures; focusedGREEN5, full664 passed/1 deselected, validator no findings, Ruff no-cache and staged whitespace clean. task-3-report.md committed. Independent review debian3_review in progress; not complete until spec/quality gate passes.
+
+Task3: review found P1 D-Bus regular-file identity disposition and P2 SSH boot activation after socket disable. task-3-review.md has both Changes requested verdicts. Original implementer fixed both in5a34e98, parent5eab41f; report appended. Focused5 passed, catalog no findings, staged whitespace clean; no full-suite rerun after instructional fixes. Scoped re-review PENDING — next action on resume. Review package review-5eab41f..5a34e98.diff prepared. Do not mark Task3 complete or start Task4 yet.
+Usage pause:82% used at last check, reset October4 21:31 Europe/Copenhagen. All agents stopped; no new implementation/review dispatch.

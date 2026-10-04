@@ -56,3 +56,16 @@ User resumed with usage monitoring. Initial five-hour usage 0%, weekly 30%. Reus
 - Pausing after Task 2 review for account usage. Last pre-checkpoint reading79%; reset October4 15:41 Europe/Copenhagen. Task3 brief exists but implementation not started. Resume directly with Task3; no repeat of completed tasks.
 
 - Final checkpoint usage reading: 89% used, 11% remaining; stop now. Reset reported 2026-10-04 15:41 Europe/Copenhagen.
+
+## 2026-10-04 — third resumed batch
+
+Fresh allowance0% used (weekly44%). Reused existing worktree at a9e8afa; only untracked .venv link. Tasks1–2 remain reviewed complete. Dispatched Task3 sealing/two-clone instructional work, no live execution. Original merge approval remains limited to previously published checkpoint.
+
+- Task3 committed5eab41f with sealing and two-clone identity lessons, guide and behavioral catalog/knowledge tests. RED3 expected missing-lesson failures then focused5 pass. Full offline664 passed/1 deselected (40.63s); validator and Ruff no-cache passed. Initial wrong-interpreter validation and cache-path failure are recorded in report, corrected without live action. qm.1 reference unavailable; actual Proxmox/guest behavior stays pending. Independent review dispatched; latest usage48%.
+
+### Third-resume checkpoint
+
+- Task3 independent review Changes requested: separate regular D-Bus machine-id could remain empty, and disabling socket activation could leave SSH without a boot trigger. Fix round1 by original implementer committed5a34e98 (parent5eab41f); lesson/guide now teach inspected D-Bus file disposition and verified service boot activation, plus matching clone checks.
+- After fixes: focused5 passed, course validation no findings, staged whitespace clean. Initial full suite664 passed/1 deselected predates these instructional corrections; no full-suite rerun claimed. No helper automation or live actions.
+- Scoped re-review package ready; re-review deliberately not launched at82% usage. Task3 remains incomplete pending that gate. Task4 brief ready but no implementation started. All subagents stopped.
+- Last usage82% used,18% remaining; reset October4 21:31 Europe/Copenhagen. Pause now for requested headroom. No merge/push after the prior approved checkpoint, no live resource operation, no registry changes.

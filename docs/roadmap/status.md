@@ -1,10 +1,10 @@
 # LearnLab roadmap status
 
-Updated 2026-10-04 after second resumed batch. Paused for usage headroom (79% used at last pre-checkpoint reading; later exact reading recorded in execution log). Reset reported October 4 15:41 Europe/Copenhagen. Roadmap is NOT complete.
+Updated 2026-10-04 after third resumed batch. Paused at82% five-hour usage (18% remaining at last check); reset October4 21:31 Europe/Copenhagen. Roadmap is NOT complete.
 
-Active workspace: /home/at-boy/.codex/worktrees/learnlab-roadmap/LearnLab, branch codex/learnlab-roadmap. Main checkpoint 3d4b14d was explicitly approved, merged and pushed as 3159e18; remote verified. All branches/worktrees retained. Later Task 2 commits remain unmerged/unpushed.
+Active workspace: /home/at-boy/.codex/worktrees/learnlab-roadmap/LearnLab, branch codex/learnlab-roadmap. Main remains3159e18 from the previously approved/pushed checkpoint. Later work remains local; all original branches/worktrees preserved.
 
-Debian Task 1 and Task 2 independently PASS (spec and quality). Task 2 content tip f90c648 follows 3e5da80 and 0140b92. Latest full suite before instructional fixes: 663 passed, 1 deselected. After fixes: 4 focused tests passed, course validation no findings, SSH options verified offline. All courses remain draft; no live operations.
+Debian Tasks1–2 independently PASS. Task3 implementation5eab41f passed full offline664 tests/1 deselected. Review found two correctness gaps; fixes5a34e98 passed focused5 tests and catalog validation, but independent scoped re-review is PENDING. No full-suite rerun after those instructional fixes. Tasks4–5 not started. No live operations or certification.
 
 ## Authority and boundaries
 
@@ -33,7 +33,7 @@ All five feature worktrees remain under .worktrees/. Bootstrap work is at .workt
 |---|---|---|
 | 1 | Integrate NixOS/provider-bootstrap work | Existing implementation and historical scoped reviews; fresh branch gate now passes 657 non-live tests, Ruff and mypy. Whole-diff review finished; P2 TLS handoff correction and provenance approved. Final assertion review passed. Approved checkpoint 3d4b14d merged and pushed as main 3159e18; remote verified. Original branch/worktree retained. |
 | 2 | Bootstrap acceptance | NixOS and provider-bootstrap remain draft. Prepare exact resource scope and request live authorization. Complete current-digest traversal, recovery, identity/permissions, lifecycle and cleanup evidence before registry changes. |
-| 3 | Debian 13 template | Tasks 1–2 complete with independent reviews: intro, installer, installation and lab access lessons plus partial guide. Tasks 3–5 remain: sealing, two-clone identity acceptance, profile handoff, complete guide, wheel coverage and acceptance report. Two-clone live acceptance separately authorized. |
+| 3 | Debian 13 template | Tasks 1–2 complete with independent reviews: intro, installer, installation and lab access lessons plus partial guide. Task3 sealing/two-clone lessons implemented with review corrections; scoped re-review pending. Tasks4–5 remain: profile handoff, complete guide, wheel coverage and acceptance report. Two-clone live acceptance separately authorized. |
 | 4 | Existing-course certification | Six nginx/nftables/systemd courses have offline corrections but remain draft. Live failure/remediation, save/resume, cumulative state and teardown on each OS remain. Excluded NAT lessons remain blocked pending real multi-machine ingress; this does not block the other nftables lessons. |
 | 5 | Discovery/continuation | Planned, unimplemented. Offline listings/progress, continue and interactive home. |
 | 6 | Interactive secret resolution | Planned, unimplemented. Shared resolver, hidden prompt, explicit stdin, cancellation/redaction and integration including continue. Coordinate with discovery. |
@@ -51,11 +51,11 @@ The template task index is reconciled on the execution branch. Historical provid
 
 ## Resume precisely here
 
-1. Check fresh usage and read execution-log.md plus the Debian per-plan ledger. Stop new implementation around 70% used, allow review/checkpoint headroom, and never redeem credits implicitly.
-2. Reuse this native worktree/branch; do not create another or reimplement Tasks 1–2. Only untracked .venv is expected (shared interpreter, never stage it). Use PYTHONPATH=src and python -m.
-3. Task 3 next: read existing task-3-brief.md and linked Debian spec; implement sealing and two-clone identity lessons with TDD and independent review. No live execution. Then Tasks 4–5 (handoff/guide/wheel and honest offline acceptance).
-4. Continue other existing offline workstreams while live gates are blocked: discovery/continuation, secret resolution, NixOS administration, staged multi-machine networking. Maintain reports and both spec/quality review gates.
-5. Approval for merge/push covered ONLY 3d4b14d and was fulfilled as remote main 3159e18. Ask before merging or pushing later commits. Preserve all refs/worktrees. Current root collections/ remains untouched; original root audit snapshots retained at .worktrees/roadmap-audit-snapshot-20261004.
-6. Live resource scope has not been selected or authorized. Prepare exact private resource/cleanup scope using live-acceptance-gates.md before asking. Never certify from historical, offline or self-attested evidence.
+1. Check fresh usage. Read this file, execution-log.md and Debian per-plan progress.md. Stop new implementation near70% used; preserve room for reviews/checkpoint and never redeem reset credits implicitly.
+2. Reuse this native worktree/branch. Only untracked .venv is expected (shared interpreter, never stage). Use PYTHONPATH=src and python -m; the unqualified installed CLI can import the sibling checkout.
+3. Next action: scoped independent Task3 re-review of5eab41f..5a34e98 against task-3-review.md's two findings. Package review-5eab41f..5a34e98.diff and amended task-3-report.md are ready. Verify the corrected D-Bus identity and SSH boot-activation paths in lesson, guide and clone acceptance. Do not redo the broad review or claim complete until both verdicts pass.
+4. After Task3 gate passes, execute Task4 from task-4-brief.md (already extracted): profile handoff, finished guide, README/wheel/CLI coverage. Then Task5 offline acceptance report/final review, retaining draft status unless separately authorized current-digest live acceptance passes.
+5. Continue remaining authorized offline workstreams (discovery, secrets, administration, multi-machine) while live acceptance is blocked. Maintain per-task reports, spec/quality review gates and durable logs.
+6. Merge/push approval covered ONLY3d4b14d, fulfilled as remote main3159e18. Request new approval for later commits, preserve every branch/worktree. Live scope is not selected or authorized; prepare exact private resource/cleanup scope first. Historical/offline/self-attested evidence never certifies current content.
 
-No automatic resume or reset-credit redemption scheduled. Main's published roadmap documents are the earlier approved checkpoint; this branch's status and execution log are the current authority.
+Main's published roadmap documents are the older approved checkpoint; this branch is the current execution authority. No automatic resume/reset-credit redemption scheduled. Root collections/ untouched; original audit snapshot retained at .worktrees/roadmap-audit-snapshot-20261004.
