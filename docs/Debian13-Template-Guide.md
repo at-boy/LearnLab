@@ -218,10 +218,12 @@ Booting after sealing can regenerate identity and invalidates that seal.
 
 **Installed guest administrator console — configure missing SSH keys.** Keep
 console recovery open. Inspect `systemctl cat ssh.service`, `systemctl cat
-ssh.socket`, `systemctl is-enabled ssh.socket`, `systemctl list-sockets`,
+ssh.socket`, `systemctl is-enabled ssh.service ssh.socket`, `systemctl
+is-active ssh.service ssh.socket`, `systemctl list-sockets`,
 `sshd -T` hostkey paths, `ls -l /etc/ssh/ssh_host_*_key*` and
-`findmnt -T /etc/ssh`. Absent ssh.socket is fine. Stop on custom host-key
-paths, symlinks, unexpected file types or mounts until ownership is resolved.
+`findmnt -T /etc/ssh`. Absent ssh.socket is fine. A masked service or unclear
+activation path is a stop condition; do not unmask silently. Stop on custom
+host-key paths, symlinks, unexpected file types or mounts until resolved.
 As root, interactively create
 `/etc/systemd/system/learnlab-ssh-host-keys.service`:
 
@@ -249,8 +251,15 @@ Set both root:root mode 0644. Run `systemctl daemon-reload`; get the actual
 SSH unit path with `systemctl show ssh.service -p FragmentPath`, then run
 `systemd-analyze verify` on that path and the new unit. Inspect `systemctl
 cat ssh.service` and `systemctl show ssh.service -p Requires -p After`;
-resolve relevant errors or absent dependency. Inspect any ssh.socket trigger;
-stop/disable it before sealing and ensure it cannot bypass ordering. Before
+resolve relevant errors or absent dependency. Before disabling an enabled or
+active ssh.socket, inspect ssh.service's `[Install]` section and boot path.
+If service is startable but disabled, explicitly confirm `systemctl enable
+ssh.service`; verify `systemctl is-enabled ssh.service` reports enabled and
+inspect its boot-target link. A masked, static or unenableable service without
+a verified boot trigger means stop; do not unmask or assume SSH will start.
+Inspect the socket's triggers; explicitly confirm `systemctl disable
+ssh.socket` only after the service boot path is verified. Stop the socket at
+sealing. Before
 deleting any key, privately record `ssh-keygen -lf
 /etc/ssh/ssh_host_ed25519_key.pub`, run `systemctl start
 learnlab-ssh-host-keys.service` and compare that fingerprint again. Expected:
@@ -264,10 +273,13 @@ first boot. `Requires=` plus `After=` makes failed generation block SSH.
 '%F %n' /etc/machine-id /var/lib/dbus/machine-id`, `ls -l
 /var/lib/dbus/machine-id`, `readlink /var/lib/dbus/machine-id` if it is a
 symlink, and `findmnt -T` on each path. Confirm actual types and writable
-guest filesystems. A D-Bus symlink to `/etc/machine-id` stays intact; a
-separate stale regular file must be emptied after type confirmation because
-systemd can use it when `/etc/machine-id` is empty. Unexpected targets,
-mounts or types require diagnosis. Inspect the active DHCP client with
+guest filesystems and `/etc/machine-id` as an ordinary file. A verified
+D-Bus symlink to `/etc/machine-id` stays intact. A separate regular D-Bus
+file must not remain empty: systemd can fall back to its old value, while
+D-Bus may reject an empty file. After exact type, parent and mount checks,
+plan to replace only that file with a symlink to `/etc/machine-id` so both
+read the new clone ID. Unexpected targets, mounts, missing parents or types
+require diagnosis. Inspect the active DHCP client with
 `systemctl status systemd-networkd NetworkManager networking`, `ps -ef`, its
 config and logs. For ifupdown/dhclient, inspect `/etc/network/interfaces`,
 dhclient configuration and `/var/lib/dhcp/` leases; identify only leases for
@@ -278,14 +290,23 @@ persistent per-machine state of the active client. Do not copy a generic
 cleanup recipe. Both clones later verify DHCP identity uniqueness.
 
 **Installed guest administrator console — confirm, execute, verify.** Confirm
-candidate ownership, source and every file individually. Stop ssh.socket if
-present and ssh.service; confirm neither will restart before shutdown. Remove
+candidate ownership, source and every file individually. Recheck that
+`systemctl is-enabled ssh.service` reports enabled. Stop ssh.socket if present
+and ssh.service; confirm the socket is disabled/inactive and SSH cannot restart
+before shutdown. Remove
 only the inspected ordinary `/etc/ssh/ssh_host_*_key` private/public pairs,
 one named pair at a time; keep authorized_keys and controller keys. For a
 verified ordinary `/etc/machine-id`, use `: > /etc/machine-id` as root and
-verify it is empty. Empty a separately verified ordinary
-`/var/lib/dbus/machine-id` likewise; keep a verified symlink. Reinspect the
-selected paths and keys, then run `systemctl poweroff`. **Do not reboot** or
+verify it is empty. If `/var/lib/dbus/machine-id` was a separately verified
+ordinary file on the expected writable filesystem, confirm that exact path
+again, run `rm -- /var/lib/dbus/machine-id` as root, then
+`ln -s -- /etc/machine-id /var/lib/dbus/machine-id`. Check
+`test -L /var/lib/dbus/machine-id` and that
+`readlink /var/lib/dbus/machine-id` reports exactly `/etc/machine-id`.
+Leave a pre-existing verified symlink untouched. If interrupted between
+removal and link creation, reinspect before making the link; do not reboot
+with the D-Bus path absent. Reinspect the selected paths and keys, then run
+`systemctl poweroff`. **Do not reboot** or
 restart SSH after sealing. A partial seal needs fresh inspection before any
 repeat.
 
@@ -311,8 +332,11 @@ ISO, boot both from disk, and retain template and source.
 identity. Check `systemctl status qemu-guest-agent` and a current Proxmox
 agent response. Inspect `systemctl status learnlab-ssh-host-keys.service
 ssh.service`, `systemctl show ssh.service -p Requires -p After`, and
-`systemctl cat ssh.service`. Missing keys should have been generated before
-SSH. Check socket state. If keys or service are missing, use `journalctl -u
+`systemctl cat ssh.service`. Verify `systemctl is-enabled ssh.service` reports
+enabled, `systemctl is-active ssh.service` reports active and ssh.socket is
+disabled/inactive. Missing keys should have been generated before SSH. A
+masked, disabled or inactive service fails the boot path; do not unmask it
+silently. If keys, dependency or service are missing, use `journalctl -u
 learnlab-ssh-host-keys.service -u ssh.service` and stop. Verify online trixie
 apt sources, package/service state and all required tools in the table above
 on **both** clones.
@@ -331,11 +355,17 @@ run `sudo -n true` in that authenticated session. A local private-key unlock
 is allowed; guest password prompt is a failure. Repeat independently for B.
 
 **Guest console — compare and reboot.** Privately inspect nonempty
-`/etc/machine-id`, D-Bus file type/value relationship and fingerprints of
-every `/etc/ssh/ssh_host_*_key.pub` on A and B. Machine IDs and host keys
+`/etc/machine-id`, then verify `test -s /etc/machine-id`, the D-Bus path's
+`readlink` target is exactly `/etc/machine-id`, and `cmp -s /etc/machine-id
+/var/lib/dbus/machine-id` succeeds. Query the running bus with `busctl
+--system call org.freedesktop.DBus / org.freedesktop.DBus.Peer GetMachineId`
+and compare its ID locally with `/etc/machine-id`; a failed call or mismatch
+blocks acceptance. Check fingerprints of every
+`/etc/ssh/ssh_host_*_key.pub` on A and B. Machine IDs and host keys
 must be distinct between clones, as must MAC/firmware and persistent DHCP
 client identifiers. Reboot **each clone once**, never the template; each
-clone's own machine ID and keys must stay stable. Repeat console-authenticated
+clone's own machine ID and keys must stay stable; repeat the D-Bus link,
+file equality and live bus query. Repeat console-authenticated
 strict SSH, `sudo -n true`, agent and tool checks. Shared or changed identity,
 lost service or access blocks acceptance. Keep raw IDs, fingerprints and
 addresses out of LearnLab, Git and reports; record only local pass/fail.

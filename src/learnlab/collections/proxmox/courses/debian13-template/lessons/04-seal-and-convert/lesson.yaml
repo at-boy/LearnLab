@@ -28,8 +28,11 @@ steps:
     title: Make missing SSH host keys regenerate before SSH starts
     instructions: |
       Installed guest (administrator console): inspect `systemctl cat ssh.service`,
-      `systemctl cat ssh.socket`, `systemctl is-enabled ssh.socket` and
-      `systemctl list-sockets` (an absent ssh.socket is fine). Also inspect
+      `systemctl cat ssh.socket`, `systemctl is-enabled ssh.service
+      ssh.socket`, `systemctl is-active ssh.service ssh.socket` and
+      `systemctl list-sockets` (an absent ssh.socket is fine). Treat a masked
+      service or unexplained activation state as a stop condition; do not
+      unmask it silently. Also inspect
       `sshd -T` hostkey paths and existing `/etc/ssh/ssh_host_*_key` file types,
       ownership and mounts with `stat`, `findmnt -T /etc/ssh`, and `ls -l`.
       If paths are symlinks, mounts, unexpected types or customized keys,
@@ -64,9 +67,18 @@ steps:
       first-boot condition. While the original keys still exist, run
       `systemctl start learnlab-ssh-host-keys.service` and compare the existing
       host public-key fingerprints before/after locally; they must be unchanged.
-      If ssh.socket is active/enabled, inspect its triggers and stop/disable
-      that socket before sealing; its activation must not bypass the key unit.
-      Keep the guest console available. Do not delete any key yet.
+      Before disabling any active/enabled ssh.socket, establish a service boot
+      path: inspect ssh.service's `[Install]` section and current enablement.
+      If it is startable but disabled, explicitly confirm and run `systemctl
+      enable ssh.service`; then verify `systemctl is-enabled ssh.service`
+      reports enabled and inspect its boot target link. If it is masked,
+      static without a verified boot trigger, or cannot be enabled, stop and
+      resolve the configuration rather than unmasking or assuming SSH will
+      start. For an active/enabled ssh.socket, inspect its triggers and
+      explicitly confirm `systemctl disable ssh.socket` only after the
+      service boot path is verified; stop the socket at the sealing checkpoint.
+      Its activation must not bypass the key unit. Keep the guest console
+      available. Do not delete any key yet.
     verifications:
       - id: key-regeneration-order-checked
         type: manual-confirmation
@@ -91,11 +103,15 @@ steps:
       `findmnt -T /etc/machine-id`, `stat -c '%F %n' /etc/machine-id`,
       `ls -l /var/lib/dbus/machine-id`, `readlink /var/lib/dbus/machine-id`
       if it is a symlink, and `findmnt -T /var/lib/dbus/machine-id`.
-      Confirm normal writable guest filesystems and ordinary files. A D-Bus
-      symlink to /etc/machine-id should remain a symlink; a separate stale
-      regular D-Bus ID must be removed or emptied after confirming its type,
-      because systemd can use it when /etc/machine-id is empty. Other types,
-      mount points or unexpected targets are stop conditions. Inspect the
+      Confirm normal writable guest filesystems, `/etc/machine-id` as an
+      ordinary file, and whether the D-Bus path is a symlink or separate
+      ordinary file. A verified symlink to `/etc/machine-id` stays intact.
+      A separate regular D-Bus ID cannot be left empty: systemd may use its
+      old value when `/etc/machine-id` is empty, while D-Bus may reject an
+      empty file on clone boot. Plan to replace only that inspected regular
+      file with a symlink to `/etc/machine-id`, so both read the same new ID.
+      Other types, mounts, missing parents or unexpected symlink targets are
+      stop conditions. Inspect the
       actual DHCP client with `systemctl status systemd-networkd NetworkManager
       networking`, `ps -ef` and its active configuration/logs. If ifupdown
       runs dhclient, inspect `/etc/network/interfaces`, dhclient config and
@@ -108,15 +124,24 @@ steps:
       identities later.
 
       Explicitly confirm the exact candidate, the recovery source and all
-      individual files on the console. Stop `ssh.socket` if present and
-      `ssh.service`; check neither can restart before shutdown. For only the
+      individual files on the console. Recheck `systemctl is-enabled
+      ssh.service` is enabled; stop `ssh.socket` if present and `ssh.service`,
+      then verify the socket is disabled/inactive and SSH cannot restart before
+      shutdown. For only the
       validated ordinary `/etc/ssh/ssh_host_*_key` private/public pairs,
       remove each inspected pair individually with root privileges. Do not
       touch authorized_keys or controller keys. For a validated ordinary
       `/etc/machine-id`, use `: > /etc/machine-id` as root and confirm it is
-      empty. For a separately validated regular `/var/lib/dbus/machine-id`,
-      empty that file as root too; leave a verified symlink to /etc/machine-id
-      intact. Reinspect types, emptiness and absence of only selected host
+      empty. If `/var/lib/dbus/machine-id` was a separately verified regular
+      file on the expected writable filesystem, confirm that exact path again,
+      remove only that file as root with `rm -- /var/lib/dbus/machine-id`,
+      then run `ln -s -- /etc/machine-id /var/lib/dbus/machine-id`. Verify
+      `test -L /var/lib/dbus/machine-id` and `readlink
+      /var/lib/dbus/machine-id` reports exactly `/etc/machine-id`. Do not
+      replace a pre-existing verified symlink. If interrupted between removal
+      and link creation, inspect ownership, file type and path again before
+      creating the link; do not reboot with a missing D-Bus path. Reinspect
+      types, the empty `/etc/machine-id`, link target and absence of only selected host
       keys. Power off from this console with `systemctl poweroff`. Do not
       reboot, start SSH or boot the sealed candidate before conversion.
       If interrupted, inspect actual power, template and file states before

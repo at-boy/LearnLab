@@ -32,9 +32,13 @@ steps:
       current Proxmox agent response. Inspect `systemctl status
       learnlab-ssh-host-keys.service ssh.service`, `systemctl show ssh.service
       -p Requires -p After` and `systemctl cat ssh.service`; the missing-key
-      unit must succeed before SSH. Check ssh.socket is not bypassing ordering.
-      Confirm host public keys now exist. If not, inspect `journalctl -u
-      learnlab-ssh-host-keys.service -u ssh.service` and stop. Verify online
+      unit must succeed before SSH. Verify `systemctl is-enabled ssh.service`
+      reports enabled, `systemctl is-active ssh.service` reports active, and
+      ssh.socket remains disabled/inactive. A masked, disabled or inactive
+      service is a failed boot path, even if keys exist; do not unmask it
+      silently. If keys, dependency or service are missing, inspect
+      `journalctl -u learnlab-ssh-host-keys.service -u ssh.service` and stop.
+      Verify online
       trixie apt source, package/service state and every required tool from
       the access lesson. A missing address, agent or service blocks acceptance.
     verifications:
@@ -74,8 +78,14 @@ steps:
       `cat /etc/machine-id` value and fingerprints of every active SSH host
       public key (run `ssh-keygen -lf` separately for each inspected
       `/etc/ssh/ssh_host_*_key.pub` file). Confirm
-      `/var/lib/dbus/machine-id` is a symlink to the same ID or, if regular,
-      agrees with /etc/machine-id; inspect its type. Confirm DHCP/client
+      `/var/lib/dbus/machine-id` is a symlink whose `readlink` target is
+      exactly `/etc/machine-id`; `test -s /etc/machine-id` and `cmp -s
+      /etc/machine-id /var/lib/dbus/machine-id` must succeed. Query the
+      running system bus with `busctl --system call org.freedesktop.DBus /
+      org.freedesktop.DBus.Peer GetMachineId` and compare its returned ID
+      locally with `/etc/machine-id`; a failed bus query or disagreement
+      blocks acceptance. Check this before and after each clone reboot.
+      Confirm DHCP/client
       identity, NIC MAC and EFI/firmware identity locally. Compare A with B:
       machine IDs and SSH host keys must be distinct, with no shared MAC,
       firmware or persistent DHCP client identifier. Never paste raw values,
