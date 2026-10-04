@@ -40,3 +40,14 @@ Task3: implemented a9e8afa..5eab41f. RED3 missing-lesson failures; focusedGREEN5
 
 Task3: review found P1 D-Bus regular-file identity disposition and P2 SSH boot activation after socket disable. task-3-review.md has both Changes requested verdicts. Original implementer fixed both in5a34e98, parent5eab41f; report appended. Focused5 passed, catalog no findings, staged whitespace clean; no full-suite rerun after instructional fixes. Scoped re-review PENDING — next action on resume. Review package review-5eab41f..5a34e98.diff prepared. Do not mark Task3 complete or start Task4 yet.
 Usage pause:82% used at last check, reset October4 21:31 Europe/Copenhagen. All agents stopped; no new implementation/review dispatch.
+
+Fourth resume: initial5-hour0%, weekly59%. Task3 scoped re-review PASS spec/quality; both findings addressed in5a34e98. Task3: complete (offline instructional scope). Task4 in progress, base0e25093, implementer debian_task4, report task-4-report.md. No live certification.
+
+Task4: implemented0e25093..51a6525. RED2 missing-final-lesson/order; focused8, installed-wheel2, full666 passed/1 deselected, catalog no findings, focusedRuff and staged diff clean. task-4-report.md committed. Independent review debian4_review active.
+
+Task4: complete —51a6525 independent spec/quality PASS in task-4-review.md, no findings.
+Task5: offline report in progress, base51a6525, implementer debian_task5. Ruling: reuse exact-content fresh Task4 full666/wheel2/focused8 evidence with explicit revision/provenance; run missing checks/digest, no redundant full suite without content changes. Final whole-course review remains a separate pending gate. Usage64% at dispatch.
+
+Task5: offline report implemented c556dfa; course content revision51a6525, digest8c815d9f0c3df55d0089f2a34c69d18c5cc89c467ed61fc99f14899dda2ce1af. Fresh Ruff no-cache/mypy17/catalog/whitespace passed; Task4 regression results reused with explicit provenance and unchanged content. Task5 final review gate PENDING; do not mark plan complete.
+Final whole-course review is next: final-course-review.diff (7ae9939..c556dfa excluding only process logs/.superpowers), linked spec/plan, acceptance report and task reports. Reviewer should cover final integrated course and Task5 evidence together, not repeat each prior review. No final reviewer dispatched in this window.
+Pause usage83%5-hour,71%weekly; reset October5 02:37 Europe/Copenhagen. Tasks1–4 complete, Task5 pending final review; all live checkpoints pending.

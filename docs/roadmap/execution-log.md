@@ -69,3 +69,19 @@ Fresh allowance0% used (weekly44%). Reused existing worktree at a9e8afa; only un
 - After fixes: focused5 passed, course validation no findings, staged whitespace clean. Initial full suite664 passed/1 deselected predates these instructional corrections; no full-suite rerun claimed. No helper automation or live actions.
 - Scoped re-review package ready; re-review deliberately not launched at82% usage. Task3 remains incomplete pending that gate. Task4 brief ready but no implementation started. All subagents stopped.
 - Last usage82% used,18% remaining; reset October4 21:31 Europe/Copenhagen. Pause now for requested headroom. No merge/push after the prior approved checkpoint, no live resource operation, no registry changes.
+
+## Fourth resumed batch
+
+User resumed. Initial five-hour0%, weekly59%. Reused worktree at0e25093, only untracked .venv. Scoped Task3 re-review dispatched to original reviewer for5eab41f..5a34e98; no broad repeat. Main/live approval boundaries unchanged.
+
+- Task3 scoped re-review accepted both corrections; spec/quality PASS for offline/manual scope. Task4 implementer started from0e25093: final provider handoff, completed guide, installed-wheel/no-profile CLI coverage. No new merge/push/live authorization.
+
+- Task4 committed51a6525: final7-lesson course, handoff/guide/README and installed-wheel/start-resume coverage. RED2 expected failures then focused8 pass. Installed-wheel2 pass; full666 passed/1 deselected, validation no findings, focused lint clear. Independent review dispatched; usage51%. No live action or certification.
+
+- Task4 review PASS spec/quality, no findings. Task5 offline acceptance report dispatched at64% usage. Reuse fresh exact-content Task4 regression evidence with provenance rather than duplicate wheel/full runs. New digest and missing static/catalog checks will be recorded; final whole-course review remains pending.
+
+### Fourth-resume checkpoint
+
+- Task5 offline report c556dfa binds exact course content51a6525 and digest8c815d9f0c3df55d0089f2a34c69d18c5cc89c467ed61fc99f14899dda2ce1af. Reused current Task4 full666/1 deselected, wheel2 and focused8 evidence with explicit source/revision. Fresh full Ruff no-cache, mypy17 source files with /tmp cache, targeted catalog no findings, seven lessons/draft, and whitespace passed. Global validation has only the three known proxmox-admin warnings. Initial inherited mypy cache failure recorded as environmental, corrected. Registry unchanged.
+- Final whole-course/Task5 review intentionally pending; prepared final-course-review.diff spanning7ae9939..c556dfa excluding only process logs/reports. No reviewer launched after usage crossed70%. Tasks1–4 complete, Task5 not complete until final review passes.
+- Final checkpoint usage83%5-hour (17% remaining),71%weekly; reset October5 02:37 Europe/Copenhagen. Pause now. No new merge/push/live action. Main remains previously approved/published3159e18; later commits separately gated.

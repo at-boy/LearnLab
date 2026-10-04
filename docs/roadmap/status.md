@@ -1,10 +1,10 @@
 # LearnLab roadmap status
 
-Updated 2026-10-04 after third resumed batch. Paused at82% five-hour usage (18% remaining at last check); reset October4 21:31 Europe/Copenhagen. Roadmap is NOT complete.
+Fourth resumed batch checkpoint: paused at 83% five-hour usage (17% remaining), weekly 71% used. Five-hour reset reported October 5 at 02:37 Europe/Copenhagen. Roadmap is NOT complete.
 
-Active workspace: /home/at-boy/.codex/worktrees/learnlab-roadmap/LearnLab, branch codex/learnlab-roadmap. Main remains3159e18 from the previously approved/pushed checkpoint. Later work remains local; all original branches/worktrees preserved.
+Active workspace: /home/at-boy/.codex/worktrees/learnlab-roadmap/LearnLab, branch codex/learnlab-roadmap. Main remains 3159e18 from the approved checkpoint; later work is local and unmerged. All branches/worktrees preserved.
 
-Debian Tasks1–2 independently PASS. Task3 implementation5eab41f passed full offline664 tests/1 deselected. Review found two correctness gaps; fixes5a34e98 passed focused5 tests and catalog validation, but independent scoped re-review is PENDING. No full-suite rerun after those instructional fixes. Tasks4–5 not started. No live operations or certification.
+Debian Tasks 1–4 independently passed spec/quality review. The final seven-lesson content is at 51a6525. Task 5 offline acceptance report is committed at c556dfa with digest 8c815d9f0c3df55d0089f2a34c69d18c5cc89c467ed61fc99f14899dda2ce1af. Final whole-course/Task 5 review is PENDING. Current-content regression evidence: 666 passed, 1 live deselected; installed wheel 2 passed; focused 8 passed. Fresh report-stage Ruff/mypy/catalog/whitespace passed. No live acceptance or certification.
 
 ## Authority and boundaries
 
@@ -33,7 +33,7 @@ All five feature worktrees remain under .worktrees/. Bootstrap work is at .workt
 |---|---|---|
 | 1 | Integrate NixOS/provider-bootstrap work | Existing implementation and historical scoped reviews; fresh branch gate now passes 657 non-live tests, Ruff and mypy. Whole-diff review finished; P2 TLS handoff correction and provenance approved. Final assertion review passed. Approved checkpoint 3d4b14d merged and pushed as main 3159e18; remote verified. Original branch/worktree retained. |
 | 2 | Bootstrap acceptance | NixOS and provider-bootstrap remain draft. Prepare exact resource scope and request live authorization. Complete current-digest traversal, recovery, identity/permissions, lifecycle and cleanup evidence before registry changes. |
-| 3 | Debian 13 template | Tasks 1–2 complete with independent reviews: intro, installer, installation and lab access lessons plus partial guide. Task3 sealing/two-clone lessons implemented with review corrections; scoped re-review pending. Tasks4–5 remain: profile handoff, complete guide, wheel coverage and acceptance report. Two-clone live acceptance separately authorized. |
+| 3 | Debian 13 template | Tasks 1–2 complete with independent reviews: intro, installer, installation and lab access lessons plus partial guide. Seven-lesson course, completed guide, wheel/CLI coverage and offline acceptance report implemented; Tasks1–4 independently passed. Task5/final whole-course review remains; exact-digest live acceptance is separate. Two-clone live acceptance separately authorized. |
 | 4 | Existing-course certification | Six nginx/nftables/systemd courses have offline corrections but remain draft. Live failure/remediation, save/resume, cumulative state and teardown on each OS remain. Excluded NAT lessons remain blocked pending real multi-machine ingress; this does not block the other nftables lessons. |
 | 5 | Discovery/continuation | Planned, unimplemented. Offline listings/progress, continue and interactive home. |
 | 6 | Interactive secret resolution | Planned, unimplemented. Shared resolver, hidden prompt, explicit stdin, cancellation/redaction and integration including continue. Coordinate with discovery. |
@@ -51,11 +51,11 @@ The template task index is reconciled on the execution branch. Historical provid
 
 ## Resume precisely here
 
-1. Check fresh usage. Read this file, execution-log.md and Debian per-plan progress.md. Stop new implementation near70% used; preserve room for reviews/checkpoint and never redeem reset credits implicitly.
-2. Reuse this native worktree/branch. Only untracked .venv is expected (shared interpreter, never stage). Use PYTHONPATH=src and python -m; the unqualified installed CLI can import the sibling checkout.
-3. Next action: scoped independent Task3 re-review of5eab41f..5a34e98 against task-3-review.md's two findings. Package review-5eab41f..5a34e98.diff and amended task-3-report.md are ready. Verify the corrected D-Bus identity and SSH boot-activation paths in lesson, guide and clone acceptance. Do not redo the broad review or claim complete until both verdicts pass.
-4. After Task3 gate passes, execute Task4 from task-4-brief.md (already extracted): profile handoff, finished guide, README/wheel/CLI coverage. Then Task5 offline acceptance report/final review, retaining draft status unless separately authorized current-digest live acceptance passes.
-5. Continue remaining authorized offline workstreams (discovery, secrets, administration, multi-machine) while live acceptance is blocked. Maintain per-task reports, spec/quality review gates and durable logs.
-6. Merge/push approval covered ONLY3d4b14d, fulfilled as remote main3159e18. Request new approval for later commits, preserve every branch/worktree. Live scope is not selected or authorized; prepare exact private resource/cleanup scope first. Historical/offline/self-attested evidence never certifies current content.
+1. Check both fresh five-hour and weekly usage. Read this file, execution-log.md and Debian per-plan progress.md. Reserve room for reviews/checkpoint; never consume reset credits implicitly.
+2. Reuse this worktree/branch. Only untracked .venv expected; use PYTHONPATH=src and python -m to bind the shared interpreter to local source. Do not reimplement reviewed Tasks 1–4.
+3. Dispatch final whole-course review including Task5 evidence/spec compliance and overall quality. Package: .superpowers/sdd/2026-09-10-debian13-template-course/final-course-review.diff (7ae9939..c556dfa, excluding only process reports/logs). Read Debian spec/plan, current validation report, and prior task reports as necessary. Prior bootstrap correction is already reviewed; inspect its included lines for integration risks only. Read fixed diff once; no broad test reruns without concrete risk. Use independent broad-review role per skill; no live operations.
+4. Resolve final findings and run covering checks. If course bytes change, recompute digest/report and retain draft status. Only then close offline Task5 and request separate merge/push approval for exact reviewed later commits. The old approval covered only3d4b14d, already published as3159e18.
+5. Continue remaining offline roadmap: discovery/continuation, secret resolution, NixOS administration, staged multi-machine networking. Bootstrap/existing-course live certification remains independently blocked on current-content evidence and explicit resource authorization.
+6. Prepare exact private resource/cleanup scope before requesting live approval. All live checkpoints remain NOT RUN; never infer certification from historical, offline or self-attested evidence.
 
-Main's published roadmap documents are the older approved checkpoint; this branch is the current execution authority. No automatic resume/reset-credit redemption scheduled. Root collections/ untouched; original audit snapshot retained at .worktrees/roadmap-audit-snapshot-20261004.
+Main's published roadmap docs reflect the earlier approved checkpoint; this branch is the current execution authority. Original root collections/ untouched; original audit snapshot retained at .worktrees/roadmap-audit-snapshot-20261004. No automatic resume or reset redemption scheduled.
