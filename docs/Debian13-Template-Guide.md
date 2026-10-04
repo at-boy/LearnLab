@@ -1,8 +1,7 @@
-# Debian 13 template guide — installation and lab access
+# Debian 13 template guide — installation, sealing and clone checks
 
-This draft guide covers the first three hands-on phases of the Debian 13
-bootstrap course. Later sealing, clone acceptance and provider handoff are
-separate phases. No live installation has been certified. LearnLab records
+This draft guide covers installation, sealing and two-clone checks. Provider
+handoff is a later phase. No live installation has been certified. LearnLab records
 self-attested answers; it does not create or inspect these resources. Start on
 the **Controller** with `learnlab start proxmox/debian13-template --include-drafts`
 without a provider profile. Keep node, VM IDs, names, storage, bridge, disk,
@@ -199,6 +198,146 @@ future profile does not install it:
 | `tool.useradd` | `/usr/sbin/useradd` from `passwd` |
 | `tool.journalctl`, `tool.systemctl`, `tool.systemd`, `tool.systemd-run` | `journalctl`, `systemctl`, PID 1 systemd, `systemd-run` from Debian systemd packages |
 
-Do not add nginx sites, firewall exercise state, service units or capstone
+Do not add nginx sites, firewall exercise state, downstream exercise units or capstone
 artifacts to this base guest. The bootstrap course itself remains environment
 scope `none` with no managed guest or provider checks.
+
+## 4. Seal and convert the candidate
+
+**Proxmox node — inspect.** Recheck that the installed candidate passes the
+console, key SSH, sudo, tool and guest-agent checks above. Compare its node,
+VMID, name, disk/storage, power state and template flag with the private
+owner-only worksheet. Inspect its snapshot tree. Do not mutate a working
+template or one used by another profile. Keep a recoverable original/source
+until two clones pass. If none exists, make a separate backup or full source
+clone before sealing, budget its storage and verify ownership/recoverability.
+Snapshots block conversion; preserve
+them and diagnose, without automatic deletion or force. On resume inspect
+whether the candidate is running, partly sealed, off or already a template.
+Booting after sealing can regenerate identity and invalidates that seal.
+
+**Installed guest administrator console — configure missing SSH keys.** Keep
+console recovery open. Inspect `systemctl cat ssh.service`, `systemctl cat
+ssh.socket`, `systemctl is-enabled ssh.socket`, `systemctl list-sockets`,
+`sshd -T` hostkey paths, `ls -l /etc/ssh/ssh_host_*_key*` and
+`findmnt -T /etc/ssh`. Absent ssh.socket is fine. Stop on custom host-key
+paths, symlinks, unexpected file types or mounts until ownership is resolved.
+As root, interactively create
+`/etc/systemd/system/learnlab-ssh-host-keys.service`:
+
+```ini
+[Unit]
+Description=Generate missing Debian SSH host keys before ssh.service
+Before=ssh.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ssh-keygen -A
+TimeoutStartSec=30s
+RemainAfterExit=yes
+```
+
+Create `/etc/systemd/system/ssh.service.d/10-learnlab-host-keys.conf`:
+
+```ini
+[Unit]
+Requires=learnlab-ssh-host-keys.service
+After=learnlab-ssh-host-keys.service
+```
+
+Set both root:root mode 0644. Run `systemctl daemon-reload`; get the actual
+SSH unit path with `systemctl show ssh.service -p FragmentPath`, then run
+`systemd-analyze verify` on that path and the new unit. Inspect `systemctl
+cat ssh.service` and `systemctl show ssh.service -p Requires -p After`;
+resolve relevant errors or absent dependency. Inspect any ssh.socket trigger;
+stop/disable it before sealing and ensure it cannot bypass ordering. Before
+deleting any key, privately record `ssh-keygen -lf
+/etc/ssh/ssh_host_ed25519_key.pub`, run `systemctl start
+learnlab-ssh-host-keys.service` and compare that fingerprint again. Expected:
+unchanged. Debian trixie's [ssh-keygen manual](https://manpages.debian.org/trixie/openssh-client/ssh-keygen.1.en.html)
+confirms `-A` creates only missing default host keys. The unit deliberately
+has no `ConditionFirstBoot=yes`: [machine-id(5)](https://manpages.debian.org/trixie/systemd/machine-id.5.en.html)
+says an existing empty `/etc/machine-id` gets a new ID but does not count as
+first boot. `Requires=` plus `After=` makes failed generation block SSH.
+
+**Installed guest administrator console — inspect identities.** Run `stat -c
+'%F %n' /etc/machine-id /var/lib/dbus/machine-id`, `ls -l
+/var/lib/dbus/machine-id`, `readlink /var/lib/dbus/machine-id` if it is a
+symlink, and `findmnt -T` on each path. Confirm actual types and writable
+guest filesystems. A D-Bus symlink to `/etc/machine-id` stays intact; a
+separate stale regular file must be emptied after type confirmation because
+systemd can use it when `/etc/machine-id` is empty. Unexpected targets,
+mounts or types require diagnosis. Inspect the active DHCP client with
+`systemctl status systemd-networkd NetworkManager networking`, `ps -ef`, its
+config and logs. For ifupdown/dhclient, inspect `/etc/network/interfaces`,
+dhclient configuration and `/var/lib/dhcp/` leases; identify only leases for
+this interface before clearing individually. For NetworkManager inspect the
+connection's DHCP ID policy and per-connection leases; for systemd-networkd
+inspect ClientIdentifier policy and runtime leases. Clear only proven
+persistent per-machine state of the active client. Do not copy a generic
+cleanup recipe. Both clones later verify DHCP identity uniqueness.
+
+**Installed guest administrator console — confirm, execute, verify.** Confirm
+candidate ownership, source and every file individually. Stop ssh.socket if
+present and ssh.service; confirm neither will restart before shutdown. Remove
+only the inspected ordinary `/etc/ssh/ssh_host_*_key` private/public pairs,
+one named pair at a time; keep authorized_keys and controller keys. For a
+verified ordinary `/etc/machine-id`, use `: > /etc/machine-id` as root and
+verify it is empty. Empty a separately verified ordinary
+`/var/lib/dbus/machine-id` likewise; keep a verified symlink. Reinspect the
+selected paths and keys, then run `systemctl poweroff`. **Do not reboot** or
+restart SSH after sealing. A partial seal needs fresh inspection before any
+repeat.
+
+**Proxmox node — convert.** Reinspect exact ID/name/node/disk, stopped state,
+no snapshots, no template flag and retained source. Explicitly confirm
+Convert to template in the UI for that candidate. Expected: a stopped
+template and intact source. On snapshot or other task error, inspect state;
+do not force conversion, delete snapshots or boot the template to test it.
+
+## 5. Accept two full clones
+
+**Proxmox node — inspect and create.** Reserve two unused IDs and distinct
+names privately. Check occupancy, exact template identity, storage and
+network. A failed lookup does not prove absence. For each choose Clone >
+**Full Clone**, inspect source/target/node/storage, explicitly confirm and
+wait for successful completion. Check each disk, NIC MAC, EFI/firmware
+identity and VM flag; A and B must have distinct Proxmox-generated MAC and
+firmware identities. Stop on a collision before network boot. Remove installer
+ISO, boot both from disk, and retain template and source.
+
+**Installed guest console — check each boot.** On A, then B, confirm Debian
+13 in `/etc/os-release`, disk boot, DHCP address/route and actual DHCP client
+identity. Check `systemctl status qemu-guest-agent` and a current Proxmox
+agent response. Inspect `systemctl status learnlab-ssh-host-keys.service
+ssh.service`, `systemctl show ssh.service -p Requires -p After`, and
+`systemctl cat ssh.service`. Missing keys should have been generated before
+SSH. Check socket state. If keys or service are missing, use `journalctl -u
+learnlab-ssh-host-keys.service -u ssh.service` and stop. Verify online trixie
+apt sources, package/service state and all required tools in the table above
+on **both** clones.
+
+**Guest console and controller — authenticate SSH.** On each clone's trusted
+console run `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` and keep its
+fingerprint privately. On the controller choose local `GUEST_ADDR`,
+`LAB_USER`, `KEY_FILE` and a *new* owner-only `KNOWN_HOSTS` path for that
+clone. Set each with `read -r`. `test ! -e "$KNOWN_HOSTS"` must pass. With
+`umask 077`, run `ssh-keyscan -T 5 -t ed25519 "$GUEST_ADDR" > "$KNOWN_HOSTS"`
+and `ssh-keygen -lf "$KNOWN_HOSTS"`. Compare with **that clone's** console
+fingerprint; ssh-keyscan alone is not trust. Stop on mismatch. Do not remove
+global known_hosts entries because DHCP reused an address. Only after a
+match, use the strict SSH command in section 3 with the per-clone variables;
+run `sudo -n true` in that authenticated session. A local private-key unlock
+is allowed; guest password prompt is a failure. Repeat independently for B.
+
+**Guest console — compare and reboot.** Privately inspect nonempty
+`/etc/machine-id`, D-Bus file type/value relationship and fingerprints of
+every `/etc/ssh/ssh_host_*_key.pub` on A and B. Machine IDs and host keys
+must be distinct between clones, as must MAC/firmware and persistent DHCP
+client identifiers. Reboot **each clone once**, never the template; each
+clone's own machine ID and keys must stay stable. Repeat console-authenticated
+strict SSH, `sudo -n true`, agent and tool checks. Shared or changed identity,
+lost service or access blocks acceptance. Keep raw IDs, fingerprints and
+addresses out of LearnLab, Git and reports; record only local pass/fail.
+Retain both test clones for the later provider/cleanup lesson. They are
+learner-owned; `learnlab destroy` cannot remove them.

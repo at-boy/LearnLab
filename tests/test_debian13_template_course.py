@@ -53,6 +53,8 @@ def test_installation_sequence_is_exposed_by_catalog():
         "create-installer-vm",
         "install-debian13",
         "configure-lab-access",
+        "seal-and-convert",
+        "test-two-clones",
     ]
 
 
@@ -69,9 +71,13 @@ def test_new_knowledge_checks_accept_concepts_and_reject_wrong_answers():
         ("create-installer-vm", "media-integrity", "checksum", "skip checksum"),
         ("install-debian13", "target-release", "13", "12"),
         ("configure-lab-access", "ssh-key-material", "public key", "private key"),
+        ("seal-and-convert", "empty-machine-id-first-boot", "no", "yes"),
+        ("test-two-clones", "keyscan-trust", "no", "yes"),
     ]
     for lesson_id, check_id, accepted, rejected in cases:
-        lesson = next(lesson for lesson in load_course().lessons if lesson.id == lesson_id)
+        lesson = next(
+            lesson for lesson in load_course().lessons if lesson.id == lesson_id
+        )
         verification = next(
             check
             for step in lesson.steps
@@ -79,5 +85,21 @@ def test_new_knowledge_checks_accept_concepts_and_reject_wrong_answers():
             if check.id == check_id
         )
         validator = TextEvidenceValidator()
-        assert validator.validate(ValidationContext(prompt=AnswerPrompt(accepted)), verification).passed
-        assert not validator.validate(ValidationContext(prompt=AnswerPrompt(rejected)), verification).passed
+        assert validator.validate(
+            ValidationContext(prompt=AnswerPrompt(accepted)), verification
+        ).passed
+        assert not validator.validate(
+            ValidationContext(prompt=AnswerPrompt(rejected)), verification
+        ).passed
+
+
+def test_sealing_and_clone_steps_have_separate_decision_checkpoints():
+    lessons = {lesson.id: lesson for lesson in load_course().lessons}
+    assert [step.id for step in lessons["seal-and-convert"].steps] == [
+        "inspect-candidate", "configure-missing-host-keys", "first-boot-concept",
+        "generalize-identities", "convert-inspected-candidate",
+    ]
+    assert [step.id for step in lessons["test-two-clones"].steps] == [
+        "inspect-clone-targets", "create-and-boot-two-clones", "authenticate-clone-ssh",
+        "compare-and-reboot-identities", "keyscan-concept",
+    ]

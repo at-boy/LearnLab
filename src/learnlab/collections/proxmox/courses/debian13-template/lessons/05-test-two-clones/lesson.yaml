@@ -1,0 +1,107 @@
+id: test-two-clones
+title: Test Two Full Clones
+steps:
+  - id: inspect-clone-targets
+    title: Reserve two distinct learner-owned targets
+    instructions: |
+      Proxmox node (management UI): prerequisite is the stopped Debian
+      template and recoverable source. On resume, reconcile the template's
+      identity and state with the private owner-only worksheet. Pick two
+      unused VMIDs and distinct names for clone A and B. Inspect existing
+      resources, storage capacity and network placement; an ID/name collision,
+      failed lookup or uncertain ownership means stop, not overwrite or delete.
+      Confirm the exact source's template flag. Keep the original working
+      template and recovery source untouched. These clones are learner-owned;
+      LearnLab does not track or destroy them.
+    verifications:
+      - id: clone-targets-checked
+        type: manual-confirmation
+        prompt: Confirm template ownership and two available clone targets locally.
+  - id: create-and-boot-two-clones
+    title: Create and boot two full clones
+    instructions: |
+      Proxmox node (management UI): for each checked target choose Clone,
+      select Full Clone, intended node/storage and unique ID/name. Review
+      and separately confirm each creation. Wait for each task to succeed and
+      inspect disk, NIC MAC, EFI/firmware identity and VM flag. Confirm A and B
+      have distinct Proxmox-generated MAC/firmware identities; if shared,
+      stop before network use. Remove any installer ISO, choose disk boot and
+      start each clone. Installed guest (each Proxmox console): confirm Debian
+      13 from `/etc/os-release`, disk boot, DHCP address/route and actual DHCP
+      client/lease identity. Check `systemctl status qemu-guest-agent` and a
+      current Proxmox agent response. Inspect `systemctl status
+      learnlab-ssh-host-keys.service ssh.service`, `systemctl show ssh.service
+      -p Requires -p After` and `systemctl cat ssh.service`; the missing-key
+      unit must succeed before SSH. Check ssh.socket is not bypassing ordering.
+      Confirm host public keys now exist. If not, inspect `journalctl -u
+      learnlab-ssh-host-keys.service -u ssh.service` and stop. Verify online
+      trixie apt source, package/service state and every required tool from
+      the access lesson. A missing address, agent or service blocks acceptance.
+    verifications:
+      - id: clone-boot-checked
+        type: manual-confirmation
+        prompt: Confirm both full clones booted from disk with distinct virtual hardware and working guest services.
+  - id: authenticate-clone-ssh
+    title: Authenticate each clone before controller SSH
+    instructions: |
+      Installed guest (each Proxmox console): obtain its ed25519 host public-key
+      fingerprint with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`.
+      Controller: for A and B separately select local GUEST_ADDR, LAB_USER,
+      KEY_FILE and a NEW owner-only KNOWN_HOSTS path outside the global store;
+      use `read -r` to set each value, never enter values in LearnLab.
+      `test ! -e "$KNOWN_HOSTS"` must pass; otherwise choose a new path.
+      Use `umask 077`; capture with `ssh-keyscan -T 5 -t ed25519
+      "$GUEST_ADDR" > "$KNOWN_HOSTS"`, then run `ssh-keygen -lf
+      "$KNOWN_HOSTS"`. Compare exactly with that clone's console fingerprint.
+      A missing or different key means stop: ssh-keyscan alone is not trust.
+      Do not delete global known_hosts entries because DHCP reused an address.
+      After matching, run `ssh -o UserKnownHostsFile="$KNOWN_HOSTS"
+      -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes
+      -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no
+      -o PreferredAuthentications=publickey -i "$KEY_FILE"
+      "$LAB_USER@$GUEST_ADDR" id -un`, then `sudo -n true` in that authenticated
+      session. A local private-key unlock prompt is allowed; a guest password
+      prompt is not. Repeat independently for the other clone. Failed SSH,
+      sudo or tools checks require console diagnosis and block acceptance.
+    verifications:
+      - id: clone-authenticated-access-checked
+        type: manual-confirmation
+        prompt: Confirm console-matched host keys and key SSH plus noninteractive sudo on each clone.
+  - id: compare-and-reboot-identities
+    title: Check distinct identities and per-clone stability
+    instructions: |
+      Installed guest (each Proxmox console): privately note the nonempty
+      `cat /etc/machine-id` value and fingerprints of every active SSH host
+      public key (run `ssh-keygen -lf` separately for each inspected
+      `/etc/ssh/ssh_host_*_key.pub` file). Confirm
+      `/var/lib/dbus/machine-id` is a symlink to the same ID or, if regular,
+      agrees with /etc/machine-id; inspect its type. Confirm DHCP/client
+      identity, NIC MAC and EFI/firmware identity locally. Compare A with B:
+      machine IDs and SSH host keys must be distinct, with no shared MAC,
+      firmware or persistent DHCP client identifier. Never paste raw values,
+      addresses or fingerprints into LearnLab, reports or Git. Reboot clone
+      A and B once each (never the template), then repeat console checks.
+      Each clone's own machine ID and host keys must remain stable across its
+      reboot while A and B remain distinct. Repeat console-authenticated
+      host-key comparison and strict controller SSH, `sudo -n true`, agent and
+      required tool checks. A changed identity within a clone, shared identity
+      between clones or lost service is a stop condition. Investigate sealing;
+      do not certify. Record only local pass/fail comparisons. Retain the
+      template, recovery source and test clones for the provider/cleanup lesson;
+      LearnLab `destroy` cannot remove these learner-owned clones.
+    verifications:
+      - id: distinct-stable-identities-checked
+        type: manual-confirmation
+        prompt: Confirm local pass/fail comparison of A/B distinction and per-clone reboot stability.
+  - id: keyscan-concept
+    title: Check host-key enrollment trust
+    instructions: |
+      Controller: ssh-keyscan can collect a presented key, but only independent
+      trusted console fingerprint comparison authenticates it. This concept
+      answer contains no host key or address.
+    verifications:
+      - id: keyscan-trust
+        type: text-evidence
+        prompt: 'Does ssh-keyscan alone authenticate a clone host key? Enter yes or no.'
+        equals: 'no'
+        failure_message: Compare the fingerprint with the trusted guest console first.
