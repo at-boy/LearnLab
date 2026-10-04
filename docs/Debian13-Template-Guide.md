@@ -1,13 +1,42 @@
-# Debian 13 template guide — installation, sealing and clone checks
+# Debian 13 template guide — installation, sealing, clone checks and profile
 
-This draft guide covers installation, sealing and two-clone checks. Provider
-handoff is a later phase. No live installation has been certified. LearnLab records
+This draft guide covers all seven course lessons. The procedure has not been
+live-tested on a target Proxmox node or Debian guest; a passing offline course
+check is not an installation result. It assumes Debian 13 (trixie) amd64 netinst,
+Python 3.13 on the controller, Q35/OVMF UEFI, one disposable VirtIO SCSI disk,
+an ordinary DHCP LAN bridge and a QEMU agent enabled in Proxmox. Record the
+exact Debian 13.x ISO, Proxmox version and local choices during an authorized
+live run; verify release-specific UI and `qm` behavior on that installation.
+LearnLab records
 self-attested answers; it does not create or inspect these resources. Start on
 the **Controller** with `learnlab start proxmox/debian13-template --include-drafts`
 without a provider profile. Keep node, VM IDs, names, storage, bridge, disk,
 addresses, keys and passwords in an owner-only worksheet outside LearnLab.
 After interruption, reconcile the real Proxmox and guest state with that
 worksheet before continuing. An ID by itself never establishes ownership.
+
+## 0. Prerequisites and safe start
+
+**Controller — start the draft course.** Have controller access, an authorized
+Proxmox UI/node account, permission to create disposable VMs, ISO/package
+sources, DHCP and controller-to-guest SSH reachability, and sufficient disk and
+RAM. No profile or template is required to start:
+
+```sh
+# Controller
+learnlab start proxmox/debian13-template --include-drafts
+```
+
+Expected: the course opens with `Environment policy: none` and saves progress
+locally. A provider prompt, attempted VM action or inability to open the draft
+is a stop condition; check the course path, installed package and draft flag.
+Keep a private worksheet of node, storage, bridge, candidate VM ID/name, disk,
+two clone identities and planned profile name. Inspect occupied IDs and names
+before creating anything; do not delete an occupant to free an ID. After
+interruption, inspect actual state first and resume with `learnlab resume
+proxmox/debian13-template`. Never enter worksheet values, secrets or raw
+fingerprints into LearnLab answers, Git or public reports. All confirmations
+are learner attestations; LearnLab does not provision these resources.
 
 ## 1. Create the installer VM
 
@@ -371,3 +400,165 @@ lost service or access blocks acceptance. Keep raw IDs, fingerprints and
 addresses out of LearnLab, Git and reports; record only local pass/fail.
 Retain both test clones for the later provider/cleanup lesson. They are
 learner-owned; `learnlab destroy` cannot remove them.
+
+## 6. Configure the provider and reconcile test clones
+
+**Controller — add a named profile.** Prerequisite: both full clones passed
+disk boot, SSH, sudo, guest agent, tool and identity checks, including stable
+identity after each reboot. Reconcile the worksheet and real Proxmox state on
+resume. In `~/.config/learnlab/config.toml`, or
+`$XDG_CONFIG_HOME/learnlab/config.toml` if set, add a new
+`[providers."CHOSEN_PROFILE"]` table in a local editor. Keep an owner-only
+backup outside Git; preserve other profiles and an existing `default_provider`.
+If this is a new config, add top-level `default_provider = "CHOSEN_PROFILE"`
+before the table. Replace every example below with independently verified local
+values; there are no LearnLab defaults for them:
+
+```toml
+# Controller: illustrative field shapes, never paste actual values into LearnLab
+[providers."CHOSEN_PROFILE"]
+type = "proxmox"
+api_url = "https://pve.example:8006"
+token_id = "account@pve!token"
+token_secret_env = "LEARNLAB_TEMPLATE_TOKEN_SECRET"
+template_vmid = 9001
+template_name = "debian-13-template"
+node = "pve-node"
+storage = "local-lvm"
+network = "vmbr0"
+ssh_user = "lab-user"
+ssh_identity_file = "~/.ssh/lab-key"
+tls_verify = true
+template_capabilities = ["os.debian.13", "tool.apt", "tool.coreutils", "tool.curl", "tool.dpkg", "tool.ip", "tool.journalctl", "tool.nft", "tool.python3", "tool.sudo", "tool.systemctl", "tool.systemd", "tool.systemd-run", "tool.timeout", "tool.useradd"]
+```
+
+The table name is the new profile name. `type` selects Proxmox. `api_url` is
+the HTTPS API origin with no credentials or API path. `token_id` identifies the
+existing API account/token; `token_secret_env` names an environment variable
+and never stores the secret. `template_vmid` and `template_name` must both match
+the inspected template. `node`, `storage` and `network` select actual placement
+for later managed clones. `ssh_user` is the clone-tested account and
+`ssh_identity_file` is its controller private-key path. `tls_verify` remains a
+true TOML boolean. The capabilities array is the effective union required by
+`nginx/nginx-basics`, `nftables-debian13/nftables-basics` and
+`systemd-debian/service-authoring`; it is an assertion of the verified guest,
+not an installer or probe. On **both** clones, check Debian 13 plus `apt`,
+`dpkg`, `curl`, `ip`, `nft`, `python3`, `sudo`, `useradd`, `timeout`, coreutils,
+and the systemd commands `systemctl`, `systemd-run`, `journalctl`. Packages
+are respectively apt, curl, iproute2, nftables, python3, sudo, passwd,
+coreutils and systemd, as checked in section 3. If a tool is absent, repair
+and retest the guest; adding its string cannot make it available.
+
+Use a scoped existing token or follow the operator's [Proxmox user and token
+guide](https://pve.proxmox.com/pve-docs/pveum.1.html) with the administrator.
+Inspect user/token ACLs before changing them; do not silently broaden rights.
+The NONE-scope `proxmox/provider-bootstrap` course is optional account setup
+guidance. The VM-scoped `proxmox/proxmox-admin` course is not a prerequisite.
+
+**Controller — read-only checks.** In a dedicated short-lived shell, enter the
+new profile name and its uniquely named token secret from a manager or hidden
+prompt. The example variable must match your actual `token_secret_env`. Keep
+the value out of arguments, tracing, history, TOML and LearnLab answers:
+
+```bash
+# Controller
+read -r PROFILE
+read -r -s LEARNLAB_TEMPLATE_TOKEN_SECRET
+export LEARNLAB_TEMPLATE_TOKEN_SECRET
+printf '\n'
+```
+
+Prefer a correctly issued, controller-trusted CA/server certificate whose SAN
+matches `api_url`; keep `tls_verify = true`. If Python 3.13 rejects a legacy
+CA and a current leaf must be pinned, first authenticate that public leaf
+through an independent trusted management path and verify issuer/chain, exact
+SAN, validity and SHA-256 fingerprint. Store it owner-only outside Git, TOML,
+secrets and evidence. An unchecked `openssl s_client` capture over the same
+untrusted connection cannot establish trust. Only then, in the **same shell**
+as every provider command, set the process-only override:
+
+```sh
+# Controller: only for a separately authenticated trust file
+SSL_CERT_FILE="OWNER_ONLY_VERIFIED_SERVER_LEAF_PATH"
+export SSL_CERT_FILE
+```
+
+Any new shell used for a provider command must establish the same authenticated
+trust first. On leaf replacement, expiry, SAN or fingerprint change, stop and
+re-authenticate it independently; never silently refresh the pin or disable
+TLS verification. Run each command separately and review exit status/output:
+
+```sh
+# Controller
+learnlab provider test "$PROFILE"
+learnlab validate nginx/nginx-basics --provider "$PROFILE"
+learnlab validate nftables-debian13/nftables-basics --provider "$PROFILE"
+learnlab validate systemd-debian/service-authoring --provider "$PROFILE"
+```
+
+Expected: provider health reports PASS for API, node, template, storage and
+network; each validation exits 0 with no errors. Draft warnings do not grant
+certification. Missing profile or secret means inspect only local names/types;
+TLS failure means check independently authenticated trust, SAN and clock; API
+denial means inspect existing user/token ACL scope with the administrator;
+wrong resource means compare full identity against the worksheet; missing
+capability means return to both clone checks. Stop on unresolved findings.
+These are read-only health and declared compatibility checks. They do not
+prove clone, start or delete permissions or live course success. Finish the
+dedicated shell by clearing both variables separately, using your chosen token
+name:
+
+```sh
+# Controller
+unset SSL_CERT_FILE
+unset LEARNLAB_TEMPLATE_TOKEN_SECRET
+```
+
+**Proxmox node — cleanup, one clone at a time.** These two full clones are
+learner-owned and untracked; `learnlab destroy` cannot remove them. Keep the
+template, recoverable source and any original working template. Use the private
+worksheet and refreshed authorized cluster inventory to match each clone's
+node, name, ID, creation history, disk volumes, MAC and firmware identity.
+VMID alone is never sufficient. Stop on any discrepancy or failed lookup.
+For the first fully identified clone, inspect on its owning node:
+
+```sh
+# Proxmox node: inspect one clone
+read -r CLONE_VMID
+qm config "$CLONE_VMID"
+qm status "$CLONE_VMID"
+```
+
+Expected: the intended full clone, attached disks, no template flag and known
+state. Separately confirm its shutdown. If running, request a graceful shutdown
+in the UI or run `qm shutdown "$CLONE_VMID"`; wait for a successful task and
+verify Stopped in UI and `qm status`. Timeout or denied lookup is not proof.
+Reinspect full identity and get a second, explicit confirmation to destroy that
+exact clone and its disposable attached disks. Use UI Remove or:
+
+```sh
+# Proxmox node: after separate destruction confirmation
+qm destroy "$CLONE_VMID"
+```
+
+Do not add force, purge, skiplock or unreferenced-disk options. Expected:
+successful removal task, absence from a successfully refreshed authorized
+cluster inventory and absence of its recorded attached volumes; retained
+template and source still present. A failed `qm config` lookup alone cannot
+prove absence. On uncertainty, stop, retain the worksheet and reconcile with
+the administrator. Never retry deletion by VMID alone. Repeat every identity,
+shutdown, destruction and absence check independently for the second clone.
+Record only non-secret pass/fail. Course completion records self-attested
+progress, while live template acceptance and downstream certification require
+separate authorization and exact-digest evidence.
+
+## Primary references and live boundary
+
+The procedure follows the [Debian 13 amd64 installation guide](https://www.debian.org/releases/trixie/amd64/),
+[trixie installer media](https://www.debian.org/releases/trixie/debian-installer/),
+[machine-id manual](https://manpages.debian.org/trixie/systemd/machine-id.5.en.html),
+[ssh-keygen manual](https://manpages.debian.org/trixie/openssh-client/ssh-keygen.1.en.html)
+and [Proxmox qm reference](https://pve.proxmox.com/pve-docs/qm.1.html).
+The Proxmox `qm` endpoint was unavailable to this offline authoring pass; its
+target-version behavior remains a live verification item. No Proxmox, SSH or
+guest command in this guide was executed against a real resource in this task.

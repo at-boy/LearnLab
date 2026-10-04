@@ -1,0 +1,208 @@
+id: configure-provider
+title: Configure a Provider and Reconcile Test Clones
+steps:
+  - id: create-profile
+    title: Add a named profile without replacing existing configuration
+    instructions: |
+      Controller: prerequisite is successful acceptance of both Debian 13 full
+      clones, including distinct identities and stability after each reboot.
+      On resume, inspect the private worksheet and real template/clone state
+      again. A profile describes connection, placement and template expectations;
+      it is more than a template name. This NONE-scope session does not load
+      settings, secrets, a provider or SSH. Make the edit yourself.
+
+      Open ~/.config/learnlab/config.toml in a local editor, or
+      $XDG_CONFIG_HOME/learnlab/config.toml if XDG_CONFIG_HOME is set. Create
+      the parent and file if absent; keep an owner-only backup outside Git.
+      Preserve all existing profiles and default_provider. Choose an unused
+      profile name and add a new [providers."CHOSEN_PROFILE"] table, replacing
+      CHOSEN_PROFILE locally. Do not overwrite an existing table. Only when
+      creating a new config without default_provider, add top-level
+      default_provider = "CHOSEN_PROFILE" before the tables. The checks below
+      select this profile explicitly, so leave an existing default unchanged.
+      Use only verified local worksheet values for the current ProxmoxProfile
+      schema:
+
+      - type = "proxmox": supported provider type; the table names the profile.
+      - api_url: quoted HTTPS API origin and port, without credentials, path,
+        query or fragment; its hostname must match a controller-trusted cert.
+      - token_id: quoted existing API user/realm and token identity, not secret.
+      - token_secret_env: quoted unique environment-variable name, never the
+        token value; keep the value out of TOML, history and LearnLab evidence.
+      - template_vmid: positive unquoted integer for the inspected template.
+      - template_name: quoted exact template name, checked with its ID.
+      - node: quoted actual node containing that template.
+      - storage: quoted target storage for future managed clone disks.
+      - network: quoted existing bridge/network for those clones.
+      - ssh_user: quoted dedicated learner account tested on both clones.
+      - ssh_identity_file: quoted controller private-key path for that account;
+        only its public key belongs in the guest.
+      - tls_verify = true: TOML boolean; repair trust, hostname or clock errors
+        instead of weakening certificate verification.
+      - template_capabilities: optional schema field, but set the verified
+        union below for matching Debian 13 downstream courses. A declaration
+        does not install or test a command.
+
+      ```toml
+      # Controller: field in your new provider table, not a complete profile
+      template_capabilities = ["os.debian.13", "tool.apt", "tool.coreutils", "tool.curl", "tool.dpkg", "tool.ip", "tool.journalctl", "tool.nft", "tool.python3", "tool.sudo", "tool.systemctl", "tool.systemd", "tool.systemd-run", "tool.timeout", "tool.useradd"]
+      ```
+
+      This is the effective capability union of nginx/nginx-basics,
+      nftables-debian13/nftables-basics and systemd-debian/service-authoring.
+      Confirm os.debian.13 from /etc/os-release on both clones. The access
+      lesson checks each tool: apt and dpkg from apt, coreutils including
+      timeout from coreutils, curl from curl, ip from iproute2, journalctl,
+      systemctl, systemd-run and systemd from systemd, nft from nftables,
+      python3 from python3, sudo from sudo and useradd from passwd. Recheck
+      actual command/package availability on both clones before asserting it.
+      Do not preconfigure downstream nginx, firewall or exercise services.
+
+      Python 3.13 may reject a legacy Proxmox CA even if curl accepts it.
+      Prefer a correctly issued controller-trusted CA/server certificate with
+      exact SAN match. Keep tls_verify = true. Only if needed, authenticate a
+      public server leaf through an independent trusted management path;
+      verify its issuer/chain, SAN, validity and SHA-256 fingerprint before
+      storing an owner-only trust file outside config, Git and evidence.
+      An unchecked openssl s_client capture over the same untrusted connection
+      is not authentication. SSL_CERT_FILE is a process setting, not a profile
+      field or token secret. A changed or expired leaf needs fresh independent
+      authentication; never silently refresh a pin.
+
+      Review the saved TOML locally for missing fields, duplicates and types.
+      For API identity/ACL setup, follow the operator's Proxmox user-management
+      guidance at https://pve.proxmox.com/pve-docs/pveum.1.html . Use an
+      authorized scoped account or ask its administrator; do not silently
+      expand privileges to make a check pass. The optional NONE-scope
+      proxmox/provider-bootstrap course provides more guidance, but is not
+      a prerequisite. The VM-scoped proxmox-admin course is not a bootstrap
+      prerequisite. Never paste a profile or private worksheet as an answer.
+    verifications:
+      - id: profile-saved
+        type: manual-confirmation
+        prompt: Confirm locally that the new profile preserves existing profiles/defaults and contains no secret value.
+  - id: check-provider-read-only
+    title: Run provider health and downstream compatibility checks yourself
+    instructions: |
+      Controller: in a dedicated short-lived shell, enter the new profile
+      name privately. Supply the token secret using the unique variable named
+      in token_secret_env, from a secret manager or a hidden Bash prompt.
+      Example variable name below must match your own profile. Do not print
+      the value, enable tracing, enter it as an argument or paste it into an
+      answer. If using an independently authenticated leaf trust file, export
+      SSL_CERT_FILE in this same shell before every command below. Its path
+      is an owner-only file outside the profile. If a later shell runs any
+      provider command, establish authenticated trust in that shell too.
+
+      ```bash
+      # Controller
+      read -r PROFILE
+      read -r -s LEARNLAB_TEMPLATE_TOKEN_SECRET
+      export LEARNLAB_TEMPLATE_TOKEN_SECRET
+      printf '\n'
+      # Only when independently authenticated trust is required:
+      # SSL_CERT_FILE="OWNER_ONLY_VERIFIED_SERVER_LEAF_PATH"
+      # export SSL_CERT_FILE
+      ```
+
+      Run each yourself, inspect its result and exit status before the next:
+
+      ```sh
+      # Controller
+      learnlab provider test "$PROFILE"
+      learnlab validate nginx/nginx-basics --provider "$PROFILE"
+      learnlab validate nftables-debian13/nftables-basics --provider "$PROFILE"
+      learnlab validate systemd-debian/service-authoring --provider "$PROFILE"
+      ```
+
+      Expected: provider test reports PASS for API, node, template, storage
+      and network; each validation has no errors and exits 0. Draft warnings
+      do not grant certification. These are read-only health and declared
+      compatibility checks. They neither prove clone/start/delete permissions
+      nor exercise guest behavior or certify the template/course. On missing
+      profile/secret, inspect only local name and environment; on TLS failure,
+      inspect authenticated trust, SAN and clock. On API denial, inspect
+      existing user/token ACL scope read-only with an administrator. On wrong
+      template/node/storage/network, reconcile full identities. Missing
+      capability means return to both clone checks, not merely add TOML text.
+      Stop on uncertainty and retain resources for diagnosis.
+
+      In this shell, clear the trust-file override if used and separately
+      clear the token-secret variable, using your actual chosen variable name:
+
+      ```sh
+      # Controller
+      unset SSL_CERT_FILE
+      unset LEARNLAB_TEMPLATE_TOKEN_SECRET
+      ```
+      Record only non-secret pass/fail results.
+    verifications:
+      - id: read-only-handoff-checked
+        type: manual-confirmation
+        prompt: Confirm that you ran the chosen profile health and three compatibility checks yourself and reviewed their limits.
+  - id: reconcile-test-clones
+    title: Remove only the two learner-owned acceptance clones
+    instructions: |
+      Proxmox node: these test clones are learner-owned and untracked by
+      LearnLab. Do not use learnlab destroy: it cannot remove untracked clones.
+      Retain the template, recoverable source and any original working
+      template. Cleanup permanently deletes each selected clone and attached
+      disks. Keep the private worksheet until absence is positively verified.
+      If acceptance failed or ownership is uncertain, stop and reconcile.
+
+      Work on one clone at a time. In the trusted management UI, match node,
+      clone name and ID, creation history, storage volumes, MAC/firmware
+      identity and worksheet. Verify it is one of the two disposable full
+      clones, not a template, source or replacement that reused an ID. VMID
+      alone is insufficient. Reinspect after interruption or failed lookup.
+      On the verified owning node, enter only that observed clone's ID and
+      inspect locally; do not paste output into LearnLab:
+
+      ```sh
+      # Proxmox node: inspection, one clone at a time
+      read -r CLONE_VMID
+      qm config "$CLONE_VMID"
+      qm status "$CLONE_VMID"
+      ```
+
+      Expected: the exact disk/NIC/firmware/name, no template flag, and known
+      running or stopped state. Separately confirm shutdown of that clone.
+      If running, request graceful shutdown in the UI or run
+      `qm shutdown "$CLONE_VMID"` on that verified node. Confirm the task
+      succeeded and `qm status "$CLONE_VMID"` plus UI show Stopped. A timeout,
+      denied lookup or closed console is not proof; never force-stop silently.
+      Reinspect full identity and confirm separately that this exact clone and
+      its attached disposable disks may be destroyed. Then use UI Remove or:
+
+      ```sh
+      # Proxmox node: only after separate destruction confirmation
+      qm destroy "$CLONE_VMID"
+      ```
+
+      Do not add purge, force, skiplock or unreferenced-disk options. Expected:
+      successful task and absence from a successfully refreshed authorized
+      cluster inventory, plus absence of its recorded attached volumes.
+      A failed qm config lookup alone cannot prove absence. Confirm template
+      and source remain present. On uncertain task, identity or inventory,
+      stop, retain worksheet and reconcile with the administrator; never retry
+      by VMID alone. Repeat independent inspection and confirmations for the
+      second clone only after the first is reconciled. Record only pass/fail.
+    verifications:
+      - id: clones-reconciled
+        type: manual-confirmation
+        prompt: Confirm locally that only the two inspected test clones are absent and the template and source remain.
+  - id: distinguish-completion-from-certification
+    title: Keep local progress separate from live certification
+    instructions: |
+      Controller: answers and manual confirmations save self-attested local
+      progress. Even completion of all seven lessons grants no live
+      certificate. This course remains draft and the registry unchanged.
+      Downstream live lessons require their own authorization, mutation
+      permission checks and exact-digest live acceptance. Read-only health
+      and compatibility results are not that acceptance.
+    verifications:
+      - id: handoff-certification
+        type: text-evidence
+        prompt: 'What kind of progress do these manual confirmations record? Enter self-attested.'
+        equals: self-attested
+        failure_message: Manual confirmations record self-attested progress, not certification.

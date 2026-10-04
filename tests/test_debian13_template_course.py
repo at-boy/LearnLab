@@ -55,6 +55,26 @@ def test_installation_sequence_is_exposed_by_catalog():
         "configure-lab-access",
         "seal-and-convert",
         "test-two-clones",
+        "configure-provider",
+    ]
+
+
+def test_provider_handoff_records_self_attestation_and_stays_none_scoped():
+    course = load_course()
+    lesson = course.lessons[-1]
+    assert lesson.id == "configure-provider"
+    assert course.effective_environment(lesson).scope is EnvironmentScope.NONE
+    assert [step.id for step in lesson.steps] == [
+        "create-profile",
+        "check-provider-read-only",
+        "reconcile-test-clones",
+        "distinguish-completion-from-certification",
+    ]
+    assert [check.type for step in lesson.steps for check in step.verifications] == [
+        VerificationType.MANUAL_CONFIRMATION,
+        VerificationType.MANUAL_CONFIRMATION,
+        VerificationType.MANUAL_CONFIRMATION,
+        VerificationType.TEXT_EVIDENCE,
     ]
 
 
