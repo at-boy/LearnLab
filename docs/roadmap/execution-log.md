@@ -54,3 +54,5 @@ User resumed with usage monitoring. Initial five-hour usage 0%, weekly 30%. Reus
 - Test evidence: initial full non-live suite 663 passed/1 deselected; each instructional fix ran focused4 passed and zero catalog findings. Final ssh -G -F /dev/null confirmed options offline. No guest connection or live command executed. Do not mislabel initial full suite as a rerun after fixes.
 - Main remains remote-verified 3159e18 (approved 3d4b14d checkpoint). Later Task 2 commits remain local/unmerged. All original refs/worktrees preserved.
 - Pausing after Task 2 review for account usage. Last pre-checkpoint reading79%; reset October4 15:41 Europe/Copenhagen. Task3 brief exists but implementation not started. Resume directly with Task3; no repeat of completed tasks.
+
+- Final checkpoint usage reading: 89% used, 11% remaining; stop now. Reset reported 2026-10-04 15:41 Europe/Copenhagen.
