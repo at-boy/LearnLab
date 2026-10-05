@@ -63,10 +63,16 @@ steps:
       -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes
       -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no
       -o PreferredAuthentications=publickey -i "$KEY_FILE"
-      "$LAB_USER@$GUEST_ADDR" id -un`, then `sudo -n true` in that authenticated
-      session. A local private-key unlock prompt is allowed; a guest password
-      prompt is not. Repeat independently for the other clone. Failed SSH,
-      sudo or tools checks require console diagnosis and block acceptance.
+      "$LAB_USER@$GUEST_ADDR" id -un`. Expect the chosen account name. Then
+      run a separate remote sudo check with the same strict options:
+      `ssh -o UserKnownHostsFile="$KNOWN_HOSTS"
+      -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes
+      -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no
+      -o PreferredAuthentications=publickey -i "$KEY_FILE"
+      "$LAB_USER@$GUEST_ADDR" sudo -n true`. Both commands must succeed.
+      A local private-key unlock prompt is allowed; a guest password prompt
+      is not. Repeat independently for the other clone. Failed SSH, sudo or
+      tools checks require console diagnosis and block acceptance.
     verifications:
       - id: clone-authenticated-access-checked
         type: manual-confirmation
@@ -93,8 +99,9 @@ steps:
       A and B once each (never the template), then repeat console checks.
       Each clone's own machine ID and host keys must remain stable across its
       reboot while A and B remain distinct. Repeat console-authenticated
-      host-key comparison and strict controller SSH, `sudo -n true`, agent and
-      required tool checks. A changed identity within a clone, shared identity
+      host-key comparison and both strict controller SSH commands above
+      (`id -un` and remote `sudo -n true`), plus agent and required tool
+      checks. A changed identity within a clone, shared identity
       between clones or lost service is a stop condition. Investigate sealing;
       do not certify. Record only local pass/fail comparisons. Retain the
       template, recovery source and test clones for the provider/cleanup lesson;

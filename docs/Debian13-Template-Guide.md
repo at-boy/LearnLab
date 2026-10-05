@@ -380,8 +380,21 @@ and `ssh-keygen -lf "$KNOWN_HOSTS"`. Compare with **that clone's** console
 fingerprint; ssh-keyscan alone is not trust. Stop on mismatch. Do not remove
 global known_hosts entries because DHCP reused an address. Only after a
 match, use the strict SSH command in section 3 with the per-clone variables;
-run `sudo -n true` in that authenticated session. A local private-key unlock
-is allowed; guest password prompt is a failure. Repeat independently for B.
+expect the chosen account name. That command ends the SSH session. Check
+sudo with a separate remote command using the same strict options:
+
+```sh
+# Controller; use the variables and authenticated host key for this clone.
+ssh -o UserKnownHostsFile="$KNOWN_HOSTS" \
+    -o GlobalKnownHostsFile=/dev/null \
+    -o StrictHostKeyChecking=yes \
+    -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no \
+    -o PreferredAuthentications=publickey \
+    -i "$KEY_FILE" "$LAB_USER@$GUEST_ADDR" sudo -n true
+```
+
+Both commands must succeed. A local private-key unlock is allowed; a guest
+password prompt is a failure. Repeat independently for B.
 
 **Guest console — compare and reboot.** Privately inspect nonempty
 `/etc/machine-id`, then verify `test -s /etc/machine-id`, the D-Bus path's
@@ -394,8 +407,9 @@ blocks acceptance. Check fingerprints of every
 must be distinct between clones, as must MAC/firmware and persistent DHCP
 client identifiers. Reboot **each clone once**, never the template; each
 clone's own machine ID and keys must stay stable; repeat the D-Bus link,
-file equality and live bus query. Repeat console-authenticated
-strict SSH, `sudo -n true`, agent and tool checks. Shared or changed identity,
+file equality and live bus query. Repeat console-authenticated host-key
+comparison, both strict SSH commands above (`id -un` and remote
+`sudo -n true`), and agent and tool checks. Shared or changed identity,
 lost service or access blocks acceptance. Keep raw IDs, fingerprints and
 addresses out of LearnLab, Git and reports; record only local pass/fail.
 Retain both test clones for the later provider/cleanup lesson. They are
