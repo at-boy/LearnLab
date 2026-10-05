@@ -1,0 +1,89 @@
+id: create-installer-vm
+title: Create the Installer VM
+steps:
+  - id: verify-installation-media
+    title: Obtain the official Debian image
+    instructions: |
+      Controller: prerequisite is your owner-only worksheet and permission to create
+      a disposable VM. On resume, inspect existing media and VM state before repeating
+      anything. This draft has not been tested against your infrastructure.
+      Open https://www.debian.org/releases/trixie/debian-installer/ over HTTPS and
+      follow its amd64 netinst link for Debian 13 (trixie). Record the exact 13.x
+      revision and ISO filename privately; do not use a moving stable alias. Obtain
+      the matching SHA256SUMS and its signature from the official Debian image
+      directory. Follow https://www.debian.org/CD/verify to verify the signed
+      checksum file with a Debian signing key whose fingerprint you independently
+      checked, then compare the ISO's full SHA-256 digest and exact filename with
+      that verified file. A successful HTTPS download alone does not prove image
+      integrity. Expected: authentic checksum file and an exact digest match for
+      the amd64 netinst ISO. If signature, filename, digest or TLS verification
+      fails, stop before uploading; investigate the official release page. Do not
+      disable TLS checking or use a checksum from an unrelated mirror or forum.
+    verifications:
+      - id: official-media-verified
+        type: manual-confirmation
+        prompt: Confirm the official image revision, signature and exact digest locally; do not paste values here.
+  - id: explain-checksum
+    title: Explain the download integrity check
+    instructions: |
+      Controller: a checksum detects a damaged or different ISO; the verified
+      Debian signature authenticates the checksum list. This answer only tests
+      the concept and does not verify your downloaded bytes.
+    verifications:
+      - id: media-integrity
+        type: text-evidence
+        prompt: 'What value do you compare against the verified Debian checksum list? Enter checksum.'
+        equals: checksum
+        failure_message: Compare the ISO checksum with the authenticated list.
+  - id: create-candidate
+    title: Configure a new disposable Proxmox VM
+    instructions: |
+      Proxmox node (management UI): inspect node, storage, existing VM IDs and
+      names. Choose an unused ID and distinctive candidate name in your private
+      worksheet. If either exists or ownership is ambiguous, stop and choose
+      another; VMID alone proves nothing. Upload the verified ISO to ISO-capable
+      storage. If the UI downloads from URL, use the exact Debian URL and verify
+      the uploaded image against the authenticated digest before use.
+      Create VM: General = chosen node, unused ID/name, no automatic startup;
+      OS = verified Debian 13 amd64 netinst ISO and Linux guest; System = q35,
+      OVMF (UEFI), EFI variables disk on selected storage, VirtIO SCSI single
+      controller. Disable pre-enrolled Secure Boot keys for this lab installer,
+      and check that this firmware choice actually boots the selected image.
+      Disk = one new SCSI OS disk on selected storage; distinguish it from the
+      small EFI variables disk. Choose capacity for packages and later labs.
+      CPU = type compatible with intended nodes and sufficient cores; Memory =
+      enough fixed RAM for installation and labs. Two vCPU, 2 GiB RAM and 20 GiB
+      OS disk are examples, not required defaults. Network = VirtIO NIC on an
+      existing ordinary LAN bridge with DHCP and controller SSH reachability;
+      do not build SDN/VLAN/cloud-init for this course. Check local firewall
+      policy without weakening shared protections. On Confirm, inspect every
+      setting before creation. After creation, set Options > QEMU Guest Agent =
+      enabled and boot order = ISO first, OS disk second. Inspect Hardware and
+      Options, including disk size, storage, bridge and MAC, against your
+      worksheet. No agent reply is expected until guest installation. If any
+      setting or identity differs, stop and correct only this candidate before boot.
+    verifications:
+      - id: candidate-inspected
+        type: manual-confirmation
+        prompt: Confirm you inspected the new candidate and its ownership, hardware and boot order locally.
+  - id: boot-installer
+    title: Confirm firmware and installer network
+    instructions: |
+      Proxmox node (management UI): start only the inspected candidate and open
+      its console. Expected: Debian Installer menu. A UEFI shell suggests the ISO
+      or boot order is wrong; a security violation suggests a Secure Boot mismatch.
+      Stop if this is a different VM or installer release.
+      Installer console: choose Install (text mode), language and keyboard. Let
+      DHCP configure the VirtIO NIC, then review the offered address, gateway,
+      resolver and hostname before continuing. Use a temporary hostname; future
+      clones must not inherit an intended production identity. Expected: a DHCP
+      address and reachable Debian mirror. If there is no link/address, inspect
+      Proxmox bridge, NIC connection and DHCP; if address but no mirror, inspect
+      route, DNS, clock and HTTPS access from a trusted network path. If the
+      installer offers a shell, use only read-only `ip address`, `ip route`,
+      `cat /etc/resolv.conf` and `date` to diagnose. Keep addresses local.
+      Stop before partitioning if firmware or network remains uncertain.
+    verifications:
+      - id: installer-ready
+        type: manual-confirmation
+        prompt: Confirm the intended Debian 13 installer booted with UEFI and working DHCP/mirror access.

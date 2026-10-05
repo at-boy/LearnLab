@@ -38,6 +38,14 @@ bootstrap course on your controller without a provider profile:
 learnlab start proxmox/nixos-template --include-drafts
 ```
 
+For Debian 13, follow the draft [Debian 13 Template Guide](docs/Debian13-Template-Guide.md)
+or start its seven-lesson ISO-to-template course on the controller without a
+provider profile:
+
+```bash
+learnlab start proxmox/debian13-template --include-drafts
+```
+
 LearnLab records local, self-attested progress; you operate Proxmox and the guest
 explicitly. The guide covers ISO installation, trusted access, identity sealing,
 two-clone acceptance, a new named profile and cleanup of only those test clones.
@@ -50,6 +58,8 @@ their live acceptance remains separate. The walkthrough has not been live-tested
   named profile.
 * `proxmox/nixos-template` — learner-operated template construction, also NONE
   scope.
+* `proxmox/debian13-template` — learner-operated Debian 13 template creation,
+  clone checks and named-profile handoff, also NONE scope.
 * `proxmox/proxmox-admin` — provider-backed disposable VM course after a
   working profile exists.
 

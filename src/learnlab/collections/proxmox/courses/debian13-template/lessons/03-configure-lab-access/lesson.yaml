@@ -1,0 +1,127 @@
+id: configure-lab-access
+title: Configure Lab Access
+steps:
+  - id: prepare-guest-packages
+    title: Install the tools required by later Debian labs
+    instructions: |
+      Installed guest (console): prerequisite is confirmed Debian 13 disk boot
+      and a working administrator console. On resume, inspect packages, account,
+      SSH and guest-agent state before changing anything. `cat /etc/os-release`
+      must show Debian trixie. Inspect `/etc/apt/sources.list` and
+      `/etc/apt/sources.list.d/` for online trixie sources, not a cdrom source
+      that prompts for installation media. Check `ip address`, `ip route` and
+      DNS before `apt update`; if apt fails, diagnose network/mirror/TLS/clock
+      and stop. As root or via the existing console sudo route, run:
+
+      `apt update`
+      `apt install openssh-server qemu-guest-agent sudo curl nftables iproute2 python3 coreutils passwd`
+
+      Expected: package installation succeeds without media prompts. Check
+      `command -v apt dpkg curl ip python3 nft sudo systemctl systemd-run
+      journalctl timeout useradd` (check each command separately if needed);
+      Debian may place privileged commands in /usr/sbin, so use absolute
+      `/usr/sbin/useradd` and `/usr/sbin/visudo` when a normal PATH omits them.
+      Keep nftables inactive with no default-deny base rules; later lessons
+      teach firewall policy. Do not preconfigure nginx sites, exercise units
+      or other downstream lab state. If a command is absent, inspect its package
+      and installation result before proceeding.
+    verifications:
+      - id: required-tools-checked
+        type: manual-confirmation
+        prompt: Confirm online trixie apt sources and all required commands locally.
+  - id: check-guest-agent
+    title: Check both halves of the guest agent
+    instructions: |
+      Proxmox node (management UI): confirm Options > QEMU Guest Agent is enabled
+      for this candidate. Installed guest (console): confirm package installation,
+      run `systemctl status qemu-guest-agent` and inspect its active state after
+      boot. The unit may be static and therefore not enableable; absence of an
+      enable symlink is not a failure if the agent is active. Expected: Proxmox
+      displays a current guest IP/agent response. If not, check the Proxmox
+      option, guest package/service, virtio serial channel and logs with
+      `journalctl -u qemu-guest-agent`; stop before claiming agent capability.
+    verifications:
+      - id: guest-agent-checked
+        type: manual-confirmation
+        prompt: Confirm both Proxmox and the guest show a working agent.
+  - id: enroll-trusted-key
+    title: Enroll the controller public key safely
+    instructions: |
+      Controller: locate an existing learner SSH public/private key pair in your
+      private key store, or generate a new protected pair locally; never copy
+      the private key to the guest or LearnLab. Verify the public key fingerprint
+      from the trusted controller file. Installed guest (console): identify the
+      intended account in a local LAB_USER variable (`read -r LAB_USER`); do not
+      enter it in LearnLab.
+      Run `getent passwd "$LAB_USER"` for that exact name, then inspect
+      `/etc/passwd` with `awk -F: -v name="$LAB_USER" '$1 == name {print $0}'
+      /etc/passwd` and run `getent passwd root` as a basic
+      lookup check. An empty result for the chosen name is not by itself proof
+      of absence: timeout, NSS errors, or a local entry hidden by lookup failure
+      require inspecting `/etc/nsswitch.conf` and service logs. Stop if lookup
+      health is uncertain. Use `/usr/sbin/useradd` only if the intended local
+      account is truly absent and your account plan calls for creating it. With the
+      account owner and permissions checked, add only that public key to its
+      `~/.ssh/authorized_keys` (directory 700, file 600). Use an interactive
+      editor or trusted local transfer; no secret values belong in lesson input.
+      Verify ssh.service is active. Installed guest (Proxmox console): run
+      `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` and note the SHA256
+      fingerprint privately. Controller: choose local GUEST_ADDR and KEY_FILE
+      variables (`read -r GUEST_ADDR`, `read -r KEY_FILE`, `read -r LAB_USER`,
+      `read -r KNOWN_HOSTS`) and a NEW owner-only KNOWN_HOSTS path outside the
+      global SSH store. `test ! -e "$KNOWN_HOSTS"` must pass; if the path
+      exists, choose another without overwriting it. With `umask 077`, capture
+      its ed25519 host key using
+      `ssh-keyscan -T 5 -t ed25519 "$GUEST_ADDR" > "$KNOWN_HOSTS"`; run
+      `ssh-keygen -lf "$KNOWN_HOSTS"` and compare the fingerprint exactly with
+      the console value. A mismatch or missing key means stop; ssh-keyscan alone
+      is not trust. Only after the match, test a fresh controller login:
+      `ssh -o UserKnownHostsFile="$KNOWN_HOSTS" -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o PreferredAuthentications=publickey -i "$KEY_FILE" "$LAB_USER@$GUEST_ADDR" id -un`.
+      A hidden LOCAL prompt to unlock the protected private key is allowed;
+      a guest-account password prompt is not. Expected: the chosen account name
+      and strict host checking. Keep the guest console open.
+      If login fails, inspect account home/ownership, key permissions, service
+      logs and network; do not disable password SSH yet.
+    verifications:
+      - id: key-login-checked
+        type: manual-confirmation
+        prompt: Confirm a trusted controller key login succeeded and the console recovery route remains available.
+  - id: key-concept
+    title: Identify which key may be copied
+    instructions: |
+      Controller: only the public key goes into authorized_keys. Keep the
+      private key on the controller. This concept answer does not inspect keys.
+    verifications:
+      - id: ssh-key-material
+        type: text-evidence
+        prompt: 'Which key may be placed in authorized_keys? Enter public key.'
+        equals: public key
+        failure_message: Enroll the public key; never copy the private key.
+  - id: configure-lab-sudo
+    title: Validate a disposable-lab sudo policy
+    instructions: |
+      Installed guest (console): use an interactive root console/editor to create
+      a dedicated `/etc/sudoers.d/learnlab-lab` fragment for this disposable
+      guest only. Replace LAB_USER with the exact chosen account name; the rule
+      is `LAB_USER ALL=(root) NOPASSWD: ALL`. This deliberately broad lab-only
+      root policy permits the downstream apt, nftables, account and systemd
+      exercises; it is not a production recommendation. Set owner/group root:root
+      and mode 0440 using `chown root:root /etc/sudoers.d/learnlab-lab` and
+      `chmod 0440 /etc/sudoers.d/learnlab-lab`, then inspect them with
+      `stat -c '%U:%G %a' /etc/sudoers.d/learnlab-lab`.
+      Validate the fragment with `/usr/sbin/visudo -cf /etc/sudoers.d/learnlab-lab`
+      and `/usr/sbin/visudo -c` before closing the root console. A syntax error
+      means restore/fix the fragment from the console and stop. From a fresh
+      controller key session, inspect `sudo -n -l` and confirm the root ALL rule;
+      run `sudo -n true`, `sudo -n id -u`, `sudo -n apt --version`,
+      `sudo -n nft --version` and `sudo -n systemctl --version`. Expected: no
+      password prompt, uid 0, and successful read-only version checks. If any
+      fails, inspect `sudo -l`, account membership and
+      fragment ownership via the console. Keep a separate administrator console
+      recovery route before optionally tightening SSH password authentication;
+      check effective `sshd -T` settings and reconnect with a second key-only
+      session before ending the first. Never lock out the console account.
+    verifications:
+      - id: sudo-and-recovery-checked
+        type: manual-confirmation
+        prompt: Confirm checked lab sudo, fresh key login and a separate console recovery route.

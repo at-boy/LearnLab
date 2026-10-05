@@ -952,6 +952,67 @@ def test_nixos_template_final_handoff_resume_is_self_attested_not_certification(
     assert "not live-validated" in gated.output
 
 
+def test_debian13_template_final_handoff_resume_is_self_attested_not_certification(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_xdg: Path,
+) -> None:
+    from learnlab import cli
+    from learnlab.curriculum import CurriculumCatalog
+
+    collections = Path(__file__).parents[1] / "src/learnlab/collections"
+    catalog = CurriculumCatalog(collections)
+    registry_before = (collections / "certifications.yaml").read_bytes()
+    store = StateStore(tmp_xdg / "debian-handoff" / "learnlab.db")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("bootstrap touched settings, provider, or SSH")
+
+    monkeypatch.setattr(cli, "catalog_factory", lambda: catalog)
+    monkeypatch.setattr(cli, "state_store_factory", lambda: store)
+    monkeypatch.setattr(cli, "state_root", lambda: tmp_xdg / "debian-handoff")
+    for name in (
+        "load_settings",
+        "load_requested_profiles",
+        "resolve_token_secret",
+        "provider_factory",
+        "SshExecutor",
+    ):
+        monkeypatch.setattr(cli, name, forbidden)
+    started = CliRunner().invoke(
+        cli.app,
+        ["start", "proxmox/debian13-template", "--include-drafts"],
+        input="7\n\ny\nq\n",
+    )
+    assert started.exit_code == 0, started.output
+    assert "PASS (self-attested): Learner confirmed" in started.output
+    assert "Progress saved." in started.output
+    step_path = ("proxmox", "debian13-template", "configure-provider", "create-profile")
+    [saved] = store.verification_records(step_path)
+    assert saved.self_attested is True
+    assert saved.evidence is None
+    resumed = CliRunner().invoke(
+        cli.app,
+        ["resume", "proxmox/debian13-template"],
+        input="7\n\ny\n\ny\n\nself-attested\nq\n",
+    )
+    assert resumed.exit_code == 0, resumed.output
+    assert "[in progress]" in resumed.output
+    assert "create-profile" not in resumed.output
+    assert "read-only-handoff-checked" in resumed.output
+    assert store.verification_records(step_path) == [saved]
+    assert store.completed_lessons("proxmox", "debian13-template") == {
+        "configure-provider"
+    }
+    assert (
+        catalog.load_course("proxmox/debian13-template").maturity
+        is CourseMaturity.DRAFT
+    )
+    assert (collections / "certifications.yaml").read_bytes() == registry_before
+    gated = CliRunner().invoke(cli.app, ["start", "proxmox/debian13-template"])
+    assert gated.exit_code == 2
+    assert "not live-validated" in gated.output
+
+
 def test_provider_bootstrap_start_save_resume_never_touches_external_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     tmp_xdg: Path,

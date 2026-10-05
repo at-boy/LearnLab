@@ -1,0 +1,21 @@
+# Task 3 independent review — Debian sealing and two-clone acceptance
+
+**Spec verdict:** Changes requested. The course covers the required ownership, source retention, snapshot, type/mount, SSH key ordering, DHCP, two-clone comparison, trusted enrollment and interruption boundaries, but two paths need correction before the instructions are safe and complete.
+
+**Quality verdict:** Changes requested. The focused catalog/validator checks and reported offline validation are appropriate for a manual lesson with no new helper. They do not establish that the D-Bus and SSH boot procedures work. I did not rerun the full suite or perform live operations.
+
+## Findings
+
+1. **[P1] Resolve a separate regular D-Bus machine ID on first clone boot.** `04-seal-and-convert/lesson.yaml:94-118` instructs the learner to empty a verified regular `/var/lib/dbus/machine-id`, while `05-test-two-clones/lesson.yaml:73-78` requires that regular file to agree with the newly generated `/etc/machine-id`. Debian systemd's [machine-id(5)](https://manpages.debian.org/trixie/systemd/machine-id.5.en.html) promises to save the new ID to `/etc/machine-id`; it does not promise to repopulate a separate D-Bus file. The [D-Bus specification](https://dbus.freedesktop.org/doc/dbus-specification.html) expects both paths to agree when both exist, and [dbus-uuidgen(1)](https://dbus.freedesktop.org/doc/dbus-uuidgen.1.html) treats an existing invalid file as an error. Specify an inspected, source-safe disposition for the separate regular file and verify on both clones that D-Bus and systemd use the same nonempty ID, including after reboot. Apply the same correction to the standalone guide.
+
+2. **[P2] Check SSH's boot trigger before disabling the socket.** `04-seal-and-convert/lesson.yaml:30-69,110-121` tells the learner to stop/disable an active or enabled `ssh.socket` but does not verify that `ssh.service` is enabled or otherwise started at boot. On a socket-only installation, the missing-key dependency can be correct yet no SSH service starts on the clones. Inspect the effective activation path; if disabling the socket, establish and verify a service boot path before sealing, or preserve a correctly ordered socket path. Then check that path in the two-clone lesson and guide. [systemctl(1)](https://manpages.debian.org/trixie/systemd/systemctl.1.en.html) documents enablement as what hooks a unit into boot activation.
+
+The remaining requested checks are represented in the lesson and guide: no force conversion or snapshot deletion, no template reboot, no generic identity cleanup, per-clone console fingerprint comparison into isolated known_hosts, and local-only identity evidence. The reported 5 focused and 664 offline passing tests were not rerun here; live acceptance and certification remain pending.
+
+## Focused re-review — `5eab41f..5a34e98`
+
+**Finding 1 disposition: resolved.** The sealing lesson and standalone guide now replace only an inspected separate regular D-Bus file with a checked symlink to `/etc/machine-id`, preserve an existing correct symlink, and stop on unexpected types, mounts or targets. The clone instructions check a nonempty ID, link target, file equality and the running system bus's `GetMachineId` result before and after reboot. The interruption path between removal and link creation is addressed.
+
+**Finding 2 disposition: resolved.** Before disabling an active/enabled SSH socket, the sealing lesson and guide inspect `ssh.service` enablement and boot target, enable a startable disabled service with explicit confirmation, and stop on a masked, static or unresolved path. Both clones must show the key dependency plus enabled, active `ssh.service` and disabled/inactive `ssh.socket`. No directly introduced regression found in this scoped diff.
+
+**Final spec verdict: accepted for Task 3's offline/manual scope. Final quality verdict: accepted for Task 3's offline/manual scope.** The reported focused 5/5 tests, clean catalog validation and diff check support that scope; I did not rerun them. The earlier 664-pass full suite predates this correction. Actual Debian/Proxmox boot, D-Bus, SSH and identity behavior still require the separately authorized live acceptance; this review does not certify them.

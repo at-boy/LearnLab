@@ -76,6 +76,16 @@ def test_built_wheel_installs_with_curriculum_resources(tmp_path: Path) -> None:
             and name.endswith("/lesson.yaml")
         ]
     ) == 8
+    debian_prefix = "learnlab/collections/proxmox/courses/debian13-template/"
+    assert debian_prefix + "course.yaml" in names
+    assert len(
+        [
+            name
+            for name in names
+            if name.startswith(debian_prefix + "lessons/")
+            and name.endswith("/lesson.yaml")
+        ]
+    ) == 7
     canonical_curriculum = root / "src" / "learnlab" / "collections"
     installed_curriculum = tmp_path / "extracted" / "learnlab" / "collections"
     assert _curriculum_files(canonical_curriculum) == _curriculum_files(
@@ -262,6 +272,59 @@ with (
     assert gated.exit_code == 2, gated.output
     assert 'not live-validated' in gated.output
 print(path + ': none; draft; start/save/resume; self-attested')
+path = 'proxmox/debian13-template'
+course = catalog.load_course(path)
+assert course.maturity is CourseMaturity.DRAFT
+assert [lesson.id for lesson in course.lessons] == [
+    'prerequisites-and-safety', 'create-installer-vm', 'install-debian13',
+    'configure-lab-access', 'seal-and-convert', 'test-two-clones',
+    'configure-provider',
+]
+for lesson in course.lessons:
+    policy = course.effective_environment(lesson)
+    assert policy.scope is EnvironmentScope.NONE
+    assert policy.provider_capability is None
+    assert policy.guest_capabilities == ()
+    assert all(check.type in (VerificationType.TEXT_EVIDENCE,
+                             VerificationType.MANUAL_CONFIRMATION)
+               for step in lesson.steps for check in step.verifications)
+debian_store = StateStore(Path('debian-bootstrap-state/learnlab.db'))
+def debian_forbidden(*args, **kwargs):
+    raise AssertionError('debian bootstrap accessed settings, provider, or SSH')
+with (
+    patch.object(cli, 'state_store_factory', return_value=debian_store),
+    patch.object(cli, 'state_root', return_value=Path('debian-bootstrap-state')),
+    patch.object(cli, 'load_settings', side_effect=debian_forbidden),
+    patch.object(cli, 'load_requested_profiles', side_effect=debian_forbidden),
+    patch.object(cli, 'resolve_token_secret', side_effect=debian_forbidden),
+    patch.object(cli, 'provider_factory', side_effect=debian_forbidden),
+    patch.object(cli, 'SshExecutor', side_effect=debian_forbidden),
+):
+    started = CliRunner().invoke(cli.app, ['start', path, '--include-drafts'],
+                                input='7\\n\\ny\\nq\\n')
+    assert started.exit_code == 0, started.output
+    assert 'PASS (self-attested): Learner confirmed' in started.output
+    assert 'Progress saved.' in started.output
+    step_path = ('proxmox', 'debian13-template', 'configure-provider', 'create-profile')
+    [saved] = debian_store.verification_records(step_path)
+    assert saved.self_attested and saved.evidence is None
+    resumed = CliRunner().invoke(cli.app, ['resume', path],
+                                input='7\\n\\ny\\n\\ny\\n\\nself-attested\\nq\\n')
+    assert resumed.exit_code == 0, resumed.output
+    assert '[in progress]' in resumed.output
+    assert 'create-profile' not in resumed.output
+    assert 'read-only-handoff-checked' in resumed.output
+    assert debian_store.verification_records(step_path) == [saved]
+    assert debian_store.completed_lessons('proxmox', 'debian13-template') == {
+        'configure-provider'
+    }
+    assert catalog.load_course(path).maturity is CourseMaturity.DRAFT
+    assert (root.joinpath('certifications.yaml').read_text().strip()
+            == 'certifications: []')
+    gated = CliRunner().invoke(cli.app, ['start', path])
+    assert gated.exit_code == 2, gated.output
+    assert 'not live-validated' in gated.output
+print(path + ': none; draft; start/save/resume; self-attested')
 path = 'proxmox/provider-bootstrap'
 course = catalog.load_course(path)
 assert course.maturity is CourseMaturity.DRAFT
@@ -326,5 +389,6 @@ print(path + ': none; draft; start/save/resume; self-attested')
     assert pending_smoke.stdout.splitlines() == [
         *pending_paths,
         "proxmox/nixos-template: none; draft; start/save/resume; self-attested",
+        "proxmox/debian13-template: none; draft; start/save/resume; self-attested",
         "proxmox/provider-bootstrap: none; draft; start/save/resume; self-attested",
     ]

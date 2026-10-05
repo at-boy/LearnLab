@@ -1,0 +1,168 @@
+id: seal-and-convert
+title: Seal and Convert the Debian Candidate
+steps:
+  - id: inspect-candidate
+    title: Identify the candidate and a recoverable source
+    instructions: |
+      Proxmox node (management UI): prerequisite is the installed Debian 13
+      guest with tested console, key SSH, sudo, tools and agent. On resume,
+      inspect the actual node, VMID, name, disk/storage, template flag, power
+      state and snapshots against your private owner-only worksheet. A VMID
+      alone proves no ownership. Never alter an existing working template or
+      a template used by another profile. Keep a recoverable original/source
+      until the new candidate passes two-clone acceptance. If none exists,
+      make a separate backup or full source clone before sealing, budget its
+      storage and verify its ownership and recoverability. Conversion requires
+      a stopped candidate without snapshots.
+      Inspect the candidate's snapshot tree now. If snapshots exist, stop and
+      decide how to preserve the source; do not delete them automatically or
+      force conversion. If the candidate is already a template, do not seal
+      or convert it again. If partially sealed or unexpectedly running, inspect
+      the guest state and restore from the known source when uncertain. A boot
+      after sealing invalidates the sealed state; inspect before repeating it.
+    verifications:
+      - id: candidate-ownership-checked
+        type: manual-confirmation
+        prompt: Confirm exact candidate ownership, recoverable source, power/template state and snapshot plan locally.
+  - id: configure-missing-host-keys
+    title: Make missing SSH host keys regenerate before SSH starts
+    instructions: |
+      Installed guest (administrator console): inspect `systemctl cat ssh.service`,
+      `systemctl cat ssh.socket`, `systemctl is-enabled ssh.service
+      ssh.socket`, `systemctl is-active ssh.service ssh.socket` and
+      `systemctl list-sockets` (an absent ssh.socket is fine). Treat a masked
+      service or unexplained activation state as a stop condition; do not
+      unmask it silently. Also inspect
+      `sshd -T` hostkey paths and existing `/etc/ssh/ssh_host_*_key` file types,
+      ownership and mounts with `stat`, `findmnt -T /etc/ssh`, and `ls -l`.
+      If paths are symlinks, mounts, unexpected types or customized keys,
+      stop and resolve their ownership instead of applying generic cleanup.
+      The Debian trixie `ssh-keygen -A` command creates only missing default
+      host keys. As root, use an interactive editor to create
+      `/etc/systemd/system/learnlab-ssh-host-keys.service` with exactly:
+
+      [Unit]
+      Description=Generate missing Debian SSH host keys before ssh.service
+      Before=ssh.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/bin/ssh-keygen -A
+      TimeoutStartSec=30s
+      RemainAfterExit=yes
+
+      Create `/etc/systemd/system/ssh.service.d/10-learnlab-host-keys.conf`:
+
+      [Unit]
+      Requires=learnlab-ssh-host-keys.service
+      After=learnlab-ssh-host-keys.service
+
+      Set both files root:root mode 0644. Run `systemctl daemon-reload`,
+      obtain the actual path from `systemctl show ssh.service -p FragmentPath`,
+      then run `systemd-analyze verify` on the new unit and that actual path;
+      inspect `systemctl cat ssh.service`
+      and `systemctl show ssh.service -p Requires -p After`. Resolve warnings
+      or missing dependency before proceeding. There is deliberately no
+      `ConditionFirstBoot=yes`: an empty machine-id file is not systemd's
+      first-boot condition. While the original keys still exist, run
+      `systemctl start learnlab-ssh-host-keys.service` and compare the existing
+      host public-key fingerprints before/after locally; they must be unchanged.
+      Before disabling any active/enabled ssh.socket, establish a service boot
+      path: inspect ssh.service's `[Install]` section and current enablement.
+      If it is startable but disabled, explicitly confirm and run `systemctl
+      enable ssh.service`; then verify `systemctl is-enabled ssh.service`
+      reports enabled and inspect its boot target link. If it is masked,
+      static without a verified boot trigger, or cannot be enabled, stop and
+      resolve the configuration rather than unmasking or assuming SSH will
+      start. For an active/enabled ssh.socket, inspect its triggers and
+      explicitly confirm `systemctl disable ssh.socket` only after the
+      service boot path is verified; stop the socket at the sealing checkpoint.
+      Its activation must not bypass the key unit. Keep the guest console
+      available. Do not delete any key yet.
+    verifications:
+      - id: key-regeneration-order-checked
+        type: manual-confirmation
+        prompt: Confirm unit syntax, ssh.service dependency, socket ordering and preservation of existing keys locally.
+  - id: first-boot-concept
+    title: Check Debian machine-id first-boot semantics
+    instructions: |
+      Installed guest: an empty /etc/machine-id causes systemd to generate
+      and commit an identity, but does not trigger ConditionFirstBoot=yes.
+      The SSH missing-key unit must therefore run through its explicit
+      ssh.service dependency rather than a first-boot condition.
+    verifications:
+      - id: empty-machine-id-first-boot
+        type: text-evidence
+        prompt: 'Does an existing empty /etc/machine-id trigger ConditionFirstBoot=yes? Enter yes or no.'
+        equals: 'no'
+        failure_message: An empty file gets a new ID but does not count as first boot.
+  - id: generalize-identities
+    title: Stop access and generalize only inspected identities
+    instructions: |
+      Installed guest (administrator console): before mutation, inspect
+      `findmnt -T /etc/machine-id`, `stat -c '%F %n' /etc/machine-id`,
+      `ls -l /var/lib/dbus/machine-id`, `readlink /var/lib/dbus/machine-id`
+      if it is a symlink, and `findmnt -T /var/lib/dbus/machine-id`.
+      Confirm normal writable guest filesystems, `/etc/machine-id` as an
+      ordinary file, and whether the D-Bus path is a symlink or separate
+      ordinary file. A verified symlink to `/etc/machine-id` stays intact.
+      A separate regular D-Bus ID cannot be left empty: systemd may use its
+      old value when `/etc/machine-id` is empty, while D-Bus may reject an
+      empty file on clone boot. Plan to replace only that inspected regular
+      file with a symlink to `/etc/machine-id`, so both read the same new ID.
+      Other types, mounts, missing parents or unexpected symlink targets are
+      stop conditions. Inspect the
+      actual DHCP client with `systemctl status systemd-networkd NetworkManager
+      networking`, `ps -ef` and its active configuration/logs. If ifupdown
+      runs dhclient, inspect `/etc/network/interfaces`, dhclient config and
+      `/var/lib/dhcp/` lease files; identify only leases for this interface
+      before clearing them individually. For NetworkManager, inspect its
+      connection's DHCP ID policy and per-connection lease state; for
+      systemd-networkd, inspect ClientIdentifier policy and runtime leases.
+      Clear only proven persistent per-machine state for the active client;
+      do not paste a generic lease-deletion recipe. Verify clone DHCP
+      identities later.
+
+      Explicitly confirm the exact candidate, the recovery source and all
+      individual files on the console. Recheck `systemctl is-enabled
+      ssh.service` is enabled; stop `ssh.socket` if present and `ssh.service`,
+      then verify the socket is disabled/inactive and SSH cannot restart before
+      shutdown. For only the
+      validated ordinary `/etc/ssh/ssh_host_*_key` private/public pairs,
+      remove each inspected pair individually with root privileges. Do not
+      touch authorized_keys or controller keys. For a validated ordinary
+      `/etc/machine-id`, use `: > /etc/machine-id` as root and confirm it is
+      empty. If `/var/lib/dbus/machine-id` was a separately verified regular
+      file on the expected writable filesystem, confirm that exact path again,
+      remove only that file as root with `rm -- /var/lib/dbus/machine-id`,
+      then run `ln -s -- /etc/machine-id /var/lib/dbus/machine-id`. Verify
+      `test -L /var/lib/dbus/machine-id` and `readlink
+      /var/lib/dbus/machine-id` reports exactly `/etc/machine-id`. Do not
+      replace a pre-existing verified symlink. If interrupted between removal
+      and link creation, inspect ownership, file type and path again before
+      creating the link; do not reboot with a missing D-Bus path. Reinspect
+      types, the empty `/etc/machine-id`, link target and absence of only selected host
+      keys. Power off from this console with `systemctl poweroff`. Do not
+      reboot, start SSH or boot the sealed candidate before conversion.
+      If interrupted, inspect actual power, template and file states before
+      any repeat; a running guest can regenerate identity and invalidate seal.
+    verifications:
+      - id: sealed-poweroff-checked
+        type: manual-confirmation
+        prompt: Confirm inspected identity paths, SSH stopped and the sealed candidate powered off without reboot.
+  - id: convert-inspected-candidate
+    title: Convert only the stopped snapshot-free candidate
+    instructions: |
+      Proxmox node (management UI): inspect the exact VMID/name/node/disk
+      against the private worksheet again. Verify stopped state, no snapshots,
+      no template flag and retained recovery source. Confirm conversion of
+      this candidate explicitly in the UI; do not use force flags. Expected:
+      Proxmox shows the chosen candidate as a template, still stopped, and
+      the source remains available. If conversion fails, read the actual task
+      error (a snapshot blocker is not a reason to delete snapshots), inspect
+      state and stop. Do not boot the template to investigate; preserve it
+      for the two full-clone test. No LearnLab command performs conversion.
+    verifications:
+      - id: template-conversion-checked
+        type: manual-confirmation
+        prompt: Confirm only the chosen stopped snapshot-free candidate became a template and the source remains recoverable.

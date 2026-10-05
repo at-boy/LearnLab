@@ -1,6 +1,6 @@
 # Debian 13 Template Bootstrap Course Design
 
-**Status:** Planned for a later implementation session; no course implementation or live acceptance has started.
+**Status:** Offline implementation and final independent review passed on 2026-10-05 at course revision `7d696d4`; immutable checkpoint `026fb27` passed 666 offline tests (1 live deselected). Separately authorized exact-digest live acceptance remains pending. Course remains draft; registry unchanged.
 **Course:** `proxmox/debian13-template`
 **Plan:** [`2026-09-10-debian13-template-course.md`](../plans/2026-09-10-debian13-template-course.md)
 **Starting point:** merged pending-course work at `287d350`; always verify current main and reuse later compatible changes.

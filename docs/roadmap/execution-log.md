@@ -33,3 +33,62 @@ Ruling: Pause early for account usage instead of launching new implementation/re
 - Debian Task 1 at 5b1654c: manifest, introductory lesson, course contract tests and actual no-profile CLI start/save/resume. RED observed missing course; focused GREEN 14 passed. Independent task review pending; Task 2 not started.
 - Concurrent documentation update caused two transient full-suite failures in test_offline_report_keeps_live_protocol_pending (first stale digest, then stale old-revision assertion). Both were corrected, not hidden. Final controller gate: PYTHONPATH=src .venv/bin/python -m pytest -p no:cacheprovider -m 'not live' -q => 661 passed, 1 deselected in 42.63 seconds. Ruff passed; mypy passed, 17 files. git diff --check passed. No test warning in final run.
 - Usage checks: 0%, 47%, 62%, 79%, 88% used. Stop new implementation; checkpoint and pause. Reported reset October 4 05:13 Europe/Copenhagen. Original branches and all worktrees retained. No merge/push/live operation.
+
+## 2026-10-04 — second resume
+
+User resumed with usage monitoring. Initial five-hour usage 0%, weekly 30%. Reused codex/learnlab-roadmap at 3d4b14d; only untracked .venv interpreter symlink. Dispatched bounded independent Task 1 review (7ae9939..5b1654c) plus tiny provider assertion disposition; no broad bootstrap rereview. Stop new tasks near 70% used.
+
+- Task 1 independent review and provider assertion scoped review both passed; report task-1-review.md. Task 1 complete, Task 2 implementer started from 3d4b14d.
+- Requested explicit local merge approval for exact reviewed checkpoint 3d4b14d, including bootstrap corrections and reviewed draft Debian entry lesson. No push/live authorization requested; offline implementation proceeds independently.
+
+- User explicitly approved: “Merge, then push but do not remove the branch” in response to exact-checkpoint 3d4b14d request. Fetched origin/main, confirmed 0da669f unchanged. Preserved root untracked audit docs at .worktrees/roadmap-audit-snapshot-20261004. Merged exact 3d4b14d into main as 3159e18b0e0c526d2797578416fff165687637ce. Verified merge tree identical to the already-tested checkpoint, then pushed main without force and verified remote main with ls-remote at the same full SHA. All seven branches and all seven worktrees preserved. Root collections/ untouched.
+- This authorization applied only to checkpoint 3d4b14d; later roadmap commits remain unmerged/unpushed until separately approved. No live authorization was granted.
+
+- Debian Task 2 implemented at 3e5da80: three complete installer/access lessons, guide sections and validator-based tests. RED missing lessons then focused GREEN; full offline 663 passed/1 deselected. Independent review dispatched before Task 3. This commit is not included in the prior merge/push authorization.
+
+- Task 2 review caught two instructional completeness defects (sudo rule insufficiently specified; account lookup/SSH trust commands too vague). Original implementer fixing lesson and guide; gate not passed, Task 3 not started.
+
+### Second-resume checkpoint
+
+- Task 2 fix1 0140b92 supplies explicit lab-only sudo rule, named-account/NSS diagnosis and console-authenticated strict SSH enrollment in both lesson and guide. Scoped review resolved original findings but caught BatchMode blocking local encrypted-key prompts. Fix2 f90c648 replaces it with explicit public-key-only guest authentication while allowing local key passphrase input. Final independent Task 2 spec/quality PASS, no open findings.
+- Test evidence: initial full non-live suite 663 passed/1 deselected; each instructional fix ran focused4 passed and zero catalog findings. Final ssh -G -F /dev/null confirmed options offline. No guest connection or live command executed. Do not mislabel initial full suite as a rerun after fixes.
+- Main remains remote-verified 3159e18 (approved 3d4b14d checkpoint). Later Task 2 commits remain local/unmerged. All original refs/worktrees preserved.
+- Pausing after Task 2 review for account usage. Last pre-checkpoint reading79%; reset October4 15:41 Europe/Copenhagen. Task3 brief exists but implementation not started. Resume directly with Task3; no repeat of completed tasks.
+
+- Final checkpoint usage reading: 89% used, 11% remaining; stop now. Reset reported 2026-10-04 15:41 Europe/Copenhagen.
+
+## 2026-10-04 — third resumed batch
+
+Fresh allowance0% used (weekly44%). Reused existing worktree at a9e8afa; only untracked .venv link. Tasks1–2 remain reviewed complete. Dispatched Task3 sealing/two-clone instructional work, no live execution. Original merge approval remains limited to previously published checkpoint.
+
+- Task3 committed5eab41f with sealing and two-clone identity lessons, guide and behavioral catalog/knowledge tests. RED3 expected missing-lesson failures then focused5 pass. Full offline664 passed/1 deselected (40.63s); validator and Ruff no-cache passed. Initial wrong-interpreter validation and cache-path failure are recorded in report, corrected without live action. qm.1 reference unavailable; actual Proxmox/guest behavior stays pending. Independent review dispatched; latest usage48%.
+
+### Third-resume checkpoint
+
+- Task3 independent review Changes requested: separate regular D-Bus machine-id could remain empty, and disabling socket activation could leave SSH without a boot trigger. Fix round1 by original implementer committed5a34e98 (parent5eab41f); lesson/guide now teach inspected D-Bus file disposition and verified service boot activation, plus matching clone checks.
+- After fixes: focused5 passed, course validation no findings, staged whitespace clean. Initial full suite664 passed/1 deselected predates these instructional corrections; no full-suite rerun claimed. No helper automation or live actions.
+- Scoped re-review package ready; re-review deliberately not launched at82% usage. Task3 remains incomplete pending that gate. Task4 brief ready but no implementation started. All subagents stopped.
+- Last usage82% used,18% remaining; reset October4 21:31 Europe/Copenhagen. Pause now for requested headroom. No merge/push after the prior approved checkpoint, no live resource operation, no registry changes.
+
+## Fourth resumed batch
+
+User resumed. Initial five-hour0%, weekly59%. Reused worktree at0e25093, only untracked .venv. Scoped Task3 re-review dispatched to original reviewer for5eab41f..5a34e98; no broad repeat. Main/live approval boundaries unchanged.
+
+- Task3 scoped re-review accepted both corrections; spec/quality PASS for offline/manual scope. Task4 implementer started from0e25093: final provider handoff, completed guide, installed-wheel/no-profile CLI coverage. No new merge/push/live authorization.
+
+- Task4 committed51a6525: final7-lesson course, handoff/guide/README and installed-wheel/start-resume coverage. RED2 expected failures then focused8 pass. Installed-wheel2 pass; full666 passed/1 deselected, validation no findings, focused lint clear. Independent review dispatched; usage51%. No live action or certification.
+
+- Task4 review PASS spec/quality, no findings. Task5 offline acceptance report dispatched at64% usage. Reuse fresh exact-content Task4 regression evidence with provenance rather than duplicate wheel/full runs. New digest and missing static/catalog checks will be recorded; final whole-course review remains pending.
+
+### Fourth-resume checkpoint
+
+- Task5 offline report c556dfa binds exact course content51a6525 and digest8c815d9f0c3df55d0089f2a34c69d18c5cc89c467ed61fc99f14899dda2ce1af. Reused current Task4 full666/1 deselected, wheel2 and focused8 evidence with explicit source/revision. Fresh full Ruff no-cache, mypy17 source files with /tmp cache, targeted catalog no findings, seven lessons/draft, and whitespace passed. Global validation has only the three known proxmox-admin warnings. Initial inherited mypy cache failure recorded as environmental, corrected. Registry unchanged.
+- Final whole-course/Task5 review intentionally pending; prepared final-course-review.diff spanning7ae9939..c556dfa excluding only process logs/reports. No reviewer launched after usage crossed70%. Tasks1–4 complete, Task5 not complete until final review passes.
+- Final checkpoint usage83%5-hour (17% remaining),71%weekly; reset October5 02:37 Europe/Copenhagen. Pause now. No new merge/push/live action. Main remains previously approved/published3159e18; later commits separately gated.
+
+## 2026-10-05 resume
+
+Fresh usage0%five-hour,72%weekly. Reused worktree7a83a46. Dispatched fixed-snapshot final Debian review. Prepared discovery/continuation plan preflight; independent read-only progress projection can proceed without changing reviewed course files. No new merge/push/live authorization.
+
+- Final Debian review found remote sudo command ambiguity. Corrected in7d696d4, evidence updated026fb27; independent scoped re-review PASS spec/quality. Exact current digest b8b37477effe6444331d9a9e3c6a5398ec800eb3be7e05927b08ca2f8423c995. Immutable026fb27 snapshot full offline gate666 passed/1 live deselected (42.08s), including packaging, isolated from discovery edits. Task5 offline complete, live acceptance pending.
+- Discovery Task1 dispatched from026fb27; read-only progress projection with actual SQLite/catalog TDD. Latest allowance70%five-hour/83%weekly; no further task launch this batch. No new merge/push/live action.

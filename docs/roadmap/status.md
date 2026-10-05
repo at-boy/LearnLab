@@ -1,8 +1,8 @@
 # LearnLab roadmap status
 
-Updated 2026-10-04. Paused for user-requested usage headroom; last check 88% used (12% remaining), reset October 4 05:13 Europe/Copenhagen. Roadmap is NOT complete. Active workspace: /home/at-boy/.codex/worktrees/learnlab-roadmap/LearnLab, branch codex/learnlab-roadmap. Original branches/worktrees unchanged.
+October 5 continuation: Debian offline implementation and final independent review passed. Immutable checkpoint026fb27 passed 666 offline tests, 1 live deselected. Course revision7d696d4 has digest b8b37477effe6444331d9a9e3c6a5398ec800eb3be7e05927b08ca2f8423c995. Course remains draft; all live gates pending. Roadmap is NOT complete.
 
-Latest offline checkpoint: 661 passed, 1 deselected; Ruff and mypy passed. Debian Task 1 commit 5b1654c awaits independent review. Bootstrap integration review approved the TLS correction and provenance; final one-line assertion maintenance remains for scoped review. No merge approval requested yet.
+Active workspace: /home/at-boy/.codex/worktrees/learnlab-roadmap/LearnLab, branch codex/learnlab-roadmap. Main remains3159e18 from the approved checkpoint; later work is local and unmerged. All branches/worktrees preserved. Discovery Task1 read-only progress projection is in progress, independently of Debian integration. Latest usage70% five-hour and83% weekly; finish current checkpoint/review before pausing.
 
 ## Authority and boundaries
 
@@ -10,7 +10,7 @@ Execute the currently planned roadmap using sub-agents, TDD and independent revi
 
 Reconciled against the September 24 final roadmap response in task 01a08774-edbf-7431-9dc7-e3e33d70c589 (retrieved live on October 3), repository specs/plans, completion reports and two independent read-only sub-agent audits.
 
-## Verified local inventory
+## October 3 baseline inventory (historical; superseded for main below)
 
 Remote names below are local tracking refs; no network fetch was performed.
 
@@ -23,17 +23,17 @@ Remote names below are local tracking refs; no network fetch was performed.
 | feature/pending-course-certification | 287d350 | Contained in main | Clean |
 | feature/nixos-template-course | 7ae9939 | 27 commits absent from main; main has one merge commit absent from branch | Clean |
 
-All five feature worktrees remain under .worktrees/. Bootstrap work is at .worktrees/template-bootstrap-course. All six local tips match their corresponding local origin tracking refs.
+All five feature worktrees remain under .worktrees/. Bootstrap work is at .worktrees/template-bootstrap-course. At that baseline all six local tips matched their local origin tracking refs. On October 4 main advanced to 3159e18 and its remote tip was verified; codex/learnlab-roadmap is the new preserved execution branch.
 
 ## Delivery and acceptance sequence
 
 | Order | Workstream | Actual status and next gate |
 |---|---|---|
-| 1 | Integrate NixOS/provider-bootstrap work | Existing implementation and historical scoped reviews; fresh branch gate now passes 657 non-live tests, Ruff and mypy. Whole-diff review finished; P2 TLS handoff correction and provenance approved. Finish scoped review of final assertion change, then request merge/push approval for exact reviewed refs. No merge has happened. |
+| 1 | Integrate NixOS/provider-bootstrap work | Existing implementation and historical scoped reviews; fresh branch gate now passes 657 non-live tests, Ruff and mypy. Whole-diff review finished; P2 TLS handoff correction and provenance approved. Final assertion review passed. Approved checkpoint 3d4b14d merged and pushed as main 3159e18; remote verified. Original branch/worktree retained. |
 | 2 | Bootstrap acceptance | NixOS and provider-bootstrap remain draft. Prepare exact resource scope and request live authorization. Complete current-digest traversal, recovery, identity/permissions, lifecycle and cleanup evidence before registry changes. |
-| 3 | Debian 13 template | Task 1 entry course implemented at 5b1654c with real RED/GREEN and CLI isolation; independent task review pending. Tasks 2–5 remain, including guide, wheel coverage and acceptance report. Two-clone live acceptance separately authorized. |
+| 3 | Debian 13 template | Seven-lesson course, guide, packaging/CLI coverage and acceptance report complete offline. Tasks1–5 and final independent review passed; current-content full gate666 passed/1 live deselected. Merge/push approval and exact-digest live acceptance remain separate gates. |
 | 4 | Existing-course certification | Six nginx/nftables/systemd courses have offline corrections but remain draft. Live failure/remediation, save/resume, cumulative state and teardown on each OS remain. Excluded NAT lessons remain blocked pending real multi-machine ingress; this does not block the other nftables lessons. |
-| 5 | Discovery/continuation | Planned, unimplemented. Offline listings/progress, continue and interactive home. |
+| 5 | Discovery/continuation | Task1 read-only progress projection in progress. Remaining: offline listings/progress, continue and interactive home. |
 | 6 | Interactive secret resolution | Planned, unimplemented. Shared resolver, hidden prompt, explicit stdin, cancellation/redaction and integration including continue. Coordinate with discovery. |
 | 7 | NixOS administration | Planned, unimplemented. Metadata/prerequisites/revision/hints first, then Administration Foundations, Nix Language and Store, Flakes and Fleet. Reconcile proposed maturity metadata with existing digest certification; live gates separately authorized. |
 | 8 | Multi-machine/networking | Planned, unimplemented. Single-VM normalization, multi-VM shared network, machine checks/jump SSH, operator-managed isolated pools, managed ephemeral SDN. Recovery and cleanup at each stage; live mutations require approval. |
@@ -45,15 +45,15 @@ This is delivery order, not a strict dependency chain. Continue independent offl
 
 Canonical plans/specs are docs/superpowers/plans/ and specs/. Provider-bootstrap additions are available on the newer bootstrap branch. Its reports are docs/course-validation/2026-09-10-nixos-template.md and 2026-09-11-proxmox-provider-bootstrap.md; existing-course report is 2026-09-08-pending-courses.md. Historical correction review ledger is .worktrees/template-bootstrap-course/.superpowers/sdd/2026-09-14-nixos-live-corrections/progress.md.
 
-The template task index docs/superpowers/tasks/2026-09-10-template-bootstrap.md incorrectly calls NixOS unimplemented. The provider-bootstrap spec header also predates implementation. Reconcile these on the execution branch. Both main and the bootstrap branch have an empty certifications registry. No status has been upgraded to live-certified.
+The template task index is reconciled on the execution branch. Historical provider-bootstrap spec/plan status headers still predate implementation; read completion reports and this ledger for actual status. Both main and the bootstrap branch have an empty certifications registry. No status has been upgraded to live-certified.
 
 ## Resume precisely here
 
-1. Check fresh account usage. Read this file, execution-log.md and the Debian per-plan ledger. Stop new work earlier (around 70% used) to leave room for review/checkpoint; simultaneous agents consumed usage faster than expected.
-2. Use existing native worktree /home/at-boy/.codex/worktrees/learnlab-roadmap/LearnLab and branch codex/learnlab-roadmap. Do not create another or modify preserved branches. Root docs/roadmap is a pointer/snapshot only.
-3. Independently review Debian Task 1 range 7ae9939..5b1654c using its brief/report; no Task 2 until it passes. Latest full gate supersedes the transient provider-report failures honestly recorded in implementer's report.
-4. Review the final one-line provider report assertion update (Current-digest -> Historical), then record integration gate for exact current commits. Original bootstrap whole-diff review and TLS/provenance re-review are in bootstrap-integration-review.md. No remaining product finding there. Request merge/push approval with exact reviewed refs when ready; do not infer approval.
-5. Continue Debian Tasks 2–5 sequentially with TDD and task reviews; then discovery/continuation, secret resolution, administration and multi-machine as existing plans prescribe. Maintain per-plan ledgers, reports and this log. Live gates are independent blockers, not a reason to stop offline work.
-6. Use live-acceptance-gates.md to prepare privately selected exact resources and effects before requesting live authorization. Current resources/profile/independent reconciler are not selected. All certifications remain draft.
+1. Check both fresh five-hour and weekly usage. Read this file, execution-log.md and Debian per-plan progress.md. Reserve room for reviews/checkpoint; never consume reset credits implicitly.
+2. Reuse this worktree/branch. Only untracked .venv expected; use PYTHONPATH=src and python -m to bind the shared interpreter to local source. Do not reimplement reviewed Tasks 1–4.
+3. Debian final review is PASS after the remote sudo correction; full immutable026fb27 regression gate passed. Do not repeat completed reviews or certify from offline tests. Request exact-checkpoint merge/push approval; the old approval covered only3d4b14d, already published as3159e18.
+4. Finish discovery Task1 and independent review, preserving a precise checkpoint if usage requires stopping. Use its per-plan ledger and report; no CLI work before the projection review gate.
+5. Continue remaining offline roadmap: discovery/continuation, secret resolution, NixOS administration, staged multi-machine networking. Bootstrap/existing-course live certification remains independently blocked on current-content evidence and explicit resource authorization.
+6. Prepare exact private resource/cleanup scope before requesting live approval. All live checkpoints remain NOT RUN; never infer certification from historical, offline or self-attested evidence.
 
-No merge/push/live approval obtained. No automatic resume or reset-credit redemption scheduled. Native workspace shares the existing .venv via an untracked symlink; use PYTHONPATH=src and python -m, never stage that symlink. Root collections/ remains untouched.
+Main's published roadmap docs reflect the earlier approved checkpoint; this branch is the current execution authority. Original root collections/ untouched; original audit snapshot retained at .worktrees/roadmap-audit-snapshot-20261004. No automatic resume or reset redemption scheduled.

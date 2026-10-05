@@ -1,6 +1,6 @@
 # Template Bootstrap Course Tasks
 
-Requested 2026-09-10; reconciled 2026-10-04 against code and completion reports.
+Requested 2026-09-10; reconciled 2026-10-05 against code and completion reports.
 NixOS and provider-bootstrap are implemented offline; current-content live
 acceptance remains pending. See [roadmap status](../../roadmap/status.md).
 
@@ -11,7 +11,7 @@ courses remain draft pending separate live acceptance. The preserved branch is
 | Task | Course | Status | Spec | Implementation plan |
 |---|---|---|---|---|
 | Build the NixOS template course | `proxmox/nixos-template` | Implemented; later corrections on preserved branch; live acceptance pending | [Design](../specs/2026-09-10-nixos-template-course-design.md) | [Plan](../plans/2026-09-10-nixos-template-course.md) |
-| Build the Debian 13 template course | `proxmox/debian13-template` | Offline implementation in progress on codex/learnlab-roadmap | [Design](../specs/2026-09-10-debian13-template-course-design.md) | [Plan](../plans/2026-09-10-debian13-template-course.md) |
+| Build the Debian 13 template course | `proxmox/debian13-template` | Offline implementation and final review passed; draft, live acceptance pending | [Design](../specs/2026-09-10-debian13-template-course-design.md) | [Plan](../plans/2026-09-10-debian13-template-course.md) |
 
 Both courses begin without an existing template/provider profile, use the
 existing NONE-scope instructional session, and leave Proxmox/guest operations
