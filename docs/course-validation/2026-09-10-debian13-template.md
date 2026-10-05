@@ -1,8 +1,8 @@
 # Debian 13 template course — offline evidence and live blockers
 
-**Status:** Draft. Offline software checks passed for course content revision
-`51a6525f04810e229aee3050cb957ea442c2067c`; final whole-branch review and
-exact-digest live acceptance are pending. Recorded 2026-10-04 in the isolated
+**Status:** Draft. The 2026-10-05 focused correction at course revision
+`7d696d4` passed the checks recorded below. Focused re-review of that correction
+and exact-digest live acceptance are pending. Recorded in the isolated
 `codex/learnlab-roadmap` worktree. The filename reflects the plan date.
 
 Course: `proxmox/debian13-template`. The catalog loads seven ordered lessons,
@@ -14,25 +14,39 @@ knowledge checks or read-only profile checks does not certify a template.
 ## Exact course digest
 
 ```text
-8c815d9f0c3df55d0089f2a34c69d18c5cc89c467ed61fc99f14899dda2ce1af
+b8b37477effe6444331d9a9e3c6a5398ec800eb3be7e05927b08ca2f8423c995
 ```
 
-Recomputed on 2026-10-04 from the final course directory at revision `51a6525`
+Recomputed on 2026-10-05 from the course directory at revision `7d696d4`
 using `course_digest(Path("src/learnlab/collections/proxmox/courses/debian13-template"))`.
-The course files have not changed since that revision; report and plan edits do
-not change this digest. Recompute it after any future course-content edit.
+The previous digest, `8c815d9f0c3df55d0089f2a34c69d18c5cc89c467ed61fc99f14899dda2ce1af`,
+belongs to revision `51a6525` and does not identify these course bytes.
+Recompute the digest after any future course-content edit.
 
 ## Offline verification and review evidence
 
 The [Task 4 report](../../.superpowers/sdd/2026-09-10-debian13-template-course/task-4-report.md)
-records these current-content results at `51a6525`, before this prose-only
-report: full non-live pytest **666 passed, 1 live test deselected**; the existing
-wheel build/install test **2 passed**; focused Debian/CLI selection **8 passed**;
-and course validation `ok: true` with no findings. The full suite includes the
-wheel check. No course, code or test files changed after those checks, so this
-report did not rebuild or rerun that suite. Tasks 1–4 have separate spec and
-quality review passes in their SDD review files; final whole-branch review has
-not happened.
+records results for the **previous** course bytes at `51a6525`: full non-live
+pytest **666 passed, 1 live test deselected**; wheel build/install **2 passed**;
+focused Debian/CLI **8 passed**; and course validation `ok: true`. Those runs
+precede the lesson correction at `7d696d4` and are historical regression
+context, not current-digest verification. Tasks 1–4 have separate spec and
+quality review passes. The final integrated review identified the SSH/sudo
+issue; focused re-review of its correction remains pending.
+
+Current-digest focused checks on 2026-10-05:
+
+| Check | Result |
+| --- | --- |
+| Debian course tests | 6 passed |
+| Debian CLI start/resume and handoff tests | 2 passed, 96 deselected |
+| `learnlab validate proxmox/debian13-template --format json` | `ok: true`, no findings |
+| `learnlab validate --format json` | `ok: true`; only the three existing `proxmox/proxmox-admin` warnings below |
+| Catalog load and registry inspection | Seven lessons, `draft`; `certifications: []` |
+| `git diff --check` | No whitespace findings |
+
+These checks cover the changed YAML and the preserved draft/CLI boundary. The
+SSH commands were inspected locally; no remote SSH connection was attempted.
 
 Task 5 read-only checks on 2026-10-04:
 
@@ -117,6 +131,6 @@ All current-digest acceptance checkpoints remain **pending**:
    reconciliation, never a blind retry by VMID.
 
 Every checkpoint must pass for this exact digest before a certification record
-can be considered. Any uncertain result keeps the course draft. The final
-whole-branch review, its possible fixes and covering checks also remain
-pending. No merge, push or live acceptance is implied by this report.
+can be considered. Any uncertain result keeps the course draft. Focused review
+of the final integrated review correction remains pending. No merge, push or
+live acceptance is implied by this report.
