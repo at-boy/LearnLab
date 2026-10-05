@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-10-debian13-template-course-design.md`
 
-**Status:** Tasks 1–4 implemented and independently reviewed; Task 5 offline report recorded at course revision `51a6525` on 2026-10-04. Final whole-branch review and separately authorized exact-digest live acceptance remain pending. Course maturity is draft; the certification registry is unchanged.
+**Status:** Offline implementation and final independent review passed on 2026-10-05 at course revision `7d696d4`; immutable checkpoint `026fb27` passed 666 offline tests (1 live deselected). Separately authorized exact-digest live acceptance remains pending. Course remains draft; registry unchanged.
 
 ## Global Constraints
 
@@ -269,7 +269,7 @@ Run focused tests; expect missing final lesson/order mismatch. Supplement this t
 
 **Interfaces:** Consumes final course contents, `course_digest`, existing strict certification schema and all prior task evidence. Produces an honest acceptance report and either draft status with blockers or an exact-digest live record.
 
-- [ ] **Step 1: Run and record full offline verification.**
+- [x] **Step 1: Run and record full offline verification.**
 
 ```bash
 .venv/bin/python -m pytest -m 'not live' -q
@@ -297,4 +297,4 @@ Record actual date/revision, offline commands/results, exact digest, OS/ISO vers
 
 - [ ] **Step 4: If approved, complete the seven-lesson live traversal.** Fresh ISO installation; intentional safe failure and remediation; save/resume; successful sealing; two full clones with distinct identities; per-clone reboot identity stability; guest access/tool/configuration checks; profile health/compatibility; stop/destroy only test clones and verify absence while retaining intended template. Checkpoints remain pending until observed. An uncertain result blocks certification and requires reconciliation. The course engine must still make zero provider/SSH calls during its session.
 
-- [ ] **Step 5: Review and commit the truthful outcome.** After an approved complete run, add only existing registry fields with a digest-matched record and concise non-secret note. Otherwise commit the draft acceptance report without a registry entry. Request final whole-branch review, resolve findings, run covering checks after fixes, then report preserved branch/worktree and remaining live gates. Suggested commit subject for offline-only outcome: `docs: record debian13-template offline acceptance and live blockers`. No implicit merge or push.
+- [x] **Step 5: Review and commit the truthful outcome.** After an approved complete run, add only existing registry fields with a digest-matched record and concise non-secret note. Otherwise commit the draft acceptance report without a registry entry. Request final whole-branch review, resolve findings, run covering checks after fixes, then report preserved branch/worktree and remaining live gates. Suggested commit subject for offline-only outcome: `docs: record debian13-template offline acceptance and live blockers`. No implicit merge or push.

@@ -1,8 +1,8 @@
 # Debian 13 template course — offline evidence and live blockers
 
 **Status:** Draft. The 2026-10-05 focused correction at course revision
-`7d696d4` passed the checks recorded below. Focused re-review of that correction
-and exact-digest live acceptance are pending. Recorded in the isolated
+`7d696d4` passed the checks recorded below. Final integrated review and focused re-review passed for offline implementation.
+Exact-digest live acceptance remains pending. Recorded in the isolated
 `codex/learnlab-roadmap` worktree. The filename reflects the plan date.
 
 Course: `proxmox/debian13-template`. The catalog loads seven ordered lessons,
@@ -32,7 +32,12 @@ focused Debian/CLI **8 passed**; and course validation `ok: true`. Those runs
 precede the lesson correction at `7d696d4` and are historical regression
 context, not current-digest verification. Tasks 1–4 have separate spec and
 quality review passes. The final integrated review identified the SSH/sudo
-issue; focused re-review of its correction remains pending.
+issue; focused re-review passed after correction. See the final-review.md ledger.
+
+Fresh full integration gate on 2026-10-05: an immutable `git archive 026fb27`
+snapshot (course revision `7d696d4`) passed **666 tests, 1 live test deselected**
+in 42.08s using `PYTHONPATH=src python -m pytest -p no:cacheprovider -m "not live" -q`.
+This includes packaging tests and excludes concurrent discovery edits.
 
 Current-digest focused checks on 2026-10-05:
 
@@ -131,6 +136,6 @@ All current-digest acceptance checkpoints remain **pending**:
    reconciliation, never a blind retry by VMID.
 
 Every checkpoint must pass for this exact digest before a certification record
-can be considered. Any uncertain result keeps the course draft. Focused review
-of the final integrated review correction remains pending. No merge, push or
+can be considered. Any uncertain result keeps the course draft. Offline final
+review passed; this does not grant live certification. No merge, push or
 live acceptance is implied by this report.

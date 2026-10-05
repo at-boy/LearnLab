@@ -1,6 +1,6 @@
 # Debian 13 Template Bootstrap Course Design
 
-**Status:** Seven-lesson course and guide implemented; offline evidence recorded at course revision `51a6525` on 2026-10-04. Final whole-branch review and separately authorized exact-digest live acceptance remain pending. Course maturity is draft; the certification registry is unchanged.
+**Status:** Offline implementation and final independent review passed on 2026-10-05 at course revision `7d696d4`; immutable checkpoint `026fb27` passed 666 offline tests (1 live deselected). Separately authorized exact-digest live acceptance remains pending. Course remains draft; registry unchanged.
 **Course:** `proxmox/debian13-template`
 **Plan:** [`2026-09-10-debian13-template-course.md`](../plans/2026-09-10-debian13-template-course.md)
 **Starting point:** merged pending-course work at `287d350`; always verify current main and reuse later compatible changes.

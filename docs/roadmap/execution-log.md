@@ -85,3 +85,10 @@ User resumed. Initial five-hour0%, weekly59%. Reused worktree at0e25093, only un
 - Task5 offline report c556dfa binds exact course content51a6525 and digest8c815d9f0c3df55d0089f2a34c69d18c5cc89c467ed61fc99f14899dda2ce1af. Reused current Task4 full666/1 deselected, wheel2 and focused8 evidence with explicit source/revision. Fresh full Ruff no-cache, mypy17 source files with /tmp cache, targeted catalog no findings, seven lessons/draft, and whitespace passed. Global validation has only the three known proxmox-admin warnings. Initial inherited mypy cache failure recorded as environmental, corrected. Registry unchanged.
 - Final whole-course/Task5 review intentionally pending; prepared final-course-review.diff spanning7ae9939..c556dfa excluding only process logs/reports. No reviewer launched after usage crossed70%. Tasks1–4 complete, Task5 not complete until final review passes.
 - Final checkpoint usage83%5-hour (17% remaining),71%weekly; reset October5 02:37 Europe/Copenhagen. Pause now. No new merge/push/live action. Main remains previously approved/published3159e18; later commits separately gated.
+
+## 2026-10-05 resume
+
+Fresh usage0%five-hour,72%weekly. Reused worktree7a83a46. Dispatched fixed-snapshot final Debian review. Prepared discovery/continuation plan preflight; independent read-only progress projection can proceed without changing reviewed course files. No new merge/push/live authorization.
+
+- Final Debian review found remote sudo command ambiguity. Corrected in7d696d4, evidence updated026fb27; independent scoped re-review PASS spec/quality. Exact current digest b8b37477effe6444331d9a9e3c6a5398ec800eb3be7e05927b08ca2f8423c995. Immutable026fb27 snapshot full offline gate666 passed/1 live deselected (42.08s), including packaging, isolated from discovery edits. Task5 offline complete, live acceptance pending.
+- Discovery Task1 dispatched from026fb27; read-only progress projection with actual SQLite/catalog TDD. Latest allowance70%five-hour/83%weekly; no further task launch this batch. No new merge/push/live action.

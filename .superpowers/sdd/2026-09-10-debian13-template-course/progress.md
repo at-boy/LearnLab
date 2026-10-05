@@ -51,3 +51,5 @@ Task5: offline report in progress, base51a6525, implementer debian_task5. Ruling
 Task5: offline report implemented c556dfa; course content revision51a6525, digest8c815d9f0c3df55d0089f2a34c69d18c5cc89c467ed61fc99f14899dda2ce1af. Fresh Ruff no-cache/mypy17/catalog/whitespace passed; Task4 regression results reused with explicit provenance and unchanged content. Task5 final review gate PENDING; do not mark plan complete.
 Final whole-course review is next: final-course-review.diff (7ae9939..c556dfa excluding only process logs/.superpowers), linked spec/plan, acceptance report and task reports. Reviewer should cover final integrated course and Task5 evidence together, not repeat each prior review. No final reviewer dispatched in this window.
 Pause usage83%5-hour,71%weekly; reset October5 02:37 Europe/Copenhagen. Tasks1–4 complete, Task5 pending final review; all live checkpoints pending.
+
+2026-10-05: Final P2 remote sudo correction7d696d4, evidence026fb27. Independent final re-review PASS spec/quality. Immutable026fb27 snapshot full666 passed/1 live deselected (42.08s). Task5 complete for offline outcome; live traversal remains pending, registry unchanged.
